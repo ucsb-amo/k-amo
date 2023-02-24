@@ -8,5 +8,5 @@ setup(
     author_email='pagett.jared@gmail.com',
     description='K team AMO functions, modeling, and simulations',
     packages=find_packages(),
-    install_requires=[],
+    install_requires=['arc','numpy'],
 )
