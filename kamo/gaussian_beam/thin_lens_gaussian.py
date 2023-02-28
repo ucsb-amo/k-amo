@@ -1,24 +1,24 @@
 import numpy as np
-from gaussian import GaussianBeam
+from kamo.gaussian_beam.gaussian import GaussianBeam
 
 class ThinLensGaussian():
     '''
     For computing the effect of a thin lens on a gaussian beam. Results are
     taken from "Fundamentals of Photonics" by Saleh and Teich
 
-    Parameters
+    Attributes
     ----------
     focus: float
         The lens focal length (m)
 
     Methods
     -------
-    output_beam
+    beam_after_lens
     '''
     def __init__(self,focus=0.):
         self.focus = focus
 
-    def output_beam(self, input_beam, z_input_waist_to_lens):
+    def beam_after_lens(self, input_beam, z_input_waist_to_lens=0.):
         '''
         Return the waist 
 
@@ -27,7 +27,7 @@ class ThinLensGaussian():
         input_beam: GaussianBeam
             The input beam
         z_input_waist_to_lens: float
-            The distance (m) from the beam waist to the thin lens
+            The distance (m) from the beam waist to the thin lens. Default = 0.
 
         Returns
         -------
@@ -45,34 +45,41 @@ class Objective():
     '''
     A microscope objective.
 
-    Parameters
+    Attributes
     ----------
     NA: float
         The numerical aperture of the objective
     working_distance: float
-        The working distance (in m) of the objective
+        The working distance (in m) of the objective (WD)
     focal_length: float
-        The focal length (in m) of the objective
-    pupil_diameter: float
-        The pupil diameter (in m) of the objective
+        The effective focal length (in m) of the objective (EFL)
+    entrance_aperture_diameter
+        The entrance pupil diameter at the back aperture of the objective (EP = 2*NA*EFL)
     '''
-    def __init__(self, NA, working_distance, focal_length, pupil_diameter):
+
+    def __init__(self, NA, working_distance, focal_length):
         self.NA = NA
         self.working_distance = working_distance
         self.focal_length = focal_length
-        self.pupil_diameter = pupil_diameter
-    def output_beam(self,input_beam):
+        self.entrance_aperture_diameter = 2 * self.NA * self.focal_length
+
+    def input_beam_from_output_waist(self,output_waist,wavelength):
         '''
-        Returns the output gaussian beam for a given input beam, assuming
-        operation away from the limits of the objective.
+        Returns the required input gaussian beam for a given output beam waist,
+        assuming operation away from the limits of the objective.
 
         Parameters
         ----------
-        input_beam: GaussianBeam
-            The input beam
+        output_waist: float
+            The 1/e^2 spot waist at the working distance from the objective
 
         Outputs
         -------
         GaussianBeam
         '''
+
+        output_beam = GaussianBeam(waist=output_waist, wavelength=wavelength)
+        eff_lens = ThinLensGaussian(self.focal_length)
+        input_beam = eff_lens.beam_after_lens(output_beam)
+        return input_beam
         
