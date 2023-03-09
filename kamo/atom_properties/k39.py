@@ -1,5 +1,6 @@
 import arc
 import numpy as np
+import kamo.constants as c
 
 class Potassium39(arc.Potassium39):
     def __init__(self):
@@ -22,7 +23,7 @@ class Potassium39(arc.Potassium39):
         Returns the lineshape evaluated at a given detuning for a two-level system. Does not work for excited states.
         '''
         if n2 > 4 or n1 > 4 or l1 > 1 or l2 > 1:
-            print("Lineshape not accurate for excited states.")
+            print("Lineshape not accurate for excited states with n>4.")
         gamma = self.getDecayRate(n1,l1,j1,n2,l2,j2)
         # transition_omega = np.abs( self.getTransitionFrequency(n1,l1,j1,n2,l2,j2) ) / 2 / np.pi
         detuning_omega = 2 * np.pi * detuning_Hz
@@ -30,6 +31,7 @@ class Potassium39(arc.Potassium39):
 
     def getCrossSection(self,n1=4,l1=0,j1=1/2,F1=2,n2=4,l2=1,j2=3/2,F2=3,detuning_Hz=0):
 
+        
         ordered = self.getEnergy(n1,l1,j1) < self.getEnergy(n2,l2,j2)
         if ordered:
             A21 = 1/self.getStateLifetime(n2,l2,j2)
@@ -41,7 +43,11 @@ class Potassium39(arc.Potassium39):
 
         if ordered:
             g_ratio = g2/g1
-        else
-            
-        
+        else:
+            g_ratio = g1/g2
+
+        omega0 = 2 * np.pi * self.getTransitionFrequency(n1,l1,j1,n2,l2,j2)
+        lineshape = self.lineshape(n1,l1,j1,n2,l2,j2,detuning_Hz=detuning_Hz)
+        scattering_cross_section = g_ratio * np.pi**2 * c.c**2 / omega0**2 * A21 * lineshape
+        return scattering_cross_section
 
