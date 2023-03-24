@@ -1,5 +1,6 @@
 setup.py
 kamo/__init__.py
+kamo/constants.py
 kamo.egg-info/PKG-INFO
 kamo.egg-info/SOURCES.txt
 kamo.egg-info/dependency_links.txt
