@@ -5,8 +5,9 @@ import kamo.constants as c
 class Potassium39(arc.Potassium39):
     def __init__(self):
         super().__init__()
+        self.cross_section = self.get_cross_section()
 
-    def getDecayRate(self,n1,l1,j1,n2,j2,l2):
+    def get_decay_rate(self,n1,l1,j1,n2,l2,j2):
         '''
         Returns decay rate (2*pi*(1/tau), units of radians/second) for transition from |n1,l1,j1> to |n2,l2,j2>. 
         Automatically assumes atom is in higher energy state.
@@ -24,14 +25,13 @@ class Potassium39(arc.Potassium39):
         '''
         if n2 > 4 or n1 > 4 or l1 > 1 or l2 > 1:
             print("Lineshape not accurate for excited states with n>4.")
-        gamma = self.getDecayRate(n1,l1,j1,n2,l2,j2)
+        gamma = self.get_decay_rate(n1,l1,j1,n2,l2,j2)
         # transition_omega = np.abs( self.getTransitionFrequency(n1,l1,j1,n2,l2,j2) ) / 2 / np.pi
         detuning_omega = 2 * np.pi * detuning_Hz
         return (1/2/np.pi) * gamma / ( detuning_omega**2 + gamma**2 / 4 )
 
-    def getCrossSection(self,n1=4,l1=0,j1=1/2,F1=2,n2=4,l2=1,j2=3/2,F2=3,detuning_Hz=0):
+    def get_cross_section(self,n1=4,l1=0,j1=1/2,F1=2,n2=4,l2=1,j2=3/2,F2=3,detuning_Hz=0):
 
-        
         ordered = self.getEnergy(n1,l1,j1) < self.getEnergy(n2,l2,j2)
         if ordered:
             A21 = 1/self.getStateLifetime(n2,l2,j2)
