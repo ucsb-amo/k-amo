@@ -1,0 +1,1 @@
+from .atom_properties.k39 import Potassium39
