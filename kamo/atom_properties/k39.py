@@ -9,14 +9,13 @@ class Potassium39(arc.Potassium39):
 
     def get_decay_rate(self,n1,l1,j1,n2,l2,j2):
         '''
-        Returns decay rate (2*pi*(1/tau), units of radians/second) for transition from |n1,l1,j1> to |n2,l2,j2>. 
-        Automatically assumes atom is in higher energy state.
+        Returns spontaneous emission rate for the higher of two states.
         '''
         ordered = self.getEnergy(n1,l1,j1) < self.getEnergy(n2,l2,j2)
         if ordered:
-            Gamma = self.getTransitionRate(n2,l2,j2,n1,l1,j1)
+            Gamma = 1/self.getStateLifetime(n2,l2,j2)
         else:
-            Gamma = self.getTransitionRate(n1,l1,j1,n2,l2,j2)
+            Gamma = 1/self.getStateLifetime(n1,l1,j1)
         return Gamma
         
     def lineshape(self,n1=4,l1=0,j1=1/2,n2=4,l2=1,j2=3/2,detuning_Hz=0):
@@ -28,15 +27,15 @@ class Potassium39(arc.Potassium39):
         gamma = self.get_decay_rate(n1,l1,j1,n2,l2,j2)
         # transition_omega = np.abs( self.getTransitionFrequency(n1,l1,j1,n2,l2,j2) ) / 2 / np.pi
         detuning_omega = 2 * np.pi * detuning_Hz
-        return (1/2/np.pi) * gamma / ( detuning_omega**2 + gamma**2 / 4 )
+        return (1/(2/np.pi)) * gamma / ( detuning_omega**2 + gamma**2 / 4 )
 
     def get_cross_section(self,n1=4,l1=0,j1=1/2,F1=2,n2=4,l2=1,j2=3/2,F2=3,detuning_Hz=0):
 
         ordered = self.getEnergy(n1,l1,j1) < self.getEnergy(n2,l2,j2)
         if ordered:
-            A21 = 1/self.getStateLifetime(n2,l2,j2)
+            A21 = 2*np.pi*self.getTransitionRate(n2,l2,j2,n1,l1,j1,temperature=0.0) 
         else:
-            A21 = 1/self.getStateLifetime(n1,l1,j1)
+            A21 = 2*np.pi*self.getTransitionRate(n1,l1,j1,n2,l2,j2,temperature=0.0)
 
         g2 = 2*F2 + 1
         g1 = 2*F1 + 1
