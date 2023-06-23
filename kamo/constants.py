@@ -9,6 +9,7 @@ kB = scon.k
 h = scon.h
 a0 = scon.physical_constants['Bohr radius'][0]
 hbar = h / 2 / np.pi
+e = scon.e
 
 m_K = atom_K39.mass
 m_e = scon.m_e
