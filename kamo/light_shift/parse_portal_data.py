@@ -45,9 +45,9 @@ def quantum_numbers_to_state_label(n,l,j):
     elif l == 1:
         Lstr = "p"
     elif l == 2:
-        Lstr == "d"
+        Lstr = "d"
     elif l == 3:
-        Lstr == "f"
+        Lstr = "f"
     else:
         raise ValueError("The quantum number 'l' must be between 0 and 3 -- maximum state supported is f")
     
@@ -95,7 +95,6 @@ def state_label_to_quantum_numbers(state_str):
     elif Lstr == "d": l = 2
     elif Lstr == "f": l = 3
     else: 
-        print(Lstr)
         raise ValueError("The state label string did not contain s, p, d, or f.")
     
     return n, l, j
