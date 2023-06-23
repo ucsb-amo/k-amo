@@ -68,6 +68,10 @@ def compute_polarizability(n,l,j,F,wavelength_m,I=3/2):
     alpha_F_vector = alpha_j_vector * coeff_F_vector
     alpha_F_tensor = alpha_j_tensor * coeff_F_tensor
 
+    alpha_F_scalar = alpha_F_scalar / c.convert_polarizability_au_to_SI
+    alpha_F_vector = alpha_F_vector / c.convert_polarizability_au_to_SI
+    alpha_F_tensor = alpha_F_tensor / c.convert_polarizability_au_to_SI
+
     return alpha_F_scalar, alpha_F_vector, alpha_F_tensor
 
 def compute_complete_polarizability(n,l,j,F,mF,wavelength_m,polarization=[1,0],I=3/2):
@@ -107,6 +111,6 @@ def compute_complete_polarizability(n,l,j,F,mF,wavelength_m,polarization=[1,0],I
     alpha_F_scalar, alpha_F_vector, alpha_F_tensor = compute_polarizability(n,l,j,F,wavelength_m,I)
 
     alpha_F = alpha_F_scalar - beta * mF / (2*F) * alpha_F_vector + \
-        gamma * (3*mF**2 - F*F(+1)) / (F*(2*F-1)) * alpha_F_tensor
+        gamma * (3*mF**2 - F*(F+1)) / (F*(2*F-1)) * alpha_F_tensor
     
     return alpha_F
