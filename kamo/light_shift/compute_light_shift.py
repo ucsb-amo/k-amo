@@ -25,7 +25,7 @@ def compute_state_shift(n,l,j,F,mF,wavelength_m,intensity,polarization=[1,0],I=3
     alpha_F = cp.compute_complete_polarizability(n,l,j,F,mF,wavelength_m,polarization)
     alpha_F_SI = alpha_F * c.convert_polarizability_au_to_SI
     state_shift_J = -1/(2*c.c*c.epsilon0) * alpha_F_SI * intensity
-    state_shift_Hz = state_shift_J / c.h
+    state_shift_Hz = state_shift_J.astype('float64') / c.h
     return state_shift_Hz
 
 def compute_transition_shift(ni,li,ji,Fi,mFi,
@@ -57,5 +57,6 @@ def compute_transition_shift(ni,li,ji,Fi,mFi,
     state_shift_i_Hz = compute_state_shift(ni,li,ji,Fi,mFi,wavelength_m,intensity,polarization,I)
     state_shift_f_Hz = compute_state_shift(nf,lf,jf,Ff,mFf,wavelength_m,intensity,polarization,I)
     transition_shift_Hz = state_shift_i_Hz - state_shift_f_Hz
+    transition_shift_Hz = transition_shift_Hz.astype('float64')
     return transition_shift_Hz
 
