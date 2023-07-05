@@ -4,15 +4,15 @@ from kamo import constants as c
 
 def compute_state_shift(n,l,j,F,mF,wavelength_m,intensity,polarization=[1,0],I=3/2):
     """
-    Computes the energy shift of a given state in a beam of the given
+    Computes the energy shift in Hz of a given state in a beam of the given
     wavelength, intensity, and polarization.
 
     Args:
-        n (_type_): n quantum number.
-        l (_type_): l quantum number.
-        j (_type_): j quantum number.
-        F (_type_): F quantum number.
-        mF (_type_): mF quantum number.
+        n (int): n quantum number for the state.
+        l (int): l quantum number for the state.
+        j (float): j quantum number for the state.
+        F (int): F quantum number for the state.
+        mF (int): mF quantum number for the state.
         wavelength_m (_type_): The wavelength of the field.
         intensity (float): The light field intensity at the position of the atom.
         polarization (list, optional): The polarization of the light relative t
@@ -34,17 +34,17 @@ def compute_transition_shift(ni,li,ji,Fi,mFi,
     """_summary_
 
     Args:
-        ni (_type_): n quantum number for state i.
-        li (_type_): l quantum number for state i.
-        ji (_type_): j quantum number for state i.
-        Fi (_type_): F quantum number for state i.
-        mFi (_type_): mF quantum number for state i.
-        nf (_type_): n quantum number for state f.
-        lf (_type_): l quantum number for state f.
-        jf (_type_): j quantum number for state f.
-        Ff (_type_): F quantum number for state f.
-        mFf (_type_): mF quantum number for state f.
-        wavelength_m (_type_): The wavelength of the field.
+        ni (int): n quantum number for state i.
+        li (int): l quantum number for state i.
+        ji (float): j quantum number for state i.
+        Fi (int): F quantum number for state i.
+        mFi (int): mF quantum number for state i.
+        nf (int): n quantum number for state f.
+        lf (int): l quantum number for state f.
+        jf (float): j quantum number for state f.
+        Ff (int): F quantum number for state f.
+        mFf (int): mF quantum number for state f.
+        wavelength_m (float): The wavelength of the field.
         intensity (float): The light field intensity at the position of the atom.
         polarization (list, optional): The polarization of the light relative t
         the quantization axis (+x). Defaults to [1,0].
