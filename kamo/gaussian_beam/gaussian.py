@@ -1,8 +1,17 @@
 import numpy as np
+from kamo import constants as c
 
 class GaussianBeam():
     ''''
     A gaussian beam object.
+
+    Parameters
+    ----------
+    waist (m)
+    wavelength (m)
+    power (W)
+    n_medium
+    include_trap_properties (defaults to False)
 
     Attributes
     ----------
@@ -19,7 +28,7 @@ class GaussianBeam():
         The peak intensity (in W/m^2)
     w0: float
         An alias for the beam waist
-    z0: float
+    zR: float
         An alias for the rayleigh range.
 
     Methods
@@ -27,7 +36,7 @@ class GaussianBeam():
     beam_radius
     intensity
     '''
-    def __init__(self,waist,wavelength,power=0.,n_medium=1.):
+    def __init__(self,waist,wavelength,power=0.,n_medium=1.,include_trap_properties=False):
         self.waist = waist
         self.wavelength = wavelength
         self.n_medium = n_medium
@@ -39,7 +48,14 @@ class GaussianBeam():
         # aliases for commonly used parameters
         self.I0 = self.peak_intensity
         self.w0 = self.waist
-        self.z0 = self.rayleigh_range
+        self.zR = self.rayleigh_range
+
+        self.include_trap_properties = include_trap_properties
+        if include_trap_properties:
+            from kamo import light_shift
+            self.polarizability_ground_state = \
+                light_shift.compute_complete_polarizability(4,0,1/2,2,2,self.wavelength) \
+                    * c.convert_polarizability_au_to_SI
         
     def beam_radius(self,z):
         '''
@@ -93,3 +109,40 @@ class GaussianBeam():
         convert_W_per_m2_to_mW_per_cm2 = 0.1
         intensity_W_per_m2 = intensity_mW_per_cm2 / convert_W_per_m2_to_mW_per_cm2
         return intensity_W_per_m2 / self.intensity(1,r,z)
+    
+    def trap_frequency(self,power,trap_length,polarizability=0.):
+        if (not self.include_trap_properties) and polarizability == 0.:
+            raise ValueError("Trap properties were not included in the initialization of the class, so polarizability data is not available.")
+        if polarizability == 0.:
+            polarizability = self.polarizability_ground_state
+        return np.sqrt( \
+            2 * self.peak_intensity * self.polarizability_ground_state ) \
+            / np.sqrt( c.c * c.m_K * c.epsilon_0 ) / trap_length
+
+    def trap_frequency_radial(self,power,polarizability=0.):
+        '''
+        Returns the radial trap frequency for a potassium atom's ground state.
+        '''
+        if (not self.include_trap_properties) and polarizability == 0.:
+            raise ValueError("Trap properties were not included in the initialization of the class, so polarizability data is not available.")
+        if polarizability == 0.:
+            polarizability = self.polarizability_ground_state
+        return self.trap_frequency(power,self.waist,polarizability)
+    
+    def trap_frequency_axial(self,power,polarizability=0.):
+        '''
+        Returns the radial trap frequency for a potassium atom's ground state.
+        '''
+        if (not self.include_trap_properties) and polarizability == 0.:
+            raise ValueError("Trap properties were not included in the initialization of the class, so polarizability data is not available.")
+        if polarizability == 0.:
+            polarizability = self.polarizability_ground_state
+        return self.trap_frequency(power,self.zR,polarizability)
+    
+    def trap_depth(self,power=-0.1,r=0.,z=0.,polarizability=0.):
+        if (not self.include_trap_properties) and polarizability == 0.:
+            raise ValueError("Trap properties were not included in the initialization of the class, so polarizability data is not available.")
+        if polarizability == 0.:
+            polarizability = self.polarizability_ground_state
+        return - 1/(2*c.c*c.epsilon_0) * polarizability * self.intensity(power,r,z)
+        
