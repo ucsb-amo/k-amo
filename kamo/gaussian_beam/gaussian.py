@@ -111,13 +111,16 @@ class GaussianBeam():
         return intensity_W_per_m2 / self.intensity(1,r,z)
     
     def trap_frequency(self,power,trap_length,polarizability):
-        return np.sqrt( \
-            2 * self.peak_intensity * self.polarizability_ground_state ) \
+        intensity = self.intensity(power)
+        omega = np.sqrt( 2 * intensity * self.polarizability_ground_state ) \
             / np.sqrt( c.c * c.m_K * c.epsilon_0 ) / trap_length
+        return omega
+
 
     def trap_frequency_radial(self,power=-0.1,polarizability=0.):
         '''
-        Returns the radial trap frequency for a potassium atom's ground state.
+        Returns the radial trap frequency (rad/s) for a potassium atom's ground
+        state in the given gaussian beam.
         '''
         if (not self.include_trap_properties) and polarizability == 0.:
             raise ValueError("Trap properties were not included in the initialization of the class, so polarizability data is not available.")
@@ -129,7 +132,8 @@ class GaussianBeam():
     
     def trap_frequency_axial(self,power=-0.1,polarizability=0.):
         '''
-        Returns the radial trap frequency for a potassium atom's ground state.
+        Returns the axial trap frequency (rad/s) for a potassium atom's ground
+        state in the given gaussian beam.
         '''
         if (not self.include_trap_properties) and polarizability == 0.:
             raise ValueError("Trap properties were not included in the initialization of the class, so polarizability data is not available.")
