@@ -11,3 +11,8 @@ kamo/atom_properties/k39.py
 kamo/gaussian_beam/__init__.py
 kamo/gaussian_beam/gaussian.py
 kamo/gaussian_beam/thin_lens_gaussian.py
+kamo/light_shift/__init__.py
+kamo/light_shift/compute_light_shift.py
+kamo/light_shift/compute_polarizability.py
+kamo/light_shift/concat_portal_data.py
+kamo/light_shift/parse_portal_data.py
