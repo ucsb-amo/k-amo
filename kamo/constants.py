@@ -14,6 +14,7 @@ e = scon.e
 m_K = atom_K39.mass
 m_e = scon.m_e
 epsilon0 = scon.epsilon_0
+epsilon_0 = scon.epsilon_0
 
 convert_polarizability_au_to_SI = 4 * np.pi * epsilon0 * a0**3
 
