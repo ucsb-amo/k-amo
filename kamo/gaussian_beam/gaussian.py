@@ -110,16 +110,12 @@ class GaussianBeam():
         intensity_W_per_m2 = intensity_mW_per_cm2 / convert_W_per_m2_to_mW_per_cm2
         return intensity_W_per_m2 / self.intensity(1,r,z)
     
-    def trap_frequency(self,power,trap_length,polarizability=0.):
-        if (not self.include_trap_properties) and polarizability == 0.:
-            raise ValueError("Trap properties were not included in the initialization of the class, so polarizability data is not available.")
-        if polarizability == 0.:
-            polarizability = self.polarizability_ground_state
+    def trap_frequency(self,power,trap_length,polarizability):
         return np.sqrt( \
             2 * self.peak_intensity * self.polarizability_ground_state ) \
             / np.sqrt( c.c * c.m_K * c.epsilon_0 ) / trap_length
 
-    def trap_frequency_radial(self,power,polarizability=0.):
+    def trap_frequency_radial(self,power=-0.1,polarizability=0.):
         '''
         Returns the radial trap frequency for a potassium atom's ground state.
         '''
@@ -127,9 +123,11 @@ class GaussianBeam():
             raise ValueError("Trap properties were not included in the initialization of the class, so polarizability data is not available.")
         if polarizability == 0.:
             polarizability = self.polarizability_ground_state
+        if power == -0.1:
+            power = self.power
         return self.trap_frequency(power,self.waist,polarizability)
     
-    def trap_frequency_axial(self,power,polarizability=0.):
+    def trap_frequency_axial(self,power=-0.1,polarizability=0.):
         '''
         Returns the radial trap frequency for a potassium atom's ground state.
         '''
@@ -137,12 +135,16 @@ class GaussianBeam():
             raise ValueError("Trap properties were not included in the initialization of the class, so polarizability data is not available.")
         if polarizability == 0.:
             polarizability = self.polarizability_ground_state
+        if power == -0.1:
+            power = self.power
         return self.trap_frequency(power,self.zR,polarizability)
     
-    def trap_depth(self,power=-0.1,r=0.,z=0.,polarizability=0.):
+    def potential_depth(self,power=-0.1,r=0.,z=0.,polarizability=0.):
         if (not self.include_trap_properties) and polarizability == 0.:
             raise ValueError("Trap properties were not included in the initialization of the class, so polarizability data is not available.")
         if polarizability == 0.:
             polarizability = self.polarizability_ground_state
+        if power == -0.1:
+            power = self.power
         return - 1/(2*c.c*c.epsilon_0) * polarizability * self.intensity(power,r,z)
         
