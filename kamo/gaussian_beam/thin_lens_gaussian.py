@@ -1,5 +1,5 @@
 import numpy as np
-from kamo.gaussian_beam.gaussian import GaussianBeam
+from kamo import GaussianBeam
 from numpy.typing import ArrayLike
 
 class ThinLensGaussian():
@@ -65,46 +65,32 @@ class Objective():
         self.focal_length = focal_length
         self.entrance_aperture_diameter = 2 * self.NA * self.focal_length
 
-    # def input_beam_from_output_waist(self,output_waist,wavelength): '''
-    #     Returns the required input gaussian beam for a given output beam
-    #     waist, assuming operation away from the limits of the objective.
-
-    #     Parameters
-    #     ----------
-    #     output_waist: float The 1/e^2 spot waist at the working distance from
-    #         the objective
-
-    #     Outputs
-    #     -------
-    #     GaussianBeam '''
-
-    #     output_beam = GaussianBeam(waist=output_waist, wavelength=wavelength)
-    #     eff_lens = ThinLensGaussian(self.focal_length) input_beam =
-    #     eff_lens.beam_after_lens(output_beam,z_input_waist_to_lens=self.focal_length)
-    #     return input_beam
-
     def spot_waist_from_input_beam(self, input_beam):
+
         beam_diameter = input_beam.waist * 2
         wavelength = input_beam.wavelength
-        spot_waist = 2 * wavelength * self.focal_length / np.pi / beam_diameter
+        spot_waist = wavelength * self.focal_length / np.pi / input_beam.waist
+
+        spot_beam = GaussianBeam(waist=spot_waist,wavelength=wavelength,power=input_beam.power)
 
         if type(beam_diameter) != ArrayLike:
-            beam_diameter = np.array(beam_diameter)
+            beam_diameter = np.array([beam_diameter])
 
         for diam in beam_diameter:
             if beam_diameter > self.entrance_aperture_diameter:
                     print(f"Input beam diameter ({diam:1.2e}) is larger than the "+
                         f"entrance pupil of the objective ({self.entrance_aperture_diameter:1.2e})")
                 
-        return spot_waist
+        return spot_beam
     
     def input_waist_from_spot_beam(self, spot_beam):
-        spot_waist = spot_beam.waist * 2
         wavelength = spot_beam.wavelength
-        input_waist = 2 * wavelength * self.focal_length / np.pi / spot_waist
+        input_waist = wavelength * self.focal_length / np.pi / spot_beam.waist
+
+        input_beam = GaussianBeam(waist=input_waist,wavelength=wavelength,power=spot_beam.power)
 
         if type(spot_waist) != ArrayLike:
-            spot_waist = np.array(spot_waist)
+            spot_waist = np.array([spot_waist])
 
         for idx in range(len(input_waist)):
             inwaist = input_waist[idx]
@@ -113,4 +99,4 @@ class Objective():
                     f"spot diameter ({2*spot_waist[idx]:1.2e}) is larger than the "+
                     f"entrance pupil of the objective ({self.entrance_aperture_diameter:1.2e}).")
 
-        return input_waist
+        return input_beam
