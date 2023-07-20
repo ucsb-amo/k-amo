@@ -59,7 +59,7 @@ class Objective():
         2*NA*EFL)
     '''
 
-    def __init__(self, NA, working_distance, focal_length):
+    def __init__(self, NA=0., working_distance=0., focal_length=0.):
         self.NA = NA
         self.working_distance = working_distance
         self.focal_length = focal_length
