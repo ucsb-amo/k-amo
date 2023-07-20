@@ -65,38 +65,41 @@ class Objective():
         self.focal_length = focal_length
         self.entrance_aperture_diameter = 2 * self.NA * self.focal_length
 
-    def spot_waist_from_input_beam(self, input_beam):
+    def spot_waist_from_input_beam(self, input_beam, aperture_warning = False):
 
         beam_diameter = input_beam.waist * 2
         wavelength = input_beam.wavelength
-        spot_waist = wavelength * self.focal_length / np.pi / input_beam.waist
-
-        spot_beam = GaussianBeam(waist=spot_waist,wavelength=wavelength,power=input_beam.power)
 
         if type(beam_diameter) != ArrayLike:
             beam_diameter = np.array([beam_diameter])
 
-        for diam in beam_diameter:
-            if beam_diameter > self.entrance_aperture_diameter:
-                    print(f"Input beam diameter ({diam:1.2e}) is larger than the "+
-                        f"entrance pupil of the objective ({self.entrance_aperture_diameter:1.2e})")
+        spot_waist = wavelength * self.focal_length / np.pi / input_beam.waist
+        spot_beam = GaussianBeam(waist=spot_waist,wavelength=wavelength,power=input_beam.power)
+
+        if aperture_warning:
+            for diam in beam_diameter:
+                if beam_diameter > self.entrance_aperture_diameter:
+                        print(f"Input beam diameter ({diam:1.2e}) is larger than the "+
+                            f"entrance pupil of the objective ({self.entrance_aperture_diameter:1.2e})")
                 
         return spot_beam
     
-    def input_waist_from_spot_beam(self, spot_beam):
+    def input_waist_from_spot_beam(self, spot_beam, aperture_warning = False):
+        spot_waist = spot_beam.waist
         wavelength = spot_beam.wavelength
-        input_waist = wavelength * self.focal_length / np.pi / spot_beam.waist
-
-        input_beam = GaussianBeam(waist=input_waist,wavelength=wavelength,power=spot_beam.power)
-
+        
         if type(spot_waist) != ArrayLike:
             spot_waist = np.array([spot_waist])
 
-        for idx in range(len(input_waist)):
-            inwaist = input_waist[idx]
-            if 2*inwaist > self.entrance_aperture_diameter:
-                print(f"Required input beam diameter ({2*inwaist:1.2e}) to achieve "+
-                    f"spot diameter ({2*spot_waist[idx]:1.2e}) is larger than the "+
-                    f"entrance pupil of the objective ({self.entrance_aperture_diameter:1.2e}).")
+        input_waist = wavelength * self.focal_length / np.pi / spot_waist
+        input_beam = GaussianBeam(waist=input_waist,wavelength=wavelength,power=spot_beam.power)
+
+        if aperture_warning:
+            for idx in range(len(input_waist)):
+                inwaist = input_waist[idx]
+                if 2*inwaist > self.entrance_aperture_diameter:
+                    print(f"Required input beam diameter ({2*inwaist:1.2e}) to achieve "+
+                        f"spot diameter ({2*spot_waist[idx]:1.2e}) is larger than the "+
+                        f"entrance pupil of the objective ({self.entrance_aperture_diameter:1.2e}).")
 
         return input_beam
