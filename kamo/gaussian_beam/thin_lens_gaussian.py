@@ -59,7 +59,7 @@ class Objective():
         2*NA*EFL)
     '''
 
-    def __init__(self, NA, working_distance, focal_length):
+    def __init__(self, NA=0., working_distance=0., focal_length=0.):
         self.NA = NA
         self.working_distance = working_distance
         self.focal_length = focal_length
@@ -73,13 +73,13 @@ class Objective():
 
         spot_beam = GaussianBeam(waist=spot_waist,wavelength=wavelength,power=input_beam.power)
 
-        if type(beam_diameter) != ArrayLike:
-            beam_diameter = np.array([beam_diameter])
+        # if type(beam_diameter) != ArrayLike:
+        #     beam_diameter = np.array([beam_diameter])
 
-        for diam in beam_diameter:
-            if beam_diameter > self.entrance_aperture_diameter:
-                    print(f"Input beam diameter ({diam:1.2e}) is larger than the "+
-                        f"entrance pupil of the objective ({self.entrance_aperture_diameter:1.2e})")
+        # for diam in beam_diameter:
+        #     if beam_diameter > self.entrance_aperture_diameter:
+        #             print(f"Input beam diameter ({diam:1.2e}) is larger than the "+
+        #                 f"entrance pupil of the objective ({self.entrance_aperture_diameter:1.2e})")
                 
         return spot_beam
     
@@ -89,14 +89,14 @@ class Objective():
 
         input_beam = GaussianBeam(waist=input_waist,wavelength=wavelength,power=spot_beam.power)
 
-        if type(spot_waist) != ArrayLike:
-            spot_waist = np.array([spot_waist])
+        # if type(spot_waist) != ArrayLike:
+        #     spot_waist = np.array([spot_waist])
 
-        for idx in range(len(input_waist)):
-            inwaist = input_waist[idx]
-            if 2*inwaist > self.entrance_aperture_diameter:
-                print(f"Required input beam diameter ({2*inwaist:1.2e}) to achieve "+
-                    f"spot diameter ({2*spot_waist[idx]:1.2e}) is larger than the "+
-                    f"entrance pupil of the objective ({self.entrance_aperture_diameter:1.2e}).")
+        # for idx in range(len(input_waist)):
+        #     inwaist = input_waist[idx]
+        #     if 2*inwaist > self.entrance_aperture_diameter:
+        #         print(f"Required input beam diameter ({2*inwaist:1.2e}) to achieve "+
+        #             f"spot diameter ({2*spot_waist[idx]:1.2e}) is larger than the "+
+        #             f"entrance pupil of the objective ({self.entrance_aperture_diameter:1.2e}).")
 
         return input_beam
