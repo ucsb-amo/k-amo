@@ -56,7 +56,7 @@ def compute_transition_shift(ni,li,ji,Fi,mFi,
     """    
     state_shift_i_Hz = compute_state_shift(ni,li,ji,Fi,mFi,wavelength_m,intensity,polarization,I)
     state_shift_f_Hz = compute_state_shift(nf,lf,jf,Ff,mFf,wavelength_m,intensity,polarization,I)
-    transition_shift_Hz = state_shift_i_Hz - state_shift_f_Hz
+    transition_shift_Hz = state_shift_f_Hz - state_shift_i_Hz
     transition_shift_Hz = transition_shift_Hz.astype('float64')
     return transition_shift_Hz
 
