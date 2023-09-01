@@ -87,13 +87,13 @@ class Potassium39(arc.Potassium39):
             zeeman_Es = self.breitRabi(n, l, j, np.array([B]))
             zeeman_Es = np.transpose(zeeman_Es[0])
             if f==0:
-                return zeeman_Es[m_f]
+                return zeeman_Es[m_f] / 1.e6
             if f==1:
-                return zeeman_Es[m_f+2]
+                return zeeman_Es[m_f+2] / 1.e6
             if f==2:
-                return zeeman_Es[m_f+6]
+                return zeeman_Es[m_f+6] / 1.e6
             if f==3:
-                return zeeman_Es[m_f+12]
+                return zeeman_Es[m_f+12] / 1.e6
                 
 
 
