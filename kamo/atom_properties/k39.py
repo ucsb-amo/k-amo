@@ -50,39 +50,39 @@ class Potassium39(arc.Potassium39):
         scattering_cross_section = g_ratio * np.pi**2 * c.c**2 / omega0**2 * A21 * lineshape
         return scattering_cross_section
     
-    # def get_zeeman_shift(self,n,l,j,f,m_f,B):
-    #     '''
-    #     Returns the zeeman energy in units of MHz as a function of B field (in Gauss) for a given F, m_f sublevel in the specified fine structure manifold.
-    #     Note: right now this only works for the ground state (l=0, j=1/2), excited states in progress.
-    #     '''
-    #     #nuclear spin
-    #     n_s = 1.5
-    #     #convert B field in gauss to Tesla
-    #     B = B / 1.e4
+    def get_zeeman_shift(self,n,l,j,f,m_f,B):
+        '''
+        Returns the zeeman energy in units of MHz as a function of B field (in Gauss) for a given F, m_f sublevel in the specified fine structure manifold.
+        Note: right now this only works for the ground state (l=0, j=1/2), excited states in progress.
+        '''
+        #nuclear spin
+        n_s = 1.5
+        #convert B field in gauss to Tesla
+        B = B / 1.e4
 
-    #     #for s states (l=0) use the Breit-Rabi formula
-    #     if l==0:
-    #         if f==1:
-    #             return (((-c.get_hyperfine_constant(0,.5) / 4) 
-    #                     + c.g_I * c.mu_b * m_f * B
-    #                     - (c.get_hyperfine_constant(0,.5)*(n_s+.5) / 2)
-    #                     * np.sqrt(1 + (4 * m_f * (c.get_total_electronic_g_factor(0,.5) - c.g_I) * c.mu_b * B) / (((2 * n_s) + 1) * c.get_hyperfine_constant(0,.5) * (n_s + .5)) 
-    #                                + (((c.get_total_electronic_g_factor(0,.5) - c.g_I) * c.mu_b * B) / (c.get_hyperfine_constant(0,.5) * (n_s + .5)))**2))
-    #                                / (c.h * 1.e6))
-    #         if f==2:
-    #             if m_f != -2:
-    #                 return (((-c.get_hyperfine_constant(0,.5) / 4) 
-    #                         + c.g_I * c.mu_b * m_f * B
-    #                         + (c.get_hyperfine_constant(0,.5)*(n_s+.5) / 2)
-    #                         * np.sqrt(1 + (4 * m_f * (c.get_total_electronic_g_factor(0,.5) - c.g_I) * c.mu_b * B) / (((2 * n_s) + 1) * c.get_hyperfine_constant(0,.5) * (n_s + .5)) 
-    #                                 + (((c.get_total_electronic_g_factor(0,.5) - c.g_I) * c.mu_b * B) / (c.get_hyperfine_constant(0,.5) * (n_s + .5)))**2))
-    #                                 / (c.h * 1.e6))
-    #             elif m_f == -2:
-    #                 return (((-c.get_hyperfine_constant(0,.5) / 4) 
-    #                         + c.g_I * c.mu_b * m_f * B
-    #                         + (c.get_hyperfine_constant(0,.5)*(n_s+.5) / 2)
-    #                         * (1 - ((c.get_total_electronic_g_factor(0,.5) - c.g_I) * c.mu_b * B) / (c.get_hyperfine_constant(0,.5) * (n_s + .5))))
-    #                                 / (c.h * 1.e6))
+        #for s states (l=0) use the Breit-Rabi formula
+        if l==0:
+            if f==1:
+                return (((-c.get_hyperfine_constant(0,.5) / 4) 
+                        + c.g_I * c.mu_b * m_f * B
+                        - (c.get_hyperfine_constant(0,.5)*(n_s+.5) / 2)
+                        * np.sqrt(1 + (4 * m_f * (c.get_total_electronic_g_factor(0,.5) - c.g_I) * c.mu_b * B) / (((2 * n_s) + 1) * c.get_hyperfine_constant(0,.5) * (n_s + .5)) 
+                                   + (((c.get_total_electronic_g_factor(0,.5) - c.g_I) * c.mu_b * B) / (c.get_hyperfine_constant(0,.5) * (n_s + .5)))**2))
+                                   / (c.h * 1.e6))
+            if f==2:
+                if m_f != -2:
+                    return (((-c.get_hyperfine_constant(0,.5) / 4) 
+                            + c.g_I * c.mu_b * m_f * B
+                            + (c.get_hyperfine_constant(0,.5)*(n_s+.5) / 2)
+                            * np.sqrt(1 + (4 * m_f * (c.get_total_electronic_g_factor(0,.5) - c.g_I) * c.mu_b * B) / (((2 * n_s) + 1) * c.get_hyperfine_constant(0,.5) * (n_s + .5)) 
+                                    + (((c.get_total_electronic_g_factor(0,.5) - c.g_I) * c.mu_b * B) / (c.get_hyperfine_constant(0,.5) * (n_s + .5)))**2))
+                                    / (c.h * 1.e6))
+                elif m_f == -2:
+                    return (((-c.get_hyperfine_constant(0,.5) / 4) 
+                            + c.g_I * c.mu_b * m_f * B
+                            + (c.get_hyperfine_constant(0,.5)*(n_s+.5) / 2)
+                            * (1 - ((c.get_total_electronic_g_factor(0,.5) - c.g_I) * c.mu_b * B) / (c.get_hyperfine_constant(0,.5) * (n_s + .5))))
+                                    / (c.h * 1.e6))
                 
 
 
