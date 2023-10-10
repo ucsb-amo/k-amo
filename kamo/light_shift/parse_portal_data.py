@@ -115,10 +115,11 @@ def reduced_dipole_matrix_element_table(n,l,j,portal_data:pd.DataFrame = None):
         from the specified initial state.
         np.ndarray: an ndarray containing the state-labeling string 
     """    
-    if portal_data == None:
-        portal_data = load_portal_data()
-    elif not isinstance(portal_data,pd.DataFrame):
-        raise ValueError("portal_data must be a pandas.DataFrame.")
+    if not isinstance(portal_data,pd.DataFrame):
+        if portal_data == None:
+            portal_data = load_portal_data()
+        else:
+            raise ValueError("portal_data must be a pandas.DataFrame.")
     
     state_i = quantum_numbers_to_state_label(n,l,j)
 
