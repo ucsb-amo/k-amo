@@ -1,18 +1,22 @@
 import numpy as np
 from kamo import constants as c
 import kamo.light_shift.parse_portal_data as ppd
+import pandas as pd
 from sympy.physics import wigner
+import time
 
-def compute_polarizability(n,l,j,F,wavelength_m,I=3/2):
-    """Computes the hyperfine polarizabilities for the input state for the given wavelength(s).
+def compute_fine_structure_polarizability(n,l,j,wavelength_m,portal_data:pd.DataFrame = None):
+    """Computes the fine structure polarizabilities for the input state for the
+    given wavelength(s).
 
     Args:
         n (int): the n quantum number.
         l (int): the l quantum number
         j (float): the J quantum number
-        F (float): the F quantum number.
         wavelength_m (ndarray): the wavelength of the light field.
-        I (float, optional): the nuclear spin of the atom. Defaults to 3/2.
+        portal_data (pd.DataFrame, optional): If the matrix element DataFrame
+        has already been loaded, provide it here. If unspecified, loads from
+        file. Defaults to None.
 
     Returns:
         float: the scalar polarizability in atomic units of the given hyperfine
@@ -22,7 +26,6 @@ def compute_polarizability(n,l,j,F,wavelength_m,I=3/2):
         float: the tensor polarizability in atomic units of the given hyperfine
         state.
     """    
-
     if isinstance(wavelength_m,list):
         wavelength_m = np.array(wavelength_m)
     elif isinstance(wavelength_m,float):
@@ -36,7 +39,7 @@ def compute_polarizability(n,l,j,F,wavelength_m,I=3/2):
 
         laser_energy_J = c.h * c.c / wavelength_m[ii]
 
-        transition_table, allowed_final_states = ppd.reduced_dipole_matrix_element_table(n,l,j)
+        transition_table, allowed_final_states = ppd.reduced_dipole_matrix_element_table(n,l,j,portal_data=portal_data)
 
         for state_f in allowed_final_states:
 
@@ -54,6 +57,39 @@ def compute_polarizability(n,l,j,F,wavelength_m,I=3/2):
     alpha_j_scalar = alpha_j_scalar * (2/3) * 1/(2*j+1)
     alpha_j_vector = alpha_j_vector * np.sqrt( 24*j/(j+1)/(2*j+1) )
     alpha_j_tensor = alpha_j_tensor * np.sqrt( 40*j*(2*j-1)/( 3*(j+1)*(2*j+3)*(2*j+1) ) )
+
+    return alpha_j_scalar, alpha_j_vector, alpha_j_tensor
+
+def compute_polarizability(n,l,j,F,wavelength_m,I=3/2,portal_data:pd.DataFrame = None):
+    """Computes the hyperfine polarizabilities for the input state for the given wavelength(s).
+
+    Args:
+        n (int): the n quantum number.
+        l (int): the l quantum number
+        j (float): the J quantum number
+        F (float): the F quantum number.
+        wavelength_m (ndarray): the wavelength of the light field.
+        I (float, optional): the nuclear spin of the atom. Defaults to 3/2.
+        portal_data (pd.DataFrame, optional): If the matrix element DataFrame
+        has already been loaded, provide it here. If unspecified, loads from
+        file. Defaults to None.
+
+    Returns:
+        float: the scalar polarizability in atomic units of the given hyperfine
+        state.
+        float: the vector polarizability in atomic units of the given hyperfine
+        state.
+        float: the tensor polarizability in atomic units of the given hyperfine
+        state.
+    """    
+
+    if isinstance(wavelength_m,list):
+        wavelength_m = np.array(wavelength_m)
+    elif isinstance(wavelength_m,float):
+        wavelength_m = np.array([wavelength_m])
+
+    alpha_j_scalar, alpha_j_vector, alpha_j_tensor = compute_fine_structure_polarizability(n,l,j,wavelength_m,
+                                                                                           portal_data=portal_data)
 
     coeff_F_vector = (-1)**(j+F+I+1) * wigner.wigner_6j(F,j,I,j,F,1) * \
           np.sqrt( F*(2*F+1)*(2*j+1)*(j+1)/j/(F+1) )
@@ -74,7 +110,8 @@ def compute_polarizability(n,l,j,F,wavelength_m,I=3/2):
 
     return alpha_F_scalar, alpha_F_vector, alpha_F_tensor
 
-def compute_complete_polarizability(n,l,j,F,mF,wavelength_m,polarization=[1,0],I=3/2):
+def compute_complete_polarizability(n,l,j,F,mF,wavelength_m,polarization=[1,0],I=3/2,
+                                    portal_data:pd.DataFrame = None):
     """
     Computes the total hyperfine polarizability for the input state for the
     given wavelength(s). This number is proportional to the energy shift of the
@@ -87,6 +124,9 @@ def compute_complete_polarizability(n,l,j,F,mF,wavelength_m,polarization=[1,0],I
         F (float): the F quantum number.
         wavelength_m (ndarray): the wavelength of the light field.
         I (float, optional): the nuclear spin of the atom. Defaults to 3/2.
+        portal_data (pd.DataFrame, optional): If the matrix element DataFrame
+        has already been loaded, provide it here. If unspecified, loads from
+        file. Defaults to None.
 
     Returns:
         float: the complete polarizability in atomic units of the given hyperfine
@@ -108,7 +148,7 @@ def compute_complete_polarizability(n,l,j,F,mF,wavelength_m,polarization=[1,0],I
     beta = np.imag( np.cross(polarization, np.conj(polarization)) )[0]
     gamma = (3 * np.conj(polarization[0]) * polarization[0] - 1)/2
 
-    alpha_F_scalar, alpha_F_vector, alpha_F_tensor = compute_polarizability(n,l,j,F,wavelength_m,I)
+    alpha_F_scalar, alpha_F_vector, alpha_F_tensor = compute_polarizability(n,l,j,F,wavelength_m,I,portal_data=portal_data)
 
     alpha_F = alpha_F_scalar - beta * mF / (2*F) * alpha_F_vector + \
         gamma * (3*mF**2 - F*(F+1)) / (F*(2*F-1)) * alpha_F_tensor
