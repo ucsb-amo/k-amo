@@ -17,6 +17,7 @@ epsilon0 = scon.epsilon_0
 epsilon_0 = scon.epsilon_0
 
 convert_polarizability_au_to_SI = 4 * np.pi * epsilon0 * a0**3
+convert_joules_per_electronvolt = 1.6022e-19
 
 #bohr magneton in J / T
 mu_b = 9.2740100783e-24
