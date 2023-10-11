@@ -5,9 +5,10 @@ from kamo.light_shift.parse_portal_data import PortalDataParser
 from sympy.physics import wigner
 
 class ComputePolarizabilities():
-    def __init__(self, portal_data_parser:PortalDataParser = None):
+    def __init__(self, portal_data_parser:PortalDataParser = None, n_max=16, n_min=3):
+
         if portal_data_parser == None:
-            self.pdp = PortalDataParser()
+            self.pdp = PortalDataParser(n_max=n_max, n_min=n_min)
         else:
             if isinstance(portal_data_parser,PortalDataParser):
                 self.pdp = portal_data_parser

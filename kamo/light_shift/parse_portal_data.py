@@ -10,13 +10,13 @@ import time
 
 class PortalDataParser():
 
-    def __init__(self, portal_data:pd.DataFrame = None):
+    def __init__(self, portal_data:pd.DataFrame = None, n_max=16, n_min=3):
+        self.N_MAX = n_max
+        self.N_MIN = n_min
+
         self.atom = Potassium39()
         self.state_energy_list = self._get_state_energy_list()
 
-        self.N_MAX = 16
-        self.N_MIN = 3
-        
         if not isinstance(portal_data,pd.DataFrame):
             if portal_data == None:
                 self.portal_data = self.load_portal_data()
@@ -237,10 +237,10 @@ class PortalDataParser():
             state_order = -1
         return state_order
     
-    def _get_state_energy_list(self,n_min=3,n_max=12,l_max=3):
+    def _get_state_energy_list(self,l_max=3):
         '''Uses ARC to compute the energy level order.'''
         levels = []
-        for n in range(n_min,n_max+1):
+        for n in range(self.N_MIN,self.N_MAX+1):
             for l in range(0,n):
                 if l < (l_max+1):
                     if ((n == 3) & (l < 2)):
