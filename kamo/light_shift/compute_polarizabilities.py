@@ -23,7 +23,7 @@ class ComputePolarizabilities():
         elif isinstance(wavelength_m,float):
             wavelength_m = np.array([wavelength_m])
 
-        WAVELENGTH_M_MAX = 5.e-6
+        WAVELENGTH_M_MAX = 20.e-6
         WAVELENGTH_M_MIN = 100.e-9
         if any(wavelength_m > WAVELENGTH_M_MAX) or any(wavelength_m < WAVELENGTH_M_MIN):
             raise ValueError(f"Wavelength must be between {WAVELENGTH_M_MIN} and {WAVELENGTH_M_MAX}")
@@ -86,6 +86,12 @@ class ComputePolarizabilities():
         alpha_j_tensor = alpha_j_tensor / c.convert_polarizability_au_to_SI
 
         return alpha_j_scalar, alpha_j_vector, alpha_j_tensor
+    
+    def return_ionic_core_contribution(self):
+        '''Returns the ionic core contribution to the polarizability in a.u.
+        Numerical value from
+        https://journals.aps.org/pra/abstract/10.1103/PhysRevA.87.052504'''
+        return 5.457
 
     def compute_polarizability(self,
                                n,l,j,F,
