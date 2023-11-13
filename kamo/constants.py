@@ -20,7 +20,7 @@ convert_polarizability_au_to_SI = 4 * np.pi * epsilon0 * a0**3
 convert_joules_per_electronvolt = 1.6022e-19
 
 #bohr magneton in J / T
-mu_b = 9.2740100783e-24
+mu_b = e * hbar / (2 * m_e)
 
 #K39 total nuclear g-factor
 g_I = -0.00014193489
