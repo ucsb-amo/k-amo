@@ -94,6 +94,13 @@ class Potassium39(arc.Potassium39):
                 return zeeman_Es[m_f+2] / 1.e6
             if f==3:
                 return zeeman_Es[m_f+3] / 1.e6
-                
+            
+    def get_microwave_transition_frequency(self,n1,l1,j1,f1,m_f1,n2,l2,j2,f2,m_f2,B=0):
+        '''
+        Returns the amount of shift in MHz of a given transition under external magnetic field B (in Gauss).
+        '''
+        transition_frequency = self.get_zeeman_shift(n2,l2,j2,f2,m_f2,B) - self.get_zeeman_shift(n1,l1,j1,f1,m_f1,B)
+
+        return transition_frequency
 
 
