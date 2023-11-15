@@ -99,7 +99,7 @@ class Potassium39(arc.Potassium39):
         '''
         Returns the amount of shift in MHz of a given microwave transition under external magnetic field B (in Gauss). 
         '''
-        transition_frequency = self.get_zeeman_shift(n,l,j,f2,m_f2,B) - self.get_zeeman_shift(n,l,j,f1,m_f1,B)
+        transition_frequency = abs(self.get_zeeman_shift(n,l,j,f2,m_f2,B) - self.get_zeeman_shift(n,l,j,f1,m_f1,B))
 
         return transition_frequency
 
