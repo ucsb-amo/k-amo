@@ -84,22 +84,26 @@ class Potassium39(arc.Potassium39):
                                     / (c.h * 1.e6))
         #for all others use ARC breit rabi function:
         if l!=0:
-            zeeman_Es = self.breitRabi(n, l, j, np.array([B]))
-            zeeman_Es = np.transpose(zeeman_Es[0])
-            if f==0:
-                return zeeman_Es[m_f] / 1.e6
-            if f==1:
-                return zeeman_Es[m_f+1] / 1.e6
-            if f==2:
-                return zeeman_Es[m_f+2] / 1.e6
-            if f==3:
-                return zeeman_Es[m_f+3] / 1.e6
+            zeeman_Evs = self.breitRabi(n, l, j, np.array([B]))
+            zeeman_Es = np.transpose(zeeman_Evs[0])
+            for idx in range(len(zeeman_Evs[1])):
+                if zeeman_Evs[1][idx] == f:
+                    if zeeman_Evs[2][idx] == m_f:
+                        return zeeman_Es[idx] / 1.e6
             
     def get_microwave_transition_frequency(self,n,l,j,f1,m_f1,f2,m_f2,B=0):
         '''
         Returns the amount of shift in MHz of a given microwave transition under external magnetic field B (in Gauss). 
         '''
         transition_frequency = abs(self.get_zeeman_shift(n,l,j,f2,m_f2,B) - self.get_zeeman_shift(n,l,j,f1,m_f1,B))
+
+        return transition_frequency
+    
+    def get_transition_shift(self,n1,l1,j1,f1,m_f1,n2,l2,j2,f2,m_f2,B=0):
+        '''
+        Returns the amount of shift in MHz of a given optical transition under external magnetic field B (in Gauss). 
+        '''
+        transition_frequency = (self.get_zeeman_shift(n1,l1,j1,f1,m_f1,B) - self.get_zeeman_shift(n1,l1,j1,f1,m_f1,0)) + (self.get_zeeman_shift(n2,l2,j2,f2,m_f2,B) - self.get_zeeman_shift(n2,l2,j2,f2,m_f2,0))
 
         return transition_frequency
 
