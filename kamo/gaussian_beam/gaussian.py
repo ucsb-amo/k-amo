@@ -53,8 +53,9 @@ class GaussianBeam():
         self.include_trap_properties = include_trap_properties
         if include_trap_properties:
             from kamo import light_shift
+            cp = light_shift.compute_polarizabilities.ComputePolarizabilities()
             self.polarizability_ground_state = \
-                light_shift.compute_complete_polarizability(4,0,1/2,2,2,self.wavelength) \
+                cp.compute_complete_polarizability(4,0,1/2,2,2,self.wavelength) \
                     * c.convert_polarizability_au_to_SI
         
     def beam_radius(self,z):
@@ -111,23 +112,25 @@ class GaussianBeam():
         return intensity_W_per_m2 / self.intensity(1,r,z)
     
     def trap_frequency(self,power,trap_length,polarizability):
+        '''
+        Returns the trap frequency (rad/s) for a potassium atom's ground state
+        in the gaussian beam.
+
+        trap_length refers to either the trap waist or the Rayleigh range of the
+        beam, depending on if the user wants the radial or the axial trap
+        frequency.
+        '''
         intensity = self.intensity(power)
         omega = np.sqrt( 2 * intensity * self.polarizability_ground_state ) \
             / np.sqrt( c.c * c.m_K * c.epsilon_0 ) / trap_length
         return omega
-
 
     def trap_frequency_radial(self,power=-0.1,polarizability=0.):
         '''
         Returns the radial trap frequency (rad/s) for a potassium atom's ground
         state in the given gaussian beam.
         '''
-        if (not self.include_trap_properties) and polarizability == 0.:
-            raise ValueError("Trap properties were not included in the initialization of the class, so polarizability data is not available.")
-        if polarizability == 0.:
-            polarizability = self.polarizability_ground_state
-        if power == -0.1:
-            power = self.power
+        power, polarizability = self._handle_trap_args(power,polarizability)
         return self.trap_frequency(power,self.waist,polarizability)
     
     def trap_frequency_axial(self,power=-0.1,polarizability=0.):
@@ -135,20 +138,26 @@ class GaussianBeam():
         Returns the axial trap frequency (rad/s) for a potassium atom's ground
         state in the given gaussian beam.
         '''
-        if (not self.include_trap_properties) and polarizability == 0.:
-            raise ValueError("Trap properties were not included in the initialization of the class, so polarizability data is not available.")
-        if polarizability == 0.:
-            polarizability = self.polarizability_ground_state
-        if power == -0.1:
-            power = self.power
+        power, polarizability = self._handle_trap_args(power,polarizability)
         return self.trap_frequency(power,self.zR,polarizability)
     
-    def potential_depth(self,power=-0.1,r=0.,z=0.,polarizability=0.):
+    def trap_depth(self,power=-0.1,r=0.,z=0.,polarizability=0.):
+        '''
+        Returns the trap depth in K.
+        '''
+        power, polarizability = self._handle_trap_args(power,polarizability)
+        return - 1/(2*c.c*c.epsilon_0) * polarizability * self.intensity(power,r,z) / c.kB
+    
+    def power_for_given_trap_depth(self,trap_depth_K=0.,r=0.,z=0.,polarizability=0.):
+        _, polarizability = self._handle_trap_args(0.,polarizability)
+        return trap_depth_K / np.abs(self.trap_depth(1.,r,z,polarizability))
+
+    def _handle_trap_args(self,power,polarizability):
         if (not self.include_trap_properties) and polarizability == 0.:
             raise ValueError("Trap properties were not included in the initialization of the class, so polarizability data is not available.")
         if polarizability == 0.:
             polarizability = self.polarizability_ground_state
         if power == -0.1:
             power = self.power
-        return - 1/(2*c.c*c.epsilon_0) * polarizability * self.intensity(power,r,z)
+        return power, polarizability
         
