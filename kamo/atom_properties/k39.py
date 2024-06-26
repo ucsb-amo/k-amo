@@ -27,7 +27,7 @@ class Potassium39(arc.Potassium39):
         gamma = self.get_decay_rate(n1,l1,j1,n2,l2,j2)
         # transition_omega = np.abs( self.getTransitionFrequency(n1,l1,j1,n2,l2,j2) ) / 2 / np.pi
         detuning_omega = 2 * np.pi * detuning_Hz
-        return (1/(2/np.pi)) * gamma / ( detuning_omega**2 + gamma**2 / 4 )
+        return (1/(2*np.pi)) * gamma / ( detuning_omega**2 + gamma**2 / 4 )
 
     def get_cross_section(self,n1=4,l1=0,j1=1/2,F1=2,n2=4,l2=1,j2=3/2,F2=3,detuning_Hz=0):
 
@@ -40,10 +40,11 @@ class Potassium39(arc.Potassium39):
         g2 = 2*F2 + 1
         g1 = 2*F1 + 1
 
-        if ordered:
-            g_ratio = g2/g1
-        else:
-            g_ratio = g1/g2
+        # if ordered:
+        #     g_ratio = g2/g1
+        # else:
+        #     g_ratio = g1/g2
+        g_ratio = 1
 
         omega0 = 2 * np.pi * self.getTransitionFrequency(n1,l1,j1,n2,l2,j2)
         lineshape = self.lineshape(n1,l1,j1,n2,l2,j2,detuning_Hz=detuning_Hz)
@@ -99,16 +100,34 @@ class Potassium39(arc.Potassium39):
 
         return transition_frequency
     
+    # def get_transition_shift(self,n1,l1,j1,f1,m_f1,n2,l2,j2,f2,m_f2,B=0):
+    #     '''
+    #     Subtracts the calculated Zeeman shift of the excited state (n2,l2,j2,f2,m2) from that of the ground state (n1,l1,j1,f1,m1)
+    #     Returns the amount of shift in MHz of a given optical transition under external magnetic field B (in Gauss). 
+    #     '''
+    #     transition_frequency = -(self.get_zeeman_shift(n1,l1,j1,f1,m_f1,B) - self.get_zeeman_shift(n1,l1,j1,f1,m_f1,0)) + (self.get_zeeman_shift(n2,l2,j2,f2,m_f2,B) - self.get_zeeman_shift(n2,l2,j2,f2,m_f2,0))
+
+    #     return transition_frequency
+    
     def get_transition_shift(self,n1,l1,j1,f1,m_f1,n2,l2,j2,f2,m_f2,B=0):
         '''
         Subtracts the calculated Zeeman shift of the excited state (n2,l2,j2,f2,m2) from that of the ground state (n1,l1,j1,f1,m1)
         Returns the amount of shift in MHz of a given optical transition under external magnetic field B (in Gauss). 
         '''
-        transition_frequency = -(self.get_zeeman_shift(n1,l1,j1,f1,m_f1,B) - self.get_zeeman_shift(n1,l1,j1,f1,m_f1,0)) + (self.get_zeeman_shift(n2,l2,j2,f2,m_f2,B) - self.get_zeeman_shift(n2,l2,j2,f2,m_f2,0))
+        state1 = self.state_lookup(n1,l1,j1,f1,m_f1)
+        state2 = self.state_lookup(n2,l2,j2,f2,m_f2)
 
-        return transition_frequency
+        (F1_arc,mf1_arc) = state1['lf_arc']
+        (F2_arc,mf2_arc) = state2['lf_arc']
+
+        state1_shift = self.get_zeeman_shift(n1,l1,j1,F1_arc,mf1_arc,B) - self.get_zeeman_shift(n1,l1,j1,F1_arc,mf1_arc,0)
+        state2_shift = self.get_zeeman_shift(n2,l2,j2,F2_arc,mf2_arc,B) - self.get_zeeman_shift(n2,l2,j2,F2_arc,mf2_arc,0)
+
+        transition_frequency_shift = state2_shift - state1_shift
+
+        return transition_frequency_shift
     
-    def state_dicts(self,n,l,j,hf=True):
+    def state_dicts(self,n,l,j,hf=True) -> dict:
         '''
         n: principle quantum number (unused for now, but kept for consistency)
         l: angular momentum
@@ -614,10 +633,22 @@ class Potassium39(arc.Potassium39):
                     return state_4p3_lf
 
     def state_lookup(self,n,l,j,m1,m2):
+        """_summary_
+
+        Args:
+            n (int): The n quantum number for the state of interest.
+            l (int): The l quantum number for the state of interest.
+            j (float): The j quantum number for the state of interest.
+            m1 (int or float): The first quantum number to specify the state, either F or mJ (depending on regime).
+            m2 (int or float): The second quantum number to specify the state, either mF or mI (depending on regime).
+
+        Returns:
+            dict: a dict containing state information.
+        """        
         if abs(m1) == .5 or abs(m1) == 1.5:
-            dct = self.state_dicts(l=l,j=j)
+            dct = self.state_dicts(n,l,j)
         else:
-            dct = self.state_dicts(l=l,j=j, hf=False)
+            dct = self.state_dicts(n,l,j, hf=False)
 
         key = str((m1, m2))
         key = key[:-1]
