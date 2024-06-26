@@ -101,9 +101,10 @@ class Potassium39(arc.Potassium39):
     
     def get_transition_shift(self,n1,l1,j1,f1,m_f1,n2,l2,j2,f2,m_f2,B=0):
         '''
+        Subtracts the calculated Zeeman shift of the excited state (n2,l2,j2,f2,m2) from that of the ground state (n1,l1,j1,f1,m1)
         Returns the amount of shift in MHz of a given optical transition under external magnetic field B (in Gauss). 
         '''
-        transition_frequency = (self.get_zeeman_shift(n1,l1,j1,f1,m_f1,B) - self.get_zeeman_shift(n1,l1,j1,f1,m_f1,0)) + (self.get_zeeman_shift(n2,l2,j2,f2,m_f2,B) - self.get_zeeman_shift(n2,l2,j2,f2,m_f2,0))
+        transition_frequency = -(self.get_zeeman_shift(n1,l1,j1,f1,m_f1,B) - self.get_zeeman_shift(n1,l1,j1,f1,m_f1,0)) + (self.get_zeeman_shift(n2,l2,j2,f2,m_f2,B) - self.get_zeeman_shift(n2,l2,j2,f2,m_f2,0))
 
         return transition_frequency
     
