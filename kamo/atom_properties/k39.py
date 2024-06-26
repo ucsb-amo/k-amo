@@ -106,5 +106,520 @@ class Potassium39(arc.Potassium39):
         transition_frequency = (self.get_zeeman_shift(n1,l1,j1,f1,m_f1,B) - self.get_zeeman_shift(n1,l1,j1,f1,m_f1,0)) + (self.get_zeeman_shift(n2,l2,j2,f2,m_f2,B) - self.get_zeeman_shift(n2,l2,j2,f2,m_f2,0))
 
         return transition_frequency
+    
+    def state_dicts(self,n,l,j,hf=True):
+        '''
+        n: principle quantum number (unused for now, but kept for consistency)
+        l: angular momentum
+        j: total angular momentum
+        hf: specify high or low field. For hf=True, the method returns a dict to be keyed with mj, mi quantum numbers, otherwise, method returns a dict to be keyed with f, mf quantum numbers.
 
+        Contains state dicts for 4s.5, 4p.5 and 4p1.5.
 
+        the method returns the dictionary of states for the given manifold, to be keyed either by high or low field quantum numbers depending on hf
+        '''
+
+        state_4s1_lf = {
+            '2, -2': {
+                "hf_str": r'$m_j$ = -.5, $m_i$ = -1.5',
+                "lf_str": r'F = 2, $m_f$ = -2',
+                "hf": (-.5,-1.5),
+                "lf": (2,-2),
+                "lf_arc": (2,-2)
+                },
+            '1, -1': {
+                "hf_str": r'$m_j$ = -.5, $m_i$ = -.5',
+                "lf_str": r'F = 1, $m_f$ = -1',
+                "hf": (-.5,-.5),
+                "lf": (1,-1),
+                "lf_arc": (1,-1)
+                },
+            '1, 0': {
+                "hf_str": r'$m_j$ = -.5, $m_i$ = .5',
+                "lf_str": r'F = 1, $m_f$ = 0',
+                "hf": (-.5,.5),
+                "lf": (1,0),
+                "lf_arc": (1,0)
+                },
+            '1, 1': {
+                "hf_str": r'$m_j$ = -.5, $m_i$ = 1.5',
+                "lf_str": r'F = 1,$m_f$ = 1',
+                "hf": (-.5,1.5),
+                "lf": (1,1),
+                "lf_arc": (1,1)
+                },
+
+            '2, -1': {
+                "hf_str": r'$m_j$ = .5, $m_i$ = -1.5',
+                "lf_str": r'F = 2, $m_f$ = -1',
+                "hf": (.5,-1.5),
+                "lf": (2,-2),
+                "lf_arc": (2,-1)
+                },
+            '2, 0': {
+                "hf_str": r'$m_j$ = .5, $m_i$ = -.5',
+                "lf_str": r'F = 2, $m_f$ = 0',
+                "hf": (.5,-.5),
+                "lf": (2,0),
+                "lf_arc": (2,0)
+                },
+            '2, 1': {
+                "hf_str": r'$m_j$ = .5, $m_i$ = .5',
+                "lf_str": r'F = 2, $m_f$ = 1',
+                "hf": (.5,.5),
+                "lf": (2,1),
+                "lf_arc": (2,1)
+                },
+            '2, 2': {
+                "hf_str": r'$m_j$ = .5, $m_i$ = 1.5',
+                "lf_str": r'F = 2,$m_f$ = 2',
+                "hf": (.5,1.5),
+                "lf": (2,2),
+                "lf_arc": (2,2)
+                },
+        }
+
+        state_4p1_lf = {
+            '2, -2': {
+                "hf_str": r'$m_j$ = -.5, $m_i$ = -1.5',
+                "lf_str": r'F = 2, $m_f$ = -2',
+                "hf": (-.5,-1.5),
+                "lf": (2,-2),
+                "lf_arc": (2,-2)
+                },
+            '1, -1': {
+                "hf_str": r'$m_j$ = -.5, $m_i$ = -.5',
+                "lf_str": r'F = 1, $m_f$ = -1',
+                "hf": (-.5,-.5),
+                "lf": (1,-1),
+                "lf_arc": (1,-1)
+                },
+            '1, 0': {
+                "hf_str": r'$m_j$ = -.5, $m_i$ = .5',
+                "lf_str": r'F = 1, $m_f$ = 0',
+                "hf": (-.5,.5),
+                "lf": (1,0),
+                "lf_arc": (1,0)
+                },
+            '1, 1': {
+                "hf_str": r'$m_j$ = -.5, $m_i$ = 1.5',
+                "lf_str": r'F = 1,$m_f$ = 1',
+                "hf": (-.5,1.5),
+                "lf": (1,1),
+                "lf_arc": (1,1)
+                },
+
+            '2, -1': {
+                "hf_str": r'$m_j$ = .5, $m_i$ = -1.5',
+                "lf_str": r'F = 2, $m_f$ = -1',
+                "hf": (.5,-1.5),
+                "lf": (2,-1),
+                "lf_arc": (2,-2)
+                },
+            '2, 0': {
+                "hf_str": r'$m_j$ = .5, $m_i$ = -.5',
+                "lf_str": r'F = 2, $m_f$ = 0',
+                "hf": (.5,-.5),
+                "lf": (2,0),
+                "lf_arc": (2,0)
+                },
+            '2, 1': {
+                "hf_str": r'$m_j$ = .5, $m_i$ = .5',
+                "lf_str": r'F = 2, $m_f$ = 1',
+                "hf": (.5,.5),
+                "lf": (2,1),
+                "lf_arc": (2,1)
+                },
+            '2, 2': {
+                "hf_str": r'$m_j$ = .5, $m_i$ = 1.5',
+                "lf_str": r'F = 2,$m_f$ = 2',
+                "hf": (.5,1.5),
+                "lf": (2,2),
+                "lf_arc": (2,2)
+                },
+        }
+
+        state_4p3_lf = {
+            '3, -3': {
+                "hf_str": r'$m_j$ = -1.5, $m_i$ = -1.5',
+                "lf_str": r'F = 3, $m_f$ = -3',
+                "hf": (-1.5,-1.5),
+                "lf": (3,-3),
+                "lf_arc": (1,1)
+                },
+            '2, -2': {
+                "hf_str": r'$m_j$ = -1.5, $m_i$ = -.5',
+                "lf_str": r'F = 2, $m_f$ = -2',
+                "hf": (-1.5,-.5),
+                "lf": (2,-2),
+                "lf_arc": (1,0)
+                },
+            '1, -1': {
+                "hf_str": r'$m_j$ = -1.5, $m_i$ = .5',
+                "lf_str": r'F = 1, $m_f$ = -1',
+                "hf": (-1.5,.5),
+                "lf": (1,-1),
+                "lf_arc": (1,-1)
+                },
+            '0, 0': {
+                "hf_str": r'$m_j$ = -1.5, $m_i$ = 1.5',
+                "lf_str": r'F = 0,$m_f$ = 0',
+                "hf": (-1.5,1.5),
+                "lf": (0,0),
+                "lf_arc": (0,0)
+                },
+
+            '3, -2': {
+                "hf_str": r'$m_j$ = -.5, $m_i$ = -1.5',
+                "lf_str": r'F = 3, $m_f$ = -2',
+                "hf": (-.5,-1.5),
+                "lf": (3,-2),
+                "lf_arc": (2,1)
+                },
+            '2, -1': {
+                "hf_str": r'$m_j$ = -.5, $m_i$ = -.5',
+                "lf_str": r'F = 2, $m_f$ = -1',
+                "hf": (-.5,-.5),
+                "lf": (2,-1),
+                "lf_arc": (2,0)
+                },
+            '1, 0': {
+                "hf_str": r'$m_j$ = -.5, $m_i$ = .5',
+                "lf_str": r'F = 1, $m_f$ = 0',
+                "hf": (-.5,.5),
+                "lf": (1,0),
+                "lf_arc": (2,-1)
+                },
+            '1, 1': {
+                "hf_str": r'$m_j$ = -.5, $m_i$ = 1.5',
+                "lf_str": r'F = 1,$m_f$ = 1',
+                "hf": (-.5,1.5),
+                "lf": (1,1),
+                "lf_arc": (2,-2)
+                },
+
+            '.3, -1': {
+                "hf_str": r'$m_j$ = .5, $m_i$ = -1.5',
+                "lf_str": r'F = 3, $m_f$ = -1',
+                "hf": (.5,-1.5),
+                "lf": (3,-1),
+                "lf_arc": (2,2)
+                },
+            '2, 0': {
+                "hf_str": r'$m_j$ = .5, $m_i$ = -.5',
+                "lf_str": r'F = 2, $m_f$ = 0',
+                "hf": (.5,-.5),
+                "lf": (2,0),
+                "lf_arc": (3,-3)
+                },
+            '2, 1': {
+                "hf_str": r'$m_j$ = .5, $m_i$ = .5',
+                "lf_str": r'F = 2, $m_f$ = 1',
+                "hf": (.5,.5),
+                "lf": (2,1),
+                "lf_arc": (3,-2)
+                },
+            '2, 2': {
+                "hf_str": r'$m_j$ = .5, $m_i$ = 1.5',
+                "lf_str": r'F = 2,$m_f$ = 2',
+                "hf": (.5,1.5),
+                "lf": (2,2),
+                "lf_arc": (3,-1)
+                },
+
+            '3, 0': {
+                "hf_str": r'$m_j$ = -.5, $m_i$ = -1.5',
+                "lf_str": r'F = 3, $m_f$ = 0',
+                "hf": (-.5,-1.5),
+                "lf": (3,0),
+                "lf_arc": (3,0)
+                },
+            '3, 1': {
+                "hf_str": r'$m_j$ = -.5, $m_i$ = -.5',
+                "lf_str": r'F = 3, $m_f$ = 1',
+                "hf": (-.5,-.5),
+                "lf": (3,1),
+                "lf_arc": (3,1)
+                },
+            '3, 2': {
+                "hf_str": r'$m_j$ = -.5, $m_i$ = .5',
+                "lf_str": r'F = 3, $m_f$ = 2',
+                "hf": (-.5,.5),
+                "lf": (3,2),
+                "lf_arc": (3,2)
+                },
+            '3, 3': {
+                "hf_str": r'$m_j$ = -.5, $m_i$ = 1.5',
+                "lf_str": r'F = 3,$m_f$ = 3',
+                "hf": (-.5,1.5),
+                "lf": (3,3),
+                "lf_arc": (3,3)
+                },
+        }
+
+        state_4s1_hf = {
+            '-0.5, -1.5': {
+                "hf_str": r'$m_j$ = -.5, $m_i$ = -1.5',
+                "lf_str": r'F = 2, $m_f$ = -2',
+                "hf": (-.5,-1.5),
+                "lf": (2,-2),
+                "lf_arc": (2,-2)
+                },
+            '-0.5, -0.5': {
+                "hf_str": r'$m_j$ = -.5, $m_i$ = -.5',
+                "lf_str": r'F = 1, $m_f$ = -1',
+                "hf": (-.5,-.5),
+                "lf": (1,-1),
+                "lf_arc": (1,-1)
+                },
+            '-0.5, 0.5': {
+                "hf_str": r'$m_j$ = -.5, $m_i$ = .5',
+                "lf_str": r'F = 1, $m_f$ = 0',
+                "hf": (-.5,.5),
+                "lf": (1,0),
+                "lf_arc": (1,0)
+                },
+            '-0.5, 1.5': {
+                "hf_str": r'$m_j$ = -.5, $m_i$ = 1.5',
+                "lf_str": r'F = 1,$m_f$ = 1',
+                "hf": (-.5,1.5),
+                "lf": (1,1),
+                "lf_arc": (1,1)
+                },
+
+            '0.5, -1.5': {
+                "hf_str": r'$m_j$ = .5, $m_i$ = -1.5',
+                "lf_str": r'F = 2, $m_f$ = -1',
+                "hf": (.5,-1.5),
+                "lf": (2,-1),
+                "lf_arc": (2,-2)
+                },
+            '0.5, -0.5': {
+                "hf_str": r'$m_j$ = .5, $m_i$ = -.5',
+                "lf_str": r'F = 2, $m_f$ = 0',
+                "hf": (.5,-.5),
+                "lf": (2,0),
+                "lf_arc": (2,0)
+                },
+            '0.5, 0.5': {
+                "hf_str": r'$m_j$ = .5, $m_i$ = .5',
+                "lf_str": r'F = 2, $m_f$ = 1',
+                "hf": (.5,.5),
+                "lf": (2,1),
+                "lf_arc": (2,1)
+                },
+            '0.5, 1.5': {
+                "hf_str": r'$m_j$ = .5, $m_i$ = 1.5',
+                "lf_str": r'F = 2,$m_f$ = 2',
+                "hf": (.5,1.5),
+                "lf": (2,2),
+                "lf_arc": (2,2)
+                },
+        }
+
+        state_4p1_hf = {
+            '-0.5, -1.5': {
+                "hf_str": r'$m_j$ = -.5, $m_i$ = -1.5',
+                "lf_str": r'F = 2, $m_f$ = -2',
+                "hf": (-.5,-1.5),
+                "lf": (2,-2),
+                "lf_arc": (2,-2)
+                },
+            '-0.5, -0.5': {
+                "hf_str": r'$m_j$ = -.5, $m_i$ = -.5',
+                "lf_str": r'F = 1, $m_f$ = -1',
+                "hf": (-.5,-.5),
+                "lf": (1,-1),
+                "lf_arc": (1,-1)
+                },
+            '-0.5, 0.5': {
+                "hf_str": r'$m_j$ = -.5, $m_i$ = .5',
+                "lf_str": r'F = 1, $m_f$ = 0',
+                "hf": (-.5,.5),
+                "lf": (1,0),
+                "lf_arc": (1,0)
+                },
+            '-0.5, 1.5': {
+                "hf_str": r'$m_j$ = -.5, $m_i$ = 1.5',
+                "lf_str": r'F = 1,$m_f$ = -1',
+                "hf": (-.5,1.5),
+                "lf": (1,1),
+                "lf_arc": (1,1)
+                },
+
+            '0.5, -1.5': {
+                "hf_str": r'$m_j$ = .5, $m_i$ = -1.5',
+                "lf_str": r'F = 2, $m_f$ = -1',
+                "hf": (.5,-1.5),
+                "lf": (2,-1),
+                "lf_arc": (2,-2)
+                },
+            '0.5, -0.5': {
+                "hf_str": r'$m_j$ = .5, $m_i$ = -.5',
+                "lf_str": r'F = 2, $m_f$ = 0',
+                "hf": (.5,-.5),
+                "lf": (2,0),
+                "lf_arc": (2,0)
+                },
+            '0.5, 0.5': {
+                "hf_str": r'$m_j$ = .5, $m_i$ = .5',
+                "lf_str": r'F = 2, $m_f$ = 1',
+                "hf": (.5,.5),
+                "lf": (2,1),
+                "lf_arc": (2,1)
+                },
+            '0.5, 1.5': {
+                "hf_str": r'$m_j$ = .5, $m_i$ = 1.5',
+                "lf_str": r'F = 2,$m_f$ = 2',
+                "hf": (.5,1.5),
+                "lf": (2,2),
+                "lf_arc": (2,2)
+                },
+        }
+
+        state_4p3_hf = {
+            '-1.5, -1.5': {
+                "hf_str": r'$m_j$ = -1.5, $m_i$ = -1.5',
+                "lf_str": r'F = 3, $m_f$ = -3',
+                "hf": (-1.5,-1.5),
+                "lf": (3,-3),
+                "lf_arc": (1,1)
+                },
+            '-1.5, -0.5': {
+                "hf_str": r'$m_j$ = -1.5, $m_i$ = -.5',
+                "lf_str": r'F = 2, $m_f$ = -2',
+                "hf": (-1.5,-.5),
+                "lf": (2,-2),
+                "lf_arc": (1,0)
+                },
+            '-1.5, 0.5': {
+                "hf_str": r'$m_j$ = -1.5, $m_i$ = .5',
+                "lf_str": r'F = 1, $m_f$ = -1',
+                "hf": (-1.5,.5),
+                "lf": (1,-1),
+                "lf_arc": (1,-1)
+                },
+            '-1.5, 1.5': {
+                "hf_str": r'$m_j$ = -1.5, $m_i$ = 1.5',
+                "lf_str": r'F = 0,$m_f$ = 0',
+                "hf": (-1.5,1.5),
+                "lf": (0,0),
+                "lf_arc": (0,0)
+                },
+
+            '-0.5, -1.5': {
+                "hf_str": r'$m_j$ = -.5, $m_i$ = -1.5',
+                "lf_str": r'F = 3, $m_f$ = -2',
+                "hf": (-.5,-1.5),
+                "lf": (3,-2),
+                "lf_arc": (2,1)
+                },
+            '-0.5, -0.5': {
+                "hf_str": r'$m_j$ = -.5, $m_i$ = -.5',
+                "lf_str": r'F = 2, $m_f$ = -1',
+                "hf": (-.5,-.5),
+                "lf": (2,-1),
+                "lf_arc": (2,0)
+                },
+            '-0.5, 0.5': {
+                "hf_str": r'$m_j$ = -.5, $m_i$ = .5',
+                "lf_str": r'F = 1, $m_f$ = 0',
+                "hf": (-.5,.5),
+                "lf": (1,0),
+                "lf_arc": (2,-1)
+                },
+            '-0.5, 1.5': {
+                "hf_str": r'$m_j$ = -.5, $m_i$ = 1.5',
+                "lf_str": r'F = 1,$m_f$ = 1',
+                "hf": (-.5,1.5),
+                "lf": (1,1),
+                "lf_arc": (2,-2)
+                },
+
+            '0.5, -1.5': {
+                "hf_str": r'$m_j$ = .5, $m_i$ = -1.5',
+                "lf_str": r'F = 3, $m_f$ = -1',
+                "hf": (.5,-1.5),
+                "lf": (3,-1),
+                "lf_arc": (2,2)
+                },
+            '0.5, -0.5': {
+                "hf_str": r'$m_j$ = .5, $m_i$ = -.5',
+                "lf_str": r'F = 2, $m_f$ = 0',
+                "hf": (.5,-.5),
+                "lf": (2,0),
+                "lf_arc": (3,-3)
+                },
+            '0.5, 0.5': {
+                "hf_str": r'$m_j$ = .5, $m_i$ = .5',
+                "lf_str": r'F = 2, $m_f$ = 1',
+                "hf": (.5,.5),
+                "lf": (2,1),
+                "lf_arc": (3,-2)
+                },
+            '0.5, 1.5': {
+                "hf_str": r'$m_j$ = .5, $m_i$ = 1.5',
+                "lf_str": r'F = 2,$m_f$ = 2',
+                "hf": (.5,1.5),
+                "lf": (2,2),
+                "lf_arc": (3,-1)
+                },
+
+            '1.5, -1.5': {
+                "hf_str": r'$m_j$ = -.5, $m_i$ = -1.5',
+                "lf_str": r'F = 3, $m_f$ = 0',
+                "hf": (-.5,-1.5),
+                "lf": (3,0),
+                "lf_arc": (3,0)
+                },
+            '1.5, -0.5': {
+                "hf_str": r'$m_j$ = -.5, $m_i$ = -.5',
+                "lf_str": r'F = 3, $m_f$ = 1',
+                "hf": (-.5,-.5),
+                "lf": (3,1),
+                "lf_arc": (3,1)
+                },
+            '1.5, 0.5': {
+                "hf_str": r'$m_j$ = -.5, $m_i$ = .5',
+                "lf_str": r'F = 3, $m_f$ = 2',
+                "hf": (-.5,.5),
+                "lf": (3,2),
+                "lf_arc": (3,2)
+                },
+            '1.5, 1.5': {
+                "hf_str": r'$m_j$ = -.5, $m_i$ = 1.5',
+                "lf_str": r'F = 3,$m_f$ = 3',
+                "hf": (-.5,1.5),
+                "lf": (3,3),
+                "lf_arc": (3,3)
+                },
+        }
+
+        if hf==True:
+            if l==0:
+                return state_4s1_hf
+            elif l==1:
+                if j==.5:
+                    return state_4p1_hf
+                elif j==1.5:
+                    return state_4p3_hf
+        else:
+            if l==0:
+                return state_4s1_lf
+            elif l==1:
+                if j==.5:
+                    return state_4p1_lf
+                elif j==1.5:
+                    return state_4p3_lf
+
+    def state_lookup(self,n,l,j,m1,m2):
+        if abs(m1) == .5 or abs(m1) == 1.5:
+            dct = self.state_dicts(l=l,j=j)
+        else:
+            dct = self.state_dicts(l=l,j=j, hf=False)
+
+        key = str((m1, m2))
+        key = key[:-1]
+        key = key[1:]
+        
+        return dct[key]
