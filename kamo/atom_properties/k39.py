@@ -85,6 +85,13 @@ class Potassium39(arc.Potassium39):
                                     / (c.h * 1.e6))
         #for all others use ARC breit rabi function:
         if l!=0:
+
+            state1 = self.state_lookup(n1,l1,j1,f1,m_f1)
+            state2 = self.state_lookup(n2,l2,j2,f2,m_f2)
+
+            (F1_arc,mf1_arc) = state1['lf_arc']
+            (F2_arc,mf2_arc) = state2['lf_arc']
+                    
             zeeman_Evs = self.breitRabi(n, l, j, np.array([B]))
             zeeman_Es = np.transpose(zeeman_Evs[0])
             for idx in range(len(zeeman_Evs[1])):
@@ -173,7 +180,7 @@ class Potassium39(arc.Potassium39):
                 "hf_str": r'$m_j$ = .5, $m_i$ = -1.5',
                 "lf_str": r'F = 2, $m_f$ = -1',
                 "hf": (.5,-1.5),
-                "lf": (2,-2),
+                "lf": (2,-1),
                 "lf_arc": (2,-1)
                 },
             '2, 0': {
@@ -234,7 +241,7 @@ class Potassium39(arc.Potassium39):
                 "lf_str": r'F = 2, $m_f$ = -1',
                 "hf": (.5,-1.5),
                 "lf": (2,-1),
-                "lf_arc": (2,-2)
+                "lf_arc": (2,-1)
                 },
             '2, 0': {
                 "hf_str": r'$m_j$ = .5, $m_i$ = -.5',
@@ -265,14 +272,14 @@ class Potassium39(arc.Potassium39):
                 "lf_str": r'F = 3, $m_f$ = -3',
                 "hf": (-1.5,-1.5),
                 "lf": (3,-3),
-                "lf_arc": (1,1)
+                "lf_arc": (3,-3)
                 },
             '2, -2': {
                 "hf_str": r'$m_j$ = -1.5, $m_i$ = -.5',
                 "lf_str": r'F = 2, $m_f$ = -2',
                 "hf": (-1.5,-.5),
                 "lf": (2,-2),
-                "lf_arc": (1,0)
+                "lf_arc": (2,-2)
                 },
             '1, -1': {
                 "hf_str": r'$m_j$ = -1.5, $m_i$ = .5',
@@ -294,28 +301,28 @@ class Potassium39(arc.Potassium39):
                 "lf_str": r'F = 3, $m_f$ = -2',
                 "hf": (-.5,-1.5),
                 "lf": (3,-2),
-                "lf_arc": (2,1)
+                "lf_arc": (3,-2)
                 },
             '2, -1': {
                 "hf_str": r'$m_j$ = -.5, $m_i$ = -.5',
                 "lf_str": r'F = 2, $m_f$ = -1',
                 "hf": (-.5,-.5),
                 "lf": (2,-1),
-                "lf_arc": (2,0)
+                "lf_arc": (2,-1)
                 },
             '1, 0': {
                 "hf_str": r'$m_j$ = -.5, $m_i$ = .5',
                 "lf_str": r'F = 1, $m_f$ = 0',
                 "hf": (-.5,.5),
                 "lf": (1,0),
-                "lf_arc": (2,-1)
+                "lf_arc": (1,0)
                 },
             '1, 1': {
                 "hf_str": r'$m_j$ = -.5, $m_i$ = 1.5',
                 "lf_str": r'F = 1,$m_f$ = 1',
                 "hf": (-.5,1.5),
                 "lf": (1,1),
-                "lf_arc": (2,-2)
+                "lf_arc": (1,1)
                 },
 
             '.3, -1': {
@@ -323,53 +330,53 @@ class Potassium39(arc.Potassium39):
                 "lf_str": r'F = 3, $m_f$ = -1',
                 "hf": (.5,-1.5),
                 "lf": (3,-1),
-                "lf_arc": (2,2)
+                "lf_arc": (3,-1)
                 },
             '2, 0': {
                 "hf_str": r'$m_j$ = .5, $m_i$ = -.5',
                 "lf_str": r'F = 2, $m_f$ = 0',
                 "hf": (.5,-.5),
                 "lf": (2,0),
-                "lf_arc": (3,-3)
+                "lf_arc": (2,0)
                 },
             '2, 1': {
                 "hf_str": r'$m_j$ = .5, $m_i$ = .5',
                 "lf_str": r'F = 2, $m_f$ = 1',
                 "hf": (.5,.5),
                 "lf": (2,1),
-                "lf_arc": (3,-2)
+                "lf_arc": (2,1)
                 },
             '2, 2': {
                 "hf_str": r'$m_j$ = .5, $m_i$ = 1.5',
                 "lf_str": r'F = 2,$m_f$ = 2',
                 "hf": (.5,1.5),
                 "lf": (2,2),
-                "lf_arc": (3,-1)
+                "lf_arc": (2,2)
                 },
 
             '3, 0': {
-                "hf_str": r'$m_j$ = -.5, $m_i$ = -1.5',
+                "hf_str": r'$m_j$ = 1.5, $m_i$ = -1.5',
                 "lf_str": r'F = 3, $m_f$ = 0',
                 "hf": (-.5,-1.5),
                 "lf": (3,0),
                 "lf_arc": (3,0)
                 },
             '3, 1': {
-                "hf_str": r'$m_j$ = -.5, $m_i$ = -.5',
+                "hf_str": r'$m_j$ = 1.5, $m_i$ = -.5',
                 "lf_str": r'F = 3, $m_f$ = 1',
                 "hf": (-.5,-.5),
                 "lf": (3,1),
                 "lf_arc": (3,1)
                 },
             '3, 2': {
-                "hf_str": r'$m_j$ = -.5, $m_i$ = .5',
+                "hf_str": r'$m_j$ = 1.5, $m_i$ = .5',
                 "lf_str": r'F = 3, $m_f$ = 2',
                 "hf": (-.5,.5),
                 "lf": (3,2),
                 "lf_arc": (3,2)
                 },
             '3, 3': {
-                "hf_str": r'$m_j$ = -.5, $m_i$ = 1.5',
+                "hf_str": r'$m_j$ = 1.5, $m_i$ = 1.5',
                 "lf_str": r'F = 3,$m_f$ = 3',
                 "hf": (-.5,1.5),
                 "lf": (3,3),
@@ -586,28 +593,28 @@ class Potassium39(arc.Potassium39):
                 },
 
             '1.5, -1.5': {
-                "hf_str": r'$m_j$ = -.5, $m_i$ = -1.5',
+                "hf_str": r'$m_j$ = 1.5, $m_i$ = -1.5',
                 "lf_str": r'F = 3, $m_f$ = 0',
                 "hf": (-.5,-1.5),
                 "lf": (3,0),
                 "lf_arc": (3,0)
                 },
             '1.5, -0.5': {
-                "hf_str": r'$m_j$ = -.5, $m_i$ = -.5',
+                "hf_str": r'$m_j$ = 1.5, $m_i$ = -.5',
                 "lf_str": r'F = 3, $m_f$ = 1',
                 "hf": (-.5,-.5),
                 "lf": (3,1),
                 "lf_arc": (3,1)
                 },
             '1.5, 0.5': {
-                "hf_str": r'$m_j$ = -.5, $m_i$ = .5',
+                "hf_str": r'$m_j$ = 1.5, $m_i$ = .5',
                 "lf_str": r'F = 3, $m_f$ = 2',
                 "hf": (-.5,.5),
                 "lf": (3,2),
                 "lf_arc": (3,2)
                 },
             '1.5, 1.5': {
-                "hf_str": r'$m_j$ = -.5, $m_i$ = 1.5',
+                "hf_str": r'$m_j$ = 1.5, $m_i$ = 1.5',
                 "lf_str": r'F = 3,$m_f$ = 3',
                 "hf": (-.5,1.5),
                 "lf": (3,3),
