@@ -53,12 +53,18 @@ class Potassium39(arc.Potassium39):
     
     def get_zeeman_shift(self,n,l,j,f,m_f,B):
         '''
-        Returns the zeeman energy in units of MHz as a function of B field (in Gauss) for a given F, m_f sublevel in the specified fine structure manifold.
+        Returns the zeeman energy in units of MHz as a function of B field (in Gauss) for a given F, m_f (will also accept mj mi basis) sublevel in the specified fine structure manifold.
         '''
-        #nuclear spin
+        # nuclear spin
         n_s = 1.5
-        #convert B field in gauss to Tesla
+        # convert B field in gauss to Tesla
         B = B / 1.e4
+
+        # lookup the input state and reassign quantum numbers if input is given in mj mi basis
+        state = self.state_lookup(n,l,j,f,m_f)
+
+        (f,m_f) = state['lf']
+        (F1_arc,mf1_arc) = state['lf_arc']
 
         #for some reason ARCs breit-rabi function doesn't work for K39 ground state, use this instead:
         if l==0:
@@ -85,18 +91,12 @@ class Potassium39(arc.Potassium39):
                                     / (c.h * 1.e6))
         #for all others use ARC breit rabi function:
         if l!=0:
-
-            state1 = self.state_lookup(n1,l1,j1,f1,m_f1)
-            state2 = self.state_lookup(n2,l2,j2,f2,m_f2)
-
-            (F1_arc,mf1_arc) = state1['lf_arc']
-            (F2_arc,mf2_arc) = state2['lf_arc']
                     
             zeeman_Evs = self.breitRabi(n, l, j, np.array([B]))
             zeeman_Es = np.transpose(zeeman_Evs[0])
             for idx in range(len(zeeman_Evs[1])):
-                if zeeman_Evs[1][idx] == f:
-                    if zeeman_Evs[2][idx] == m_f:
+                if zeeman_Evs[1][idx] == F1_arc:
+                    if zeeman_Evs[2][idx] == mf1_arc:
                         return zeeman_Es[idx] / 1.e6
             
     def get_microwave_transition_frequency(self,n,l,j,f1,m_f1,f2,m_f2,B=0):
@@ -325,7 +325,7 @@ class Potassium39(arc.Potassium39):
                 "lf_arc": (1,1)
                 },
 
-            '.3, -1': {
+            '3, -1': {
                 "hf_str": r'$m_j$ = .5, $m_i$ = -1.5',
                 "lf_str": r'F = 3, $m_f$ = -1',
                 "hf": (.5,-1.5),
