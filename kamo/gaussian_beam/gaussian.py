@@ -55,7 +55,7 @@ class GaussianBeam():
             from kamo import light_shift
             cp = light_shift.compute_polarizabilities.ComputePolarizabilities()
             self.polarizability_ground_state = \
-                cp.compute_complete_polarizability(4,0,1/2,2,2,self.wavelength) \
+                float(cp.compute_complete_polarizability(4,0,1/2,2,2,self.wavelength)[0]) \
                     * c.convert_polarizability_au_to_SI
         
     def beam_radius(self,z):
