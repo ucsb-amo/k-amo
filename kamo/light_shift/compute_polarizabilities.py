@@ -128,9 +128,9 @@ class ComputePolarizabilities():
         else:
             coeff_F_tensor = 0
 
-        alpha_F_scalar = alpha_j_scalar
-        alpha_F_vector = alpha_j_vector * coeff_F_vector
-        alpha_F_tensor = alpha_j_tensor * coeff_F_tensor
+        alpha_F_scalar = (alpha_j_scalar).astype(float)
+        alpha_F_vector = (alpha_j_vector * coeff_F_vector).astype(float)
+        alpha_F_tensor = (alpha_j_tensor * coeff_F_tensor).astype(float)
 
         return alpha_F_scalar, alpha_F_vector, alpha_F_tensor
 
