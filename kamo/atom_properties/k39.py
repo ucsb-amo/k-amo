@@ -665,126 +665,73 @@ class Potassium39(arc.Potassium39):
         return dct[key]
 
     def get_scattering_length(self,f,mf,b):
+        """Get the scattering length for the state (f,mf) at the given field b (G).
+
+        Args:
+            f (int): The nuclear quantum number F.
+            mf (int): The magnetic sublevel quantum number m_F.
+            b (float): The magnetic bias field in Gauss.
+        """        
+
+        if not isinstance(b,np.ndarray) or isinstance(b,list):
+            b = np.array([b])
+        elif isinstance(b,list):
+            b = np.array(b)
 
         def find_nearest_b_idx(b,b_list):
             return np.argmin(np.abs(b_list - b ))
+        
+        def read_data(path,bdata=False):
+            with open(path,'r') as fd:
+                reader = csv.reader(fd)
+                d = []
+                for row in reader:
+                    d.append(row)
+                float_data = []
+                for n in range(len(d)):
+                    if bdata:
+                        float_data.append(float(d[n][0]))
+                    else:
+                        float_data.append(float(d[n][0][:25]))
+                float_data = np.array(float_data)
+            return float_data
 
-        with open('B:/_K/Resources/scattering_lengths/Kokkelmans_data_2/aa_1G_1000G/Bval.txt', 'r') as fd:
-            reader = csv.reader(fd)
-            Bval = []
-            for row in reader:
-                Bval.append(row)
-        
-        floated_Bval = []
-        for n in range(len(Bval)):
-            floated_Bval.append(float(Bval[n][0]))
-        
-        floated_Bval = np.array(floated_Bval)
+        Bval = read_data('B:/_K/Resources/scattering_lengths/Kokkelmans_data_2/aa_1G_1000G/Bval.txt',bdata=True)
+        Bval = np.array(Bval)
 
         if f==1:
             if mf==-1:
-                with open('B:/_K/Resources/scattering_lengths/Kokkelmans_data_2/cc_1G_1000G/data.txt', 'r') as fd:
-                    reader = csv.reader(fd)
-                    data = []
-                    for row in reader:
-                        data.append(row)
+                dpath = 'B:/_K/Resources/scattering_lengths/Kokkelmans_data_2/cc_1G_1000G/data.txt'
 
-                floated_data = []
-                for n in range(len(data)):
-                    floated_data.append(float(data[n][0][:25]))
-
-                scattering_length = floated_data[find_nearest_b_idx(b,floated_Bval)]
-        
             elif mf==0:
-                with open('B:/_K/Resources/scattering_lengths/Kokkelmans_data_2/bb_1G_1000G/data.txt', 'r') as fd:
-                    reader = csv.reader(fd)
-                    data = []
-                    for row in reader:
-                        data.append(row)
-
-                floated_data = []
-                for n in range(len(data)):
-                    floated_data.append(float(data[n][0][:25]))
-
-                scattering_length = floated_data[find_nearest_b_idx(b,floated_Bval)]
+                dpath = 'B:/_K/Resources/scattering_lengths/Kokkelmans_data_2/bb_1G_1000G/data.txt'
 
             elif mf==1:
-                with open('B:/_K/Resources/scattering_lengths/Kokkelmans_data_2/aa_1G_1000G/data.txt', 'r') as fd:
-                    reader = csv.reader(fd)
-                    data = []
-                    for row in reader:
-                        data.append(row)
-
-                floated_data = []
-                for n in range(len(data)):
-                    floated_data.append(float(data[n][0][:25]))
-
-                scattering_length = floated_data[find_nearest_b_idx(b,floated_Bval)]
+                dpath = 'B:/_K/Resources/scattering_lengths/Kokkelmans_data_2/aa_1G_1000G/data.txt'
         
         elif f==2:
             if mf==-2:
-                with open('B:/_K/Resources/scattering_lengths/Kokkelmans_data_2/dd_1G_1000G/data.txt', 'r') as fd:
-                    reader = csv.reader(fd)
-                    data = []
-                    for row in reader:
-                        data.append(row)
-
-                floated_data = []
-                for n in range(len(data)):
-                    floated_data.append(float(data[n][0][:25]))
-
-                scattering_length = floated_data[find_nearest_b_idx(b,floated_Bval)]
+                dpath = 'B:/_K/Resources/scattering_lengths/Kokkelmans_data_2/dd_1G_1000G/data.txt'
         
             elif mf==-1:
-                with open('B:/_K/Resources/scattering_lengths/Kokkelmans_data_2/ee_1G_1000G/data.txt', 'r') as fd:
-                    reader = csv.reader(fd)
-                    data = []
-                    for row in reader:
-                        data.append(row)
-
-                floated_data = []
-                for n in range(len(data)):
-                    floated_data.append(float(data[n][0][:25]))
-
-                scattering_length = floated_data[find_nearest_b_idx(b,floated_Bval)]
+                dpath = 'B:/_K/Resources/scattering_lengths/Kokkelmans_data_2/ee_1G_1000G/data.txt'
 
             elif mf==0:
-                with open('B:/_K/Resources/scattering_lengths/Kokkelmans_data_2/ff_1G_1000G/data.txt', 'r') as fd:
-                    reader = csv.reader(fd)
-                    data = []
-                    for row in reader:
-                        data.append(row)
-
-                floated_data = []
-                for n in range(len(data)):
-                    floated_data.append(float(data[n][0][:25]))
-
-                scattering_length = floated_data[find_nearest_b_idx(b,floated_Bval)]
+                dpath = 'B:/_K/Resources/scattering_lengths/Kokkelmans_data_2/ff_1G_1000G/data.txt'
 
             elif mf==1:
-                with open('B:/_K/Resources/scattering_lengths/Kokkelmans_data_2/gg_1G_1000G/data.txt', 'r') as fd:
-                    reader = csv.reader(fd)
-                    data = []
-                    for row in reader:
-                        data.append(row)
-
-                floated_data = []
-                for n in range(len(data)):
-                    floated_data.append(float(data[n][0][:25]))
-
-                scattering_length = floated_data[find_nearest_b_idx(b,floated_Bval)]
+                dpath = 'B:/_K/Resources/scattering_lengths/Kokkelmans_data_2/gg_1G_1000G/data.txt'
 
             elif mf==2:
-                with open('B:/_K/Resources/scattering_lengths/Kokkelmans_data_2/hh_1G_1000G/data.txt', 'r') as fd:
-                    reader = csv.reader(fd)
-                    data = []
-                    for row in reader:
-                        data.append(row)
+                dpath = 'B:/_K/Resources/scattering_lengths/Kokkelmans_data_2/hh_1G_1000G/data.txt'
 
-                floated_data = []
-                for n in range(len(data)):
-                    floated_data.append(float(data[n][0][:25]))
+        data = read_data(dpath)
 
-                scattering_length = floated_data[find_nearest_b_idx(b,floated_Bval)]
+        scattering_length = np.zeros(b.shape)
+        for n in range(len(b)):
+            scattering_length[n] = data[find_nearest_b_idx(b[n],Bval)]
+
+        if len(scattering_length) == 1:
+            scattering_length = scattering_length[0]
 
         return scattering_length
