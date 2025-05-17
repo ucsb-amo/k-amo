@@ -73,9 +73,10 @@ class GaussianBeam():
         '''
         return self.waist * np.sqrt( 1 + (z / self.rayleigh_range)**2 )
     
-    def intensity(self,power=-0.1,r=0.,z=0.):
+    def intensity(self,power=-0.1,r=0.,z=0.,
+                  convert_to_mW_per_cm2=False):
         '''
-        Returns the intensity of the gaussian beam at (r,z)
+        Returns the intensity of the gaussian beam at (r,z).
 
         Parameters
         ----------
@@ -90,7 +91,14 @@ class GaussianBeam():
         if power == -0.1:
             power = self.power
         wz = self.beam_radius(z)
-        return 2 * power / np.pi / wz**2 * np.exp(-2 * r**2 / wz )
+
+        convert_W_per_m2_to_mW_per_cm2 = 0.1
+        if convert_to_mW_per_cm2:
+            convert = convert_W_per_m2_to_mW_per_cm2
+        else:
+            convert = 1
+
+        return 2 * power / np.pi / wz**2 * np.exp(-2 * r**2 / wz ) * convert
     
     def power_from_intensity(self,intensity_mW_per_cm2,r=0.,z=0.):
         '''
