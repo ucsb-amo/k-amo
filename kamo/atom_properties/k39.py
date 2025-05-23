@@ -3,10 +3,98 @@ import numpy as np
 import kamo.constants as c
 import csv
 
+dv = -1000.
+
 class Potassium39(arc.Potassium39):
     def __init__(self):
         super().__init__()
         self.cross_section = self.get_cross_section()
+
+    def get_magnetic_field_from_ground_state_transition_frequency(self,
+                                                                f1,mf1,f2,mf2,transition_frequency_Hz,
+                                                                B_bounds_G = (0.,600.),
+                                                                N_interp = 10000):
+        """Returns the magnetic field (in G) at which the transition from
+        (f1,mf1) to (f2,mf2) would occur at frequency 'transition_frequency_Hz'.
+
+        Args:
+            f1 (int): State 1 quantum number F.
+            mf1 (int): State 1 quantum number mF.
+            f2 (int): State 2 quantum number F.
+            mf2 (int): State 2 quantum number mF.
+            transition_frequency_Hz (float): A measured transition frequency
+            between (f1,mF1) and (f2,mF2).
+            B_bounds_G (tuple, optional): Bounds used for field finding. Only
+            limited to save time computing all the possible transition frequencies. Defaults to (0.,600.).
+            N_interp (int, optional): Number of points used for interpolation. Defaults to 10000.
+
+        Raises:
+            ValueError: If the returned value is one of the bounds of the
+            magnetic field specified, raises an error.
+
+        Returns:
+            float: the magnetic field in G.
+        """        
+        b = np.linspace(B_bounds_G[0],B_bounds_G[1],N_interp)
+        f_transitions_MHz = self.get_ground_state_transition_frequency(f1,mf1,f2,mf2,b)
+
+        def get_magnetic_field_from_transition_frequency(f_transition_Hz):
+            return np.interp(f_transition_Hz,f_transitions_MHz * 1.e6,b)
+        
+        B_G = get_magnetic_field_from_transition_frequency(transition_frequency_Hz)
+        if B_G == B_bounds_G[0] or B_G == B_bounds_G[1]:
+            raise ValueError(f"The transition freuqency corresponds with one of the bounds of the magnetic field specified in the 'B_bounds_G' argument. Update this argument and re-run.")
+        
+        return B_G
+    
+    def get_ground_state_transition_sensitivity(self,f1,mf1,f2,mf2,B):
+        """Returns the ground state transition sensitivity in MHz/G for (f1,mf1) to
+        (f2,mf2) at field B.
+
+        Args:
+            f1 (int): State 1 quantum number F.
+            mf1 (int): State 1 quantum number mF.
+            f2 (int): State 2 quantum number F.
+            mf2 (int): State 2 quantum number mF.
+            B (float): Magnetic field in G.
+
+        Returns:
+            float: ground state transition sensitivity in MHz/G.
+        """        
+        dB = B * 0.001
+        f_B_plus_dB = self.get_ground_state_transition_frequency(f1,mf1,f2,mf2,B+dB)
+        f_B = self.get_ground_state_transition_frequency(f1,mf1,f2,mf2,B)
+        return (f_B_plus_dB - f_B) / dB
+    
+    def get_semiclassical_polarizability(self,n1,l1,j1,n2,l2,j2,detuning_Hz):
+        """See Grimm 1999 equation 8.
+        """        
+        f0 = np.abs(self.getTransitionFrequency(n1,l1,j1,n2,l2,j2))
+        omega0 = 2 * np.pi * f0
+        omega = 2 * np.pi * (f0 + detuning_Hz)
+        linewidth = self.get_decay_rate(n1,l1,j1,n2,l2,j2)
+        return 6 * np.pi * c.epsilon0 * c.c**3 * \
+            ( linewidth / omega0**2 ) / ( omega0**2 - omega**2 - 1j * (omega**3/omega0**2) * linewidth )
+    
+    def get_scattering_rate(self,
+                            n1,l1,j1,
+                            n2,l2,j2,
+                            intensity,
+                            detuning_Hz=100.e6):
+        """See Grimm 1999 equation 9.
+        """        
+        alpha = self.get_semiclassical_polarizability(n1,l1,j1,n2,l2,j2,detuning_Hz)
+        return 1/(c.hbar * c.epsilon0 * c.c) * np.imag(alpha) * intensity / (2 * np.pi)
+
+    # def get_off_resonant_scattering_rate(self,
+    #                         n1,l1,j1,
+    #                         n2,l2,j2,
+    #                         intensity,
+    #                         detuning_Hz=100.e6):
+    #     omega0 = 2 * np.pi * self.getTransitionFrequency(n1,l1,j1,n2,l2,j2)
+    #     linewidth = self.get_decay_rate(n1,l1,j1,n2,l2,j2)
+    #     Delta = 2 * np.pi * detuning_Hz
+    #     return 3 * np.pi * c.c**2 / (2 * c.hbar * omega0**3) * (linewidth/Delta)**2 * intensity
 
     def get_decay_rate(self,n1,l1,j1,n2,l2,j2):
         '''
@@ -100,23 +188,18 @@ class Potassium39(arc.Potassium39):
                     if zeeman_Evs[2][idx] == mf1_arc:
                         return zeeman_Es[idx] / 1.e6
             
-    def get_microwave_transition_frequency(self,n,l,j,f1,m_f1,f2,m_f2,B=0):
+    def get_ground_state_transition_frequency(self,f1,m_f1,f2,m_f2,B=0):
         '''
-        Returns the amount of shift in MHz of a given microwave transition under external magnetic field B (in Gauss). 
+        Returns the amount of shift in MHz of a given ground state transition
+        under external magnetic field B (in Gauss). 
         '''
+        n = 4
+        l = 0
+        j = 1/2
         transition_frequency = abs(self.get_zeeman_shift(n,l,j,f2,m_f2,B) - self.get_zeeman_shift(n,l,j,f1,m_f1,B))
 
         return transition_frequency
-    
-    # def get_transition_shift(self,n1,l1,j1,f1,m_f1,n2,l2,j2,f2,m_f2,B=0):
-    #     '''
-    #     Subtracts the calculated Zeeman shift of the excited state (n2,l2,j2,f2,m2) from that of the ground state (n1,l1,j1,f1,m1)
-    #     Returns the amount of shift in MHz of a given optical transition under external magnetic field B (in Gauss). 
-    #     '''
-    #     transition_frequency = -(self.get_zeeman_shift(n1,l1,j1,f1,m_f1,B) - self.get_zeeman_shift(n1,l1,j1,f1,m_f1,0)) + (self.get_zeeman_shift(n2,l2,j2,f2,m_f2,B) - self.get_zeeman_shift(n2,l2,j2,f2,m_f2,0))
 
-    #     return transition_frequency
-    
     def get_transition_shift(self,n1,l1,j1,f1,m_f1,n2,l2,j2,f2,m_f2,B=0):
         '''
         Subtracts the calculated Zeeman shift of the excited state (n2,l2,j2,f2,m2) from that of the ground state (n1,l1,j1,f1,m1)
@@ -671,7 +754,7 @@ class Potassium39(arc.Potassium39):
             f (int): The nuclear quantum number F.
             mf (int): The magnetic sublevel quantum number m_F.
             b (float): The magnetic bias field in Gauss.
-        """        
+        """
 
         if not isinstance(b,np.ndarray) or isinstance(b,list):
             b = np.array([b])

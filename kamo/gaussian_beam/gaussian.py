@@ -87,6 +87,8 @@ class GaussianBeam():
             The radial position (in m) from the beam axis (default = 0.)
         z: float
             The axial position (in m) from the beam waist (default = 0.)
+        convert_to_mW_per_cm2: bool
+            If true, converts the output to mW/cm^2 before returning.
         '''
         if power == -0.1:
             power = self.power
