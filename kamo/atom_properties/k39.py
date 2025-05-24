@@ -160,7 +160,6 @@ class Potassium39(arc.Potassium39):
 
         (f,m_f) = state['lf']
         (F1_arc,mf1_arc) = state['lf_arc']
-        print(F1_arc,mf1_arc)
 
         #for some reason ARCs breit-rabi function doesn't work for K39 ground state, use this instead:
         if l==0:
