@@ -144,6 +144,12 @@ class Potassium39(arc.Potassium39):
         '''
         Returns the zeeman energy in units of MHz as a function of B field (in Gauss) for a given F, m_f (will also accept mj mi basis) sublevel in the specified fine structure manifold.
         '''
+        
+        if isinstance(B,float) or isinstance(B,int):
+            B = np.array([B])
+        if isinstance(B,list):
+            B = np.array(B)
+
         # nuclear spin
         n_s = 1.5
         # convert B field in gauss to Tesla
@@ -154,6 +160,7 @@ class Potassium39(arc.Potassium39):
 
         (f,m_f) = state['lf']
         (F1_arc,mf1_arc) = state['lf_arc']
+        print(F1_arc,mf1_arc)
 
         #for some reason ARCs breit-rabi function doesn't work for K39 ground state, use this instead:
         if l==0:
@@ -180,10 +187,10 @@ class Potassium39(arc.Potassium39):
                                     / (c.h * 1.e6))
         #for all others use ARC breit rabi function:
         if l!=0:
-                    
-            zeeman_Evs = self.breitRabi(n, l, j, np.array([B]))
+            zeeman_Evs = self.breitRabi(n, l, j, B)
             zeeman_Es = np.transpose(zeeman_Evs[0])
             for idx in range(len(zeeman_Evs[1])):
+                # loop through all the F, mF until you have the right one
                 if zeeman_Evs[1][idx] == F1_arc:
                     if zeeman_Evs[2][idx] == mf1_arc:
                         return zeeman_Es[idx] / 1.e6
