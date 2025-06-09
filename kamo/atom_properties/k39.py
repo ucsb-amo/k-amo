@@ -753,13 +753,16 @@ class Potassium39(arc.Potassium39):
         
         return dct[key]
 
-    def get_scattering_length(self,f,mf,b):
+    def get_scattering_length(self,f,mf,b,
+                              interp=False):
         """Get the scattering length for the state (f,mf) at the given field b (G).
 
         Args:
             f (int): The nuclear quantum number F.
             mf (int): The magnetic sublevel quantum number m_F.
             b (float): The magnetic bias field in Gauss.
+            interp (bool, optional): If True, will interpolate the scattering
+            length. Defaults to False.
         """
 
         if not isinstance(b,np.ndarray) or isinstance(b,list):
@@ -816,9 +819,12 @@ class Potassium39(arc.Potassium39):
 
         data = read_data(dpath)
 
-        scattering_length = np.zeros(b.shape)
-        for n in range(len(b)):
-            scattering_length[n] = data[find_nearest_b_idx(b[n],Bval)]
+        if interp:
+            scattering_length = np.interp(b, Bval, data)
+        else:
+            scattering_length = np.zeros(b.shape)
+            for n in range(len(b)):
+                scattering_length[n] = data[find_nearest_b_idx(b[n],Bval)]
 
         if len(scattering_length) == 1:
             scattering_length = scattering_length[0]
