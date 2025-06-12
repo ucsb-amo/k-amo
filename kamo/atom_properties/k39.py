@@ -11,10 +11,10 @@ class Potassium39(arc.Potassium39):
         self.cross_section = self.get_cross_section()
 
     def get_magnetic_field_from_ground_state_transition_frequency(self,
-                                                                f1,mf1,f2,mf2,transition_frequency_Hz,
-                                                                B_bounds_G = (0.,600.),
-                                                                N_interp = 10000):
-        """Returns the magnetic field (in G) at which the transition from
+                                                                f1, mf1, f2, mf2, transition_frequency_Hz,
+                                                                B_bounds_G=(0., 600.),
+                                                                N_interp=10000):
+        """Returns the magnetic field(s) (in G) at which the transition from
         (f1,mf1) to (f2,mf2) would occur at frequency 'transition_frequency_Hz'.
 
         Args:
@@ -22,29 +22,35 @@ class Potassium39(arc.Potassium39):
             mf1 (int): State 1 quantum number mF.
             f2 (int): State 2 quantum number F.
             mf2 (int): State 2 quantum number mF.
-            transition_frequency_Hz (float): A measured transition frequency
-            between (f1,mF1) and (f2,mF2).
+            transition_frequency_Hz (float or array-like): Measured transition frequency
+                between (f1,mF1) and (f2,mF2).
             B_bounds_G (tuple, optional): Bounds used for field finding. Only
-            limited to save time computing all the possible transition frequencies. Defaults to (0.,600.).
+                limited to save time computing all the possible transition frequencies. Defaults to (0.,600.).
             N_interp (int, optional): Number of points used for interpolation. Defaults to 10000.
 
         Raises:
-            ValueError: If the returned value is one of the bounds of the
-            magnetic field specified, raises an error.
+            ValueError: If any returned value is one of the bounds of the
+                magnetic field specified, raises an error.
 
         Returns:
-            float: the magnetic field in G.
-        """        
-        b = np.linspace(B_bounds_G[0],B_bounds_G[1],N_interp)
-        f_transitions_MHz = self.get_ground_state_transition_frequency(f1,mf1,f2,mf2,b)
+            float or np.ndarray: the magnetic field(s) in G.
+        """
 
-        def get_magnetic_field_from_transition_frequency(f_transition_Hz):
-            return np.interp(f_transition_Hz,f_transitions_MHz * 1.e6,b)
+        if isinstance(transition_frequency_Hz,float) or isinstance(transition_frequency_Hz,int):
+            transition_frequency_Hz = [transition_frequency_Hz]
+        if isinstance(transition_frequency_Hz,list):
+            transition_frequency_Hz = np.array(transition_frequency_Hz)
+
+        b = np.linspace(B_bounds_G[0], B_bounds_G[1], N_interp)
+        f_transitions_MHz = self.get_ground_state_transition_frequency(f1, mf1, f2, mf2, b)
         
-        B_G = get_magnetic_field_from_transition_frequency(transition_frequency_Hz)
-        if B_G == B_bounds_G[0] or B_G == B_bounds_G[1]:
-            raise ValueError(f"The transition freuqency corresponds with one of the bounds of the magnetic field specified in the 'B_bounds_G' argument. Update this argument and re-run.")
-        
+        B_G = np.interp(transition_frequency_Hz, f_transitions_MHz * 1.e6, b)
+
+        if np.any((B_G == B_bounds_G[0]) | (B_G == B_bounds_G[1])):
+            raise ValueError("One or more transition frequencies correspond with one of the bounds of the magnetic field specified in the 'B_bounds_G' argument. Update this argument and re-run.")
+
+        if B_G.size == 1:
+            return B_G[0]
         return B_G
     
     def get_ground_state_transition_sensitivity(self,f1,mf1,f2,mf2,B):
@@ -142,7 +148,9 @@ class Potassium39(arc.Potassium39):
     
     def get_zeeman_shift(self,n,l,j,f,m_f,B):
         '''
-        Returns the zeeman energy in units of MHz as a function of B field (in Gauss) for a given F, m_f (will also accept mj mi basis) sublevel in the specified fine structure manifold.
+        Returns the zeeman energy in units of MHz as a function of B field (in
+        Gauss) for a given F, m_f (will also accept mj mi basis) sublevel in the
+        specified fine structure manifold.
         '''
         
         if isinstance(B,float) or isinstance(B,int):
