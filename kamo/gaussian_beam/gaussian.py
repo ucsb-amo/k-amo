@@ -100,7 +100,7 @@ class GaussianBeam():
         else:
             convert = 1
 
-        return 2 * power / np.pi / wz**2 * np.exp(-2 * r**2 / wz ) * convert
+        return 2 * power / np.pi / wz**2 * np.exp(-2 * (r / wz)**2 ) * convert
     
     def power_from_intensity(self,intensity_mW_per_cm2,r=0.,z=0.):
         '''
