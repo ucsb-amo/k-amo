@@ -104,7 +104,7 @@ class Potassium39(arc.Potassium39):
 
     def get_decay_rate(self,n1,l1,j1,n2,l2,j2):
         '''
-        Returns spontaneous emission rate for the higher of two states.
+        Returns spontaneous emission rate for the higher of two states in 1/s.
         '''
         ordered = self.getEnergy(n1,l1,j1) < self.getEnergy(n2,l2,j2)
         if ordered:
