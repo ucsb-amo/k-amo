@@ -2,6 +2,7 @@ import arc
 import numpy as np
 import kamo.constants as c
 import csv
+import pairinteraction.real as pi
 
 dv = -1000.
 
@@ -9,6 +10,10 @@ class Potassium39(arc.Potassium39):
     def __init__(self):
         super().__init__()
         self.cross_section = self.get_cross_section()
+
+    def init_pairinteraction(self):
+        if pi.Database.get_global_database() is None:
+            pi.Database.initialize_global_database(download_missing=True)
 
     def get_magnetic_field_from_ground_state_transition_frequency(self,
                                                                 f1, mf1, f2, mf2, transition_frequency_Hz,
@@ -163,11 +168,17 @@ class Potassium39(arc.Potassium39):
         # convert B field in gauss to Tesla
         B = B / 1.e4
 
-        # lookup the input state and reassign quantum numbers if input is given in mj mi basis
-        state = self.state_lookup(n,l,j,f,m_f)
+        N_USE_PAIRINTERACTION_THRESHOLD = 25
 
-        (f,m_f) = state['lf']
-        (F1_arc,mf1_arc) = state['lf_arc']
+        if n < N_USE_PAIRINTERACTION_THRESHOLD:
+            # lookup the input state and reassign quantum numbers if input is given in mj mi basis
+            state = self.state_lookup(n,l,j,f,m_f)
+            (f,m_f) = state['lf']
+            (F1_arc,mf1_arc) = state['lf_arc']
+        else:
+            m_j, _ = f, m_f
+            if int(m_j) == m_j:
+                raise ValueError(f"For n > {N_USE_PAIRINTERACTION_THRESHOLD:.0f}, supply m_j in place of F.")
 
         #for some reason ARCs breit-rabi function doesn't work for K39 ground state, use this instead:
         if n == 4 and l==0:
@@ -193,15 +204,34 @@ class Potassium39(arc.Potassium39):
                             * (1 - ((c.get_total_electronic_g_factor(0,.5) - c.g_I) * c.mu_b * B) / (c.get_hyperfine_constant(0,.5) * (n_s + .5))))
                                     / (c.h * 1.e6))
         #for all others use ARC breit rabi function:
-        else:
+        elif n < N_USE_PAIRINTERACTION_THRESHOLD:
             zeeman_Evs = self.breitRabi(n, l, j, B)
             zeeman_Es = np.transpose(zeeman_Evs[0])
             for idx in range(len(zeeman_Evs[1])):
                 # loop through all the F, mF until you have the right one
-                if zeeman_Evs[1][idx] == F1_arc:
-                    if zeeman_Evs[2][idx] == mf1_arc:
+                f=zeeman_Evs[1][idx]
+                mf=zeeman_Evs[2][idx]
+                # bugfix -- ARC returns f=0.5 and mf=0 for 5p3/2 f=0 mf=0, so
+                # fix it explicitly here
+                if f == 0.5 and mf == 0:
+                    f = 0
+                # find the index for the state that matches the one we want
+                if f == F1_arc:
+                    if mf == mf1_arc:
                         return zeeman_Es[idx] / 1.e6
-            
+        else:
+            self.init_pairinteraction()
+            ket1 = pi.KetAtom("K", n=n, l=l, j=j, m=m_j)
+            state_energy = ket1.get_energy(unit="MHz")
+            print(type(ket1.l))
+
+            basis = pi.BasisAtom("K",
+                                n=(ket1.n - 3, ket1.n + 3),)
+            systems = [pi.SystemAtom(basis).set_magnetic_field([0, 0, b], unit="gauss") for b in B]
+            pi.diagonalize(systems, diagonalizer="eigen", sort_by_energy=True)
+            eigenenergies = [system.get_eigenenergies(unit="MHz") - state_energy for system in systems]
+            return eigenenergies
+
     def get_ground_state_transition_frequency(self,f1,m_f1,f2,m_f2,B=0):
         '''
         Returns the amount of shift in MHz of a given ground state transition
@@ -838,3 +868,43 @@ class Potassium39(arc.Potassium39):
             scattering_length = scattering_length[0]
 
         return scattering_length
+    
+    def state_label(self,n,l,j,tex_formatting=True):
+        """Generate atomic state label in spectroscopic notation.
+        Converts quantum numbers (n, l, j) into standard spectroscopic notation 
+        (e.g., 2P_3/2). Optionally formats output as LaTeX.
+            n (int): Principal quantum number.
+            l (int): Orbital angular momentum quantum number.
+            j (float): Total angular momentum quantum number.
+            tex_formatting (bool, optional): If True, returns LaTeX formatted string. 
+                If False, returns plain text. Defaults to True.
+            str: Atomic state label in spectroscopic notation. Format is either 
+                LaTeX (e.g., '$2\\text{P}_{3/2}$') or plain text (e.g., '2P_3/2').
+        Note:
+            l values: 0='S', 1='P', 2='D', 3='F', otherwise '(l={l})'.
+            j values should correspond to valid coupling: j = l ± 1/2.
+        """ 
+        if l == 0:
+            L = 'S'
+        elif l == 1:
+            L = 'P'
+        elif l == 2:
+            L = 'D'
+        elif l == 3:
+            L = 'F'
+        else:
+            L = f'(l={l})'
+
+        if j == 0.5:
+            J = '1/2'
+        elif j == 1.5:
+            J = '3/2'
+        elif j == 2.5:
+            J = '5/2'
+        elif j == 3.5:
+            J = '7/2'
+
+        if tex_formatting:
+            return fr'${n:1.0f}\text{{{L}}}_{{{J}}}$'
+        else:
+            return f'{n:1.0f}{L}_{J}'
