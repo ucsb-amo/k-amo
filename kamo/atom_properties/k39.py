@@ -2,7 +2,7 @@ import arc
 import numpy as np
 import kamo.constants as c
 import csv
-import pairinteraction.real as pi
+# import pairinteraction.real as pi
 
 dv = -1000.
 
@@ -11,9 +11,9 @@ class Potassium39(arc.Potassium39):
         super().__init__()
         self.cross_section = self.get_cross_section()
 
-    def init_pairinteraction(self):
-        if pi.Database.get_global_database() is None:
-            pi.Database.initialize_global_database(download_missing=True)
+    # def init_pairinteraction(self):
+    #     if pi.Database.get_global_database() is None:
+    #         pi.Database.initialize_global_database(download_missing=True)
 
     def get_magnetic_field_from_ground_state_transition_frequency(self,
                                                                 f1, mf1, f2, mf2, transition_frequency_Hz,
@@ -168,17 +168,17 @@ class Potassium39(arc.Potassium39):
         # convert B field in gauss to Tesla
         B = B / 1.e4
 
-        N_USE_PAIRINTERACTION_THRESHOLD = 25
+        # N_USE_PAIRINTERACTION_THRESHOLD = 25
 
-        if n < N_USE_PAIRINTERACTION_THRESHOLD:
+        # if n < N_USE_PAIRINTERACTION_THRESHOLD:
             # lookup the input state and reassign quantum numbers if input is given in mj mi basis
-            state = self.state_lookup(n,l,j,f,m_f)
-            (f,m_f) = state['lf']
-            (F1_arc,mf1_arc) = state['lf_arc']
-        else:
-            m_j, _ = f, m_f
-            if int(m_j) == m_j:
-                raise ValueError(f"For n > {N_USE_PAIRINTERACTION_THRESHOLD:.0f}, supply m_j in place of F.")
+        state = self.state_lookup(n,l,j,f,m_f)
+        (f,m_f) = state['lf']
+        (F1_arc,mf1_arc) = state['lf_arc']
+        # else:
+        #     m_j, _ = f, m_f
+        #     if int(m_j) == m_j:
+        #         raise ValueError(f"For n > {N_USE_PAIRINTERACTION_THRESHOLD:.0f}, supply m_j in place of F.")
 
         #for some reason ARCs breit-rabi function doesn't work for K39 ground state, use this instead:
         if n == 4 and l==0:
@@ -204,7 +204,8 @@ class Potassium39(arc.Potassium39):
                             * (1 - ((c.get_total_electronic_g_factor(0,.5) - c.g_I) * c.mu_b * B) / (c.get_hyperfine_constant(0,.5) * (n_s + .5))))
                                     / (c.h * 1.e6))
         #for all others use ARC breit rabi function:
-        elif n < N_USE_PAIRINTERACTION_THRESHOLD:
+        # elif n < N_USE_PAIRINTERACTION_THRESHOLD:
+        else:
             zeeman_Evs = self.breitRabi(n, l, j, B)
             zeeman_Es = np.transpose(zeeman_Evs[0])
             for idx in range(len(zeeman_Evs[1])):
@@ -219,18 +220,18 @@ class Potassium39(arc.Potassium39):
                 if f == F1_arc:
                     if mf == mf1_arc:
                         return zeeman_Es[idx] / 1.e6
-        else:
-            self.init_pairinteraction()
-            ket1 = pi.KetAtom("K", n=n, l=l, j=j, m=m_j)
-            state_energy = ket1.get_energy(unit="MHz")
-            print(type(ket1.l))
+        # else:
+        #     self.init_pairinteraction()
+        #     ket1 = pi.KetAtom("K", n=n, l=l, j=j, m=m_j)
+        #     state_energy = ket1.get_energy(unit="MHz")
+        #     print(type(ket1.l))
 
-            basis = pi.BasisAtom("K",
-                                n=(ket1.n - 3, ket1.n + 3),)
-            systems = [pi.SystemAtom(basis).set_magnetic_field([0, 0, b], unit="gauss") for b in B]
-            pi.diagonalize(systems, diagonalizer="eigen", sort_by_energy=True)
-            eigenenergies = [system.get_eigenenergies(unit="MHz") - state_energy for system in systems]
-            return eigenenergies
+        #     basis = pi.BasisAtom("K",
+        #                         n=(ket1.n - 3, ket1.n + 3),)
+        #     systems = [pi.SystemAtom(basis).set_magnetic_field([0, 0, b], unit="gauss") for b in B]
+        #     pi.diagonalize(systems, diagonalizer="eigen", sort_by_energy=True)
+        #     eigenenergies = [system.get_eigenenergies(unit="MHz") - state_energy for system in systems]
+        #     return eigenenergies
 
     def get_ground_state_transition_frequency(self,f1,m_f1,f2,m_f2,B=0):
         '''
