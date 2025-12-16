@@ -170,7 +170,7 @@ class Potassium39(arc.Potassium39):
         (F1_arc,mf1_arc) = state['lf_arc']
 
         #for some reason ARCs breit-rabi function doesn't work for K39 ground state, use this instead:
-        if l==0:
+        if n == 4 and l==0:
             if f==1:
                 return (((-c.get_hyperfine_constant(0,.5) / 4) 
                         + c.g_I * c.mu_b * m_f * B
@@ -193,7 +193,7 @@ class Potassium39(arc.Potassium39):
                             * (1 - ((c.get_total_electronic_g_factor(0,.5) - c.g_I) * c.mu_b * B) / (c.get_hyperfine_constant(0,.5) * (n_s + .5))))
                                     / (c.h * 1.e6))
         #for all others use ARC breit rabi function:
-        if l!=0:
+        else:
             zeeman_Evs = self.breitRabi(n, l, j, B)
             zeeman_Es = np.transpose(zeeman_Evs[0])
             for idx in range(len(zeeman_Evs[1])):
