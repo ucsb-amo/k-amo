@@ -6,9 +6,10 @@ kamo.egg-info/SOURCES.txt
 kamo.egg-info/dependency_links.txt
 kamo.egg-info/requires.txt
 kamo.egg-info/top_level.txt
+kamo/BEC_properties/__init__.py
+kamo/BEC_properties/bec.py
 kamo/atom_properties/__init__.py
 kamo/atom_properties/k39.py
-kamo/atom_properties/transition_dict.py
 kamo/gaussian_beam/__init__.py
 kamo/gaussian_beam/gaussian.py
 kamo/gaussian_beam/thin_lens_gaussian.py
