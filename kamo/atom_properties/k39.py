@@ -2,6 +2,7 @@ import arc
 import numpy as np
 import kamo.constants as c
 import csv
+# import pairinteraction.real as pi
 
 dv = -1000.
 
@@ -9,6 +10,10 @@ class Potassium39(arc.Potassium39):
     def __init__(self):
         super().__init__()
         self.cross_section = self.get_cross_section()
+
+    # def init_pairinteraction(self):
+    #     if pi.Database.get_global_database() is None:
+    #         pi.Database.initialize_global_database(download_missing=True)
 
     def get_magnetic_field_from_ground_state_transition_frequency(self,
                                                                 f1, mf1, f2, mf2, transition_frequency_Hz,
@@ -165,12 +170,11 @@ class Potassium39(arc.Potassium39):
 
         # lookup the input state and reassign quantum numbers if input is given in mj mi basis
         state = self.state_lookup(n,l,j,f,m_f)
-
         (f,m_f) = state['lf']
         (F1_arc,mf1_arc) = state['lf_arc']
 
         #for some reason ARCs breit-rabi function doesn't work for K39 ground state, use this instead:
-        if l==0:
+        if n == 4 and l==0:
             if f==1:
                 return (((-c.get_hyperfine_constant(0,.5) / 4) 
                         + c.g_I * c.mu_b * m_f * B
@@ -193,15 +197,22 @@ class Potassium39(arc.Potassium39):
                             * (1 - ((c.get_total_electronic_g_factor(0,.5) - c.g_I) * c.mu_b * B) / (c.get_hyperfine_constant(0,.5) * (n_s + .5))))
                                     / (c.h * 1.e6))
         #for all others use ARC breit rabi function:
-        if l!=0:
+        else:
             zeeman_Evs = self.breitRabi(n, l, j, B)
             zeeman_Es = np.transpose(zeeman_Evs[0])
             for idx in range(len(zeeman_Evs[1])):
                 # loop through all the F, mF until you have the right one
-                if zeeman_Evs[1][idx] == F1_arc:
-                    if zeeman_Evs[2][idx] == mf1_arc:
+                f=zeeman_Evs[1][idx]
+                mf=zeeman_Evs[2][idx]
+                # bugfix -- ARC returns f=0.5 and mf=0 for 5p3/2 f=0 mf=0, so
+                # fix it explicitly here
+                if f == 0.5 and mf == 0:
+                    f = 0
+                # find the index for the state that matches the one we want
+                if f == F1_arc:
+                    if mf == mf1_arc:
                         return zeeman_Es[idx] / 1.e6
-            
+
     def get_ground_state_transition_frequency(self,f1,m_f1,f2,m_f2,B=0):
         '''
         Returns the amount of shift in MHz of a given ground state transition
@@ -750,14 +761,18 @@ class Potassium39(arc.Potassium39):
         Returns:
             dict: a dict containing state information.
         """        
-        if abs(m1) == .5 or abs(m1) == 1.5:
+        is_m1_halfint = int(m1) != m1
+        is_m2_halfint = int(m2) != m2
+        if is_m1_halfint and is_m2_halfint:
             dct = self.state_dicts(n,l,j)
+            f = '1.1f'
+        elif (is_m1_halfint and not is_m2_halfint) or (is_m2_halfint and not is_m1_halfint):
+            raise ValueError('both spin quantum numbers (F/mF or mJ/mI) must be integer or half-integer, but one of each was provided.')
         else:
             dct = self.state_dicts(n,l,j, hf=False)
-
-        key = str((m1, m2))
-        key = key[:-1]
-        key = key[1:]
+            f = '1.0f'
+        
+        key = f'{m1:{f}}, {m2:{f}}'
         
         return dct[key]
 
@@ -838,3 +853,108 @@ class Potassium39(arc.Potassium39):
             scattering_length = scattering_length[0]
 
         return scattering_length
+    
+    def state_label(self,
+                    n,l,j,
+                    m1=None,m2=None,
+                    skip_njl = False,
+                    force_hf_lf = None,
+                    force_skip_spin = False, 
+                    tex_formatting=True):
+        """Generate atomic state label in spectroscopic notation.
+        Converts quantum numbers (n, l, j) into standard spectroscopic notation 
+        (e.g., 2P_3/2). Optionally formats output as LaTeX.
+            n (int): Principal quantum number.
+            l (int): Orbital angular momentum quantum number.
+            j (float): Total angular momentum quantum number.
+            tex_formatting (bool, optional): If True, returns LaTeX formatted string. 
+                If False, returns plain text. Defaults to True.
+            str: Atomic state label in spectroscopic notation. Format is either 
+                LaTeX (e.g., '$2\\text{P}_{3/2}$') or plain text (e.g., '2P_3/2').
+        Note:
+            l values: 0='S', 1='P', 2='D', 3='F', otherwise '(l={l})'.
+            j values should correspond to valid coupling: j = l ± 1/2.
+        """ 
+
+        def orbital_label(l):
+            if l == 0:
+                return 'S'
+            elif l == 1:
+                return 'P'
+            elif l == 2:
+                return 'D'
+            elif l == 3:
+                return 'F'
+            else:
+                return f'(l={l})'
+
+        def frac_str(s):
+            S = ''
+            if s < 0:
+                S = '-'
+            s = abs(s)
+            if s == 0.5:
+                S += '1/2'
+            elif s == 1.5:
+                S += '3/2'
+            elif s == 2.5:
+                S += '5/2'
+            elif s == 3.5:
+                S += '7/2'
+            return S
+
+        L = orbital_label(l)
+        J = frac_str(j)
+        if skip_njl:
+            rs_string = ''
+        else:
+            if tex_formatting:
+                rs_string = fr'{n:1.0f}\text{{{L}}}_{{{J}}}'
+            else:
+                rs_string = f'{n:1.0f}{L}_{J}{spinstr}'
+
+
+        if m1 != None and m2 != None and not force_skip_spin:
+            is_m1_halfint = int(m1) != m1
+            is_m2_halfint = int(m2) != m2
+
+            if is_m1_halfint and is_m2_halfint:
+                hf_label = True
+            elif not is_m1_halfint and not is_m2_halfint:
+                hf_label = False
+
+            if force_hf_lf == None:
+                pass
+            elif force_hf_lf == 'lf':
+                hf_label = False
+            elif force_hf_lf == 'hf':
+                hf_label = True
+            else:
+                print("Invalid option for `force_hf_lf`: choose from None, 'hf', or 'lf'")
+
+            dct = self.state_lookup(n,l,j,m1,m2)
+
+            if hf_label:
+                m1, m2 = dct['hf']
+                M1 = frac_str(m1)
+                M2 = frac_str(m2)
+                if tex_formatting:
+                    spinstr = fr"|m_J={M1}, m_I={M2}\rangle"
+                else:
+                    spinstr = fr"|mJ={M1},mI={M2}⟩"
+            else:
+                m1, m2 = dct['lf']
+                M1 = str(int(m1))
+                M2 = str(int(m2))
+                if tex_formatting:
+                    spinstr = fr"|F={M1},m_F={M2}\rangle"
+                else:
+                    spinstr = fr"|F={M1},mF={M2}⟩"
+
+        else:
+            spinstr = ""
+
+        if tex_formatting:
+            return fr'{rs_string}{spinstr}'
+        else:
+            return f'{rs_string}{spinstr}'
