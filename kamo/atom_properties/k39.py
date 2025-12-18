@@ -761,14 +761,18 @@ class Potassium39(arc.Potassium39):
         Returns:
             dict: a dict containing state information.
         """        
-        if abs(m1) == .5 or abs(m1) == 1.5:
+        is_m1_halfint = int(m1) != m1
+        is_m2_halfint = int(m2) != m2
+        if is_m1_halfint and is_m2_halfint:
             dct = self.state_dicts(n,l,j)
+            f = '1.1f'
+        elif (is_m1_halfint and not is_m2_halfint) or (is_m2_halfint and not is_m1_halfint):
+            raise ValueError('both spin quantum numbers (F/mF or mJ/mI) must be integer or half-integer, but one of each was provided.')
         else:
             dct = self.state_dicts(n,l,j, hf=False)
-
-        key = str((m1, m2))
-        key = key[:-1]
-        key = key[1:]
+            f = '1.0f'
+        
+        key = f'{m1:{f}}, {m2:{f}}'
         
         return dct[key]
 
@@ -850,7 +854,13 @@ class Potassium39(arc.Potassium39):
 
         return scattering_length
     
-    def state_label(self,n,l,j,tex_formatting=True):
+    def state_label(self,
+                    n,l,j,
+                    m1=None,m2=None,
+                    skip_njl = False,
+                    force_hf_lf = None,
+                    force_skip_spin = False, 
+                    tex_formatting=True):
         """Generate atomic state label in spectroscopic notation.
         Converts quantum numbers (n, l, j) into standard spectroscopic notation 
         (e.g., 2P_3/2). Optionally formats output as LaTeX.
@@ -865,27 +875,86 @@ class Potassium39(arc.Potassium39):
             l values: 0='S', 1='P', 2='D', 3='F', otherwise '(l={l})'.
             j values should correspond to valid coupling: j = l ± 1/2.
         """ 
-        if l == 0:
-            L = 'S'
-        elif l == 1:
-            L = 'P'
-        elif l == 2:
-            L = 'D'
-        elif l == 3:
-            L = 'F'
-        else:
-            L = f'(l={l})'
 
-        if j == 0.5:
-            J = '1/2'
-        elif j == 1.5:
-            J = '3/2'
-        elif j == 2.5:
-            J = '5/2'
-        elif j == 3.5:
-            J = '7/2'
+        def orbital_label(l):
+            if l == 0:
+                return 'S'
+            elif l == 1:
+                return 'P'
+            elif l == 2:
+                return 'D'
+            elif l == 3:
+                return 'F'
+            else:
+                return f'(l={l})'
+
+        def frac_str(s):
+            S = ''
+            if s < 0:
+                S = '-'
+            s = abs(s)
+            if s == 0.5:
+                S += '1/2'
+            elif s == 1.5:
+                S += '3/2'
+            elif s == 2.5:
+                S += '5/2'
+            elif s == 3.5:
+                S += '7/2'
+            return S
+
+        L = orbital_label(l)
+        J = frac_str(j)
+        if skip_njl:
+            rs_string = ''
+        else:
+            if tex_formatting:
+                rs_string = fr'{n:1.0f}\text{{{L}}}_{{{J}}}'
+            else:
+                rs_string = f'{n:1.0f}{L}_{J}{spinstr}'
+
+
+        if m1 != None and m2 != None and not force_skip_spin:
+            is_m1_halfint = int(m1) != m1
+            is_m2_halfint = int(m2) != m2
+
+            if is_m1_halfint and is_m2_halfint:
+                hf_label = True
+            elif not is_m1_halfint and not is_m2_halfint:
+                hf_label = False
+
+            if force_hf_lf == None:
+                pass
+            elif force_hf_lf == 'lf':
+                hf_label = False
+            elif force_hf_lf == 'hf':
+                hf_label = True
+            else:
+                print("Invalid option for `force_hf_lf`: choose from None, 'hf', or 'lf'")
+
+            dct = self.state_lookup(n,l,j,m1,m2)
+
+            if hf_label:
+                m1, m2 = dct['hf']
+                M1 = frac_str(m1)
+                M2 = frac_str(m2)
+                if tex_formatting:
+                    spinstr = fr"|m_J={M1}, m_I={M2}\rangle"
+                else:
+                    spinstr = fr"|mJ={M1},mI={M2}⟩"
+            else:
+                m1, m2 = dct['lf']
+                M1 = str(int(m1))
+                M2 = str(int(m2))
+                if tex_formatting:
+                    spinstr = fr"|F={M1},m_F={M2}\rangle"
+                else:
+                    spinstr = fr"|F={M1},mF={M2}⟩"
+
+        else:
+            spinstr = ""
 
         if tex_formatting:
-            return fr'${n:1.0f}\text{{{L}}}_{{{J}}}$'
+            return fr'{rs_string}{spinstr}'
         else:
-            return f'{n:1.0f}{L}_{J}'
+            return f'{rs_string}{spinstr}'
