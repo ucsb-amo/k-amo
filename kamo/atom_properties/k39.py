@@ -157,11 +157,7 @@ class Potassium39(arc.Potassium39):
         Gauss) for a given F, m_f (will also accept mj mi basis) sublevel in the
         specified fine structure manifold.
         '''
-        
-        if isinstance(B,float) or isinstance(B,int):
-            B = np.array([B])
-        if isinstance(B,list):
-            B = np.array(B)
+        B = np.atleast_1d(B)
 
         # nuclear spin
         n_s = 1.5
