@@ -16,6 +16,7 @@ class Potassium39(arc.Potassium39):
     #         pi.Database.initialize_global_database(download_missing=True)
 
     def get_magnetic_field_from_ground_state_transition_frequency(self,
+
                                                                 f1, mf1, f2, mf2, transition_frequency_Hz,
                                                                 B_bounds_G=(0., 600.),
                                                                 N_interp=10000):
@@ -48,8 +49,15 @@ class Potassium39(arc.Potassium39):
 
         b = np.linspace(B_bounds_G[0], B_bounds_G[1], N_interp)
         f_transitions_MHz = self.get_ground_state_transition_frequency(f1, mf1, f2, mf2, b)
+        import matplotlib.pyplot as plt
+        plt.plot(b,f_transitions_MHz)
+        plt.hlines(transition_frequency_Hz/1.e6,xmin=plt.xlim()[0],xmax=plt.xlim()[1])
         
-        B_G = np.interp(transition_frequency_Hz, f_transitions_MHz * 1.e6, b)
+        if f_transitions_MHz[0] > f_transitions_MHz[-1]:
+            f_transitions_MHz = f_transitions_MHz[::-1]
+            b = b[::-1]
+        B_G = np.interp(transition_frequency_Hz/1.e6, f_transitions_MHz, b)
+        print(B_G)
 
         if np.any((B_G == B_bounds_G[0]) | (B_G == B_bounds_G[1])):
             raise ValueError("One or more transition frequencies correspond with one of the bounds of the magnetic field specified in the 'B_bounds_G' argument. Update this argument and re-run.")
