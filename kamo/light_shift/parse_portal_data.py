@@ -10,20 +10,30 @@ import time
 
 class PortalDataParser():
 
-    def __init__(self, portal_data:pd.DataFrame = None, n_max=16, n_min=3):
+    def __init__(self,
+                atom=Potassium39(),
+                portal_data:pd.DataFrame = None,
+                force_arc=False,
+                n_max=16,
+                n_min=3):
         self.N_MAX = n_max
         self.N_MIN = n_min
 
-        self.atom = Potassium39()
+        self.arc = force_arc
+
+        self.atom = atom
         self.state_energy_list = self._get_state_energy_list()
 
-        if not isinstance(portal_data,pd.DataFrame):
-            if portal_data == None:
-                self.portal_data = self.load_portal_data()
+        if not self.arc:
+            if not isinstance(portal_data,pd.DataFrame):
+                if portal_data == None:
+                    self.portal_data = self.load_portal_data()
+                else:
+                    raise ValueError("portal_data must be a pandas.DataFrame.")
             else:
-                raise ValueError("portal_data must be a pandas.DataFrame.")
+                self.portal_data = portal_data
         else:
-            self.portal_data = portal_data
+            self.portal_data = None
 
     def load_portal_data(self, 
                         portal_data_folder = r"B:\_K\Resources\udel_potassium_matrix_elements",
@@ -120,7 +130,7 @@ class PortalDataParser():
         
         return n, l, j
     
-    def determine_allowed_final_states(self,n,l,j):
+    def determine_allowed_final_states(self,l,j):
 
         # selection rule for Delta l = +/- 1
         if l == 0:
@@ -140,8 +150,8 @@ class PortalDataParser():
             lrange = np.array(list(set(lrange) & set(lrange_for_this_n)))
 
             for lf in lrange:
-                if ((nf == 3) & (lf < 2)):
-                    # no transitions to 3p or lower states
+                if ((nf == self.atom.groundStateN-1) & (lf < 2)):
+                    # no transitions to (n-1)p or lower states
                     pass
                 else:
                     # selection rule for Delta j = 0, +/- 1
@@ -180,10 +190,7 @@ class PortalDataParser():
         if elems_from_i.empty:
             raise ValueError(f"No matrix elements found from state {state_i}. Check the portal_data object.")
         
-        # allowed_final_states = elems_from_i['Final'].values
-        allowed_final_states = self.determine_allowed_final_states(n,l,j)
-
-        return elems_from_i, allowed_final_states           
+        return elems_from_i           
 
     def matrix_element_from_transition_table(self,nf,lf,jf,matrix_element_table=None):
         """_summary_
@@ -209,12 +216,7 @@ class PortalDataParser():
         if elem_i_to_f.empty:
             # print(f"No portal data for {state_i} to {state_f} -- substituting ARC data.")
             ni,li,ji = self.state_label_to_quantum_numbers(state_i)
-            elem_i_to_f = self.atom.getReducedMatrixElementJ(ni,li,ji,nf,lf,jf)
-            matrix_element_au = elem_i_to_f * c.e * c.a0
-
-            ei = self.atom.getEnergy(ni,li,ji)
-            ef = self.atom.getEnergy(nf,lf,jf)
-            transition_energy_J = (ef-ei) * c.convert_joules_per_electronvolt
+            matrix_element_au, transition_energy_J = self.matrix_element_arc(ni,li,ji,nf,lf,jf)
         else:
             matrix_element_au = elem_i_to_f['Matrix element (a.u.)'].values
             transition_wavelength_m = elem_i_to_f['Wavelength (nm)'].values * 1.e-9
@@ -226,6 +228,16 @@ class PortalDataParser():
             transition_energy_J = state_ordering * transition_energy_J
 
         return matrix_element_au, transition_energy_J
+    
+    def matrix_element_arc(self,n0,l0,j0,nf,lf,jf):
+            elem_i_to_f = self.atom.getReducedMatrixElementJ(n0,l0,j0,nf,lf,jf)
+            matrix_element_au = elem_i_to_f * c.e * c.a0
+
+            ei = self.atom.getEnergy(n0,l0,j0)
+            ef = self.atom.getEnergy(nf,lf,jf)
+            transition_energy_J = (ef-ei) * c.convert_joules_per_electronvolt
+
+            return matrix_element_au, transition_energy_J
 
     def get_state_energy_order(self,state_f,state_i):
         '''Returns +1 if state f is higher energy than state i. Otherwise, returns -1.'''
@@ -243,7 +255,7 @@ class PortalDataParser():
         for n in range(self.N_MIN,self.N_MAX+1):
             for l in range(0,n):
                 if l < (l_max+1):
-                    if ((n == 3) & (l < 2)):
+                    if ((n == self.atom.groundStateN-1) & (l < 2)):
                         jrange = []
                     else:
                         jrange = np.array([l-1/2,l+1/2])

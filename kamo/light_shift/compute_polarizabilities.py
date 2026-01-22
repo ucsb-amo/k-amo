@@ -5,17 +5,23 @@ from kamo.light_shift.parse_portal_data import PortalDataParser
 from sympy.physics import wigner
 
 class ComputePolarizabilities():
-    def __init__(self, portal_data_parser:PortalDataParser = None, n_max=16, n_min=3):
+    def __init__(self,
+                atom=Potassium39(),
+                force_arc=False,
+                portal_data_parser:PortalDataParser = None,
+                n_max=16,
+                n_min=3):
 
         if portal_data_parser == None:
-            self.pdp = PortalDataParser(n_max=n_max, n_min=n_min)
+            self.pdp = PortalDataParser(n_max=n_max, n_min=n_min,
+                                        force_arc=force_arc)
         else:
             if isinstance(portal_data_parser,PortalDataParser):
                 self.pdp = portal_data_parser
             else:
                 raise ValueError("Invalid class for argument `portal_data_parser` -- must have class kamo.light_shift.PortalDataParser")
             
-        self.atom = Potassium39()
+        self.atom = atom
             
     def _handle_wavelength_arraylike(self,wavelength_m):
         if isinstance(wavelength_m,list):
@@ -62,13 +68,20 @@ class ComputePolarizabilities():
 
             laser_energy_J = c.h * c.c / wavelength_m[ii]
 
-            transition_table, allowed_final_states = self.pdp.reduced_dipole_matrix_element_table(n,l,j)
+            allowed_final_states = self.pdp.determine_allowed_final_states(l,j)
+
+            if not self.pdp.arc:
+                transition_table = self.pdp.reduced_dipole_matrix_element_table(n,l,j)
             
             for state_f in allowed_final_states:
 
                 nf, lf, jf = self.pdp.state_label_to_quantum_numbers(state_f)
-
-                matrix_element, transition_energy_J  = self.pdp.matrix_element_from_transition_table(nf,lf,jf,transition_table)
+                if self.pdp.arc:
+                    matrix_element, transition_energy_J = self.pdp.matrix_element_arc(n,l,j,nf,lf,jf)
+                else:
+                    matrix_element, transition_energy_J = self.pdp.matrix_element_from_transition_table(nf,lf,jf,transition_table)
+                print(matrix_element)
+                    
                 matrix_element_SI = matrix_element * c.a0 * c.e
 
                 common_factor = matrix_element_SI**2 / ( transition_energy_J**2 - laser_energy_J**2 )

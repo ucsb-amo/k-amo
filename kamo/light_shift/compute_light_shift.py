@@ -1,11 +1,14 @@
 import numpy as np
+from kamo import Potassium39
 from kamo.light_shift.compute_polarizabilities import ComputePolarizabilities
 from kamo.light_shift.parse_portal_data import PortalDataParser
 from kamo import constants as c
 
 class ComputeLightShift():
 
-    def __init__(self, portal_data_parser:PortalDataParser = None):
+    def __init__(self,
+                atom=Potassium39(),
+                portal_data_parser:PortalDataParser = None):
         if portal_data_parser == None:
             self.pdp = PortalDataParser()
         else:
@@ -14,7 +17,8 @@ class ComputeLightShift():
             else:
                 raise ValueError("Invalid class for argument `portal_data_parser` -- must have class kamo.light_shift.PortalDataParser")
             
-        self.cp = ComputePolarizabilities(portal_data_parser=self.pdp)
+        self.cp = ComputePolarizabilities(atom=atom,
+                                          portal_data_parser=self.pdp)
 
     def compute_state_shift(self,
                             n,l,j,F,mF,

@@ -1,1 +1,2 @@
 from .compute_light_shift import ComputeLightShift
+from .compute_polarizabilities import ComputePolarizabilities
