@@ -24,10 +24,7 @@ class ComputePolarizabilities():
         self.atom = atom
             
     def _handle_wavelength_arraylike(self,wavelength_m):
-        if isinstance(wavelength_m,list):
-            wavelength_m = np.array(wavelength_m)
-        elif isinstance(wavelength_m,float):
-            wavelength_m = np.array([wavelength_m])
+        wavelength_m = np.atleast_1d(wavelength_m)
 
         WAVELENGTH_M_MAX = 20.e-6
         WAVELENGTH_M_MIN = 100.e-9
@@ -130,11 +127,10 @@ class ComputePolarizabilities():
         wavelength_m = self._handle_wavelength_arraylike(wavelength_m)
 
         alpha_j_scalar, alpha_j_vector, alpha_j_tensor = self.compute_fine_structure_polarizability(n,l,j,wavelength_m)
-
-        coeff_F_vector = (-1)**(j+F+I+1) * wigner.wigner_6j(F,j,I,j,F,1) * \
+        coeff_F_vector = (-1)**(j+F+I+1) * float(wigner.wigner_6j(F,j,I,j,F,1,prec=10)) * \
             np.sqrt( F*(2*F+1)*(2*j+1)*(j+1)/j/(F+1) )
         if j != 1/2:
-            coeff_F_tensor = (-1)**(j+F+I) * wigner.wigner_6j(F,j,I,j,F,2) * \
+            coeff_F_tensor = (-1)**(j+F+I) * float(wigner.wigner_6j(F,j,I,j,F,2,prec=10)) * \
                 np.sqrt( F*(2*F-1)*(2*F+1)/(2*F+3)/(F+1) ) * \
                 np.sqrt((2*j+3)*(2*j+1)*(j+1)/j/(2*j-1))
         else:
