@@ -80,7 +80,6 @@ class ComputePolarizabilities():
                     matrix_element, transition_energy_J = self.pdp.matrix_element_arc(n,l,j,nf,lf,jf)
                 else:
                     matrix_element, transition_energy_J = self.pdp.matrix_element_from_transition_table(nf,lf,jf,transition_table)
-                print(matrix_element)
                     
                 matrix_element_SI = matrix_element * c.a0 * c.e
 

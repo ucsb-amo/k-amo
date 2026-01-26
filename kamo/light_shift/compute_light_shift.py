@@ -8,16 +8,18 @@ class ComputeLightShift():
 
     def __init__(self,
                 atom=Potassium39(),
+                force_arc=False,
                 portal_data_parser:PortalDataParser = None):
         if portal_data_parser == None:
-            self.pdp = PortalDataParser()
+            self.pdp = PortalDataParser(atom=atom,force_arc=force_arc)
         else:
             if isinstance(portal_data_parser,PortalDataParser):
                 self.pdp = portal_data_parser
             else:
                 raise ValueError("Invalid class for argument `portal_data_parser` -- must have class kamo.light_shift.PortalDataParser")
             
-        self.cp = ComputePolarizabilities(atom=atom,
+        self.ComputePolarizabilities = ComputePolarizabilities(atom=atom,
+                                          force_arc=force_arc,
                                           portal_data_parser=self.pdp)
 
     def compute_state_shift(self,
@@ -45,7 +47,7 @@ class ComputeLightShift():
         Returns:
             float: the energy shift in Hz of the state due to the incident light field. 
         """
-        alpha_F = self.cp.compute_complete_polarizability(n,l,j,F,mF,wavelength_m,polarization,I)
+        alpha_F = self.ComputePolarizabilities.compute_complete_polarizability(n,l,j,F,mF,wavelength_m,polarization,I)
         alpha_F_SI = alpha_F * c.convert_polarizability_au_to_SI
         state_shift_J = -1/(2*c.c*c.epsilon0) * alpha_F_SI * intensity
         state_shift_Hz = state_shift_J.astype('float64') / c.h
