@@ -74,11 +74,10 @@ class ComputePolarizabilities():
 
                 nf, lf, jf = self.pdp.state_label_to_quantum_numbers(state_f)
                 if self.pdp.arc:
-                    matrix_element, transition_energy_J = self.pdp.matrix_element_arc(n,l,j,nf,lf,jf)
+                    matrix_element_SI, transition_energy_J = self.pdp.matrix_element_arc(n,l,j,nf,lf,jf)
                 else:
                     matrix_element, transition_energy_J = self.pdp.matrix_element_from_transition_table(nf,lf,jf,transition_table)
-                    
-                matrix_element_SI = matrix_element * c.a0 * c.e
+                    matrix_element_SI = matrix_element * c.a0 * c.e
 
                 common_factor = matrix_element_SI**2 / ( transition_energy_J**2 - laser_energy_J**2 )
                 
