@@ -1,0 +1,21 @@
+[project]
+name = "kamo"
+version = "0.0.1"
+description = "K team AMO functions, modeling, and simulations"
+authors = [
+    {name = "jpagett", email = "pagett.jared@gmail.com"},
+    {name = "Jared Pagett", email = "pagett.jared@gmail.com"},
+]
+dependencies = [
+    "arc",
+    "numpy",
+]
+requires-python = "==3.13.*"
+readme = "README.md"
+license = {text = "MIT"}
+
+
+[project.urls]
+Homepage = "https://github.com/ucsb-amo/k-amo"
+[tool.pdm]
+distribution = false
