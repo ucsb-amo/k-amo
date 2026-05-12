@@ -6,7 +6,7 @@ class BEC():
     def __init__(self):
         super().__init__()
     
-    def oscillator_len(trap_freq):
+    def oscillator_len(self,trap_freq):
         """
         Calculate oscillator length for a given trap frequency.
 
@@ -18,7 +18,7 @@ class BEC():
         """
         return np.sqrt(c.hbar / (c.m_K * trap_freq))
     
-    def get_axial_trap_frequency(radial_trap_frequency,lmbda=1064.e-9,waist=3.8e-6):
+    def get_axial_trap_frequency(self,radial_trap_frequency,lmbda=1064.e-9,waist=3.8e-6):
         """
         Calculate the axial trap frequency for an optical dipole trap.
 
@@ -32,7 +32,7 @@ class BEC():
         """
         return radial_trap_frequency * (lmbda / (np.sqrt(2)*np.pi * waist))
     
-    def chemical_potential(n_atoms,a_scattering,radial_trap_frequency):
+    def chemical_potential(self,n_atoms,a_scattering,radial_trap_frequency):
         """
         Calculate the chemical potential for an interacting BEC.
 
@@ -42,13 +42,15 @@ class BEC():
         radial_trap_frequency (float): radial trap frequency in 2pi*Hz.
 
         Returns:
-        float: chemical potential.
+        float: chemical potential in 2pi Hz.
         """
-        a_scat = a_scat * 5.29177210544e-11
+        a_scat = a_scattering * 5.29177210544e-11
         ax_trap = self.get_axial_trap_frequency(radial_trap_frequency=radial_trap_frequency)
-        return ((15**(2/5))/2) * ((n_atoms*a_scattering)/(np.sqrt(c.hbar / (c.m_K*(radial_trap_frequency*radial_trap_frequency*ax_trap)**(1/3)))))**(2/5) * c.hbar * (radial_trap_frequency*radial_trap_frequency*ax_trap)**(1/3)
+        bar_omega = (radial_trap_frequency*radial_trap_frequency*ax_trap)**(1/3)
+        bar_osc_len = self.oscillator_len(bar_omega)
+        return 1.4770884695313888 * (((n_atoms*a_scat)/bar_osc_len)**(2/5)) * bar_omega
     
-    def thomas_fermi_radius(n_atoms,a_scattering,radial_trap_frequency,trap_frequency):
+    def thomas_fermi_radius(self,n_atoms,a_scattering,radial_trap_frequency,trap_frequency):
         """
         Calculate the Thomas-Fermi radius for one dimension of an interacting BEC with given trap frequency.
 
@@ -59,7 +61,7 @@ class BEC():
         trap_frequency (float): trap frequency of the desired dimension in 2pi*Hz.
 
         Returns:
-        float: chemical potential.
+        float: Thomas-Fermi radius
         """
-        chem_pot = self.chemical_potential(n_atoms=n_atoms,a_scattering=a_scattering,radial_trap_frequency=radial_trap_frequency)
+        chem_pot = c.hbar * self.chemical_potential(n_atoms=n_atoms,a_scattering=a_scattering,radial_trap_frequency=radial_trap_frequency)
         return np.sqrt((2*chem_pot)/(c.m_K*(trap_frequency**2)))
