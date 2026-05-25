@@ -6,11 +6,14 @@ from sympy.physics import wigner
 
 class ComputePolarizabilities():
     def __init__(self,
-                atom=Potassium39(),
+                atom=None,
                 force_arc=False,
                 portal_data_parser:PortalDataParser = None,
                 n_max=16,
                 n_min=3):
+
+        if atom is None:
+            atom = Potassium39()
 
         if portal_data_parser == None:
             self.pdp = PortalDataParser(n_max=n_max, n_min=n_min,

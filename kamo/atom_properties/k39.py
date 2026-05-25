@@ -16,7 +16,6 @@ class Potassium39(arc.Potassium39):
     #         pi.Database.initialize_global_database(download_missing=True)
 
     def get_magnetic_field_from_ground_state_transition_frequency(self,
-
                                                                 f1, mf1, f2, mf2, transition_frequency_Hz,
                                                                 B_bounds_G=(0., 600.),
                                                                 N_interp=10000):
