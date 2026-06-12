@@ -3,6 +3,13 @@
 # Worker subprocesses importing kamo.constants must not touch ARC.
 # Python 3.7+ module __getattr__ defers these until first access.
 
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from .atom_properties.k39 import Potassium39
+    from .gaussian_beam import GaussianBeam
+    from .light_shift import ComputeLightShift, ComputePolarizabilities
+    from .BEC_properties import bec
+
 _lazy = {
     'Potassium39':             '.atom_properties.k39',
     'GaussianBeam':            '.gaussian_beam',

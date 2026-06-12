@@ -41,10 +41,11 @@ class Potassium39(arc.Potassium39):
             float or np.ndarray: the magnetic field(s) in G.
         """
 
-        if isinstance(transition_frequency_Hz,float) or isinstance(transition_frequency_Hz,int):
-            transition_frequency_Hz = [transition_frequency_Hz]
-        if isinstance(transition_frequency_Hz,list):
-            transition_frequency_Hz = np.array(transition_frequency_Hz)
+        # if isinstance(transition_frequency_Hz,float) or isinstance(transition_frequency_Hz,int):
+        #     transition_frequency_Hz = [transition_frequency_Hz]
+        # if isinstance(transition_frequency_Hz,list):
+        #     transition_frequency_Hz = np.array(transition_frequency_Hz)
+        transition_frequency_Hz = np.atleast_1d(transition_frequency_Hz)
 
         b = np.linspace(B_bounds_G[0], B_bounds_G[1], N_interp)
         f_transitions_MHz = self.get_ground_state_transition_frequency(f1, mf1, f2, mf2, b)
