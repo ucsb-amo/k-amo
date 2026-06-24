@@ -118,8 +118,8 @@ class GaussianBeam():
         -------
         float
         '''
-        w0 = self.waist
-        wz = self.beam_radius(z)
+        # w0 = self.waist
+        # wz = self.beam_radius(z)
         convert_W_per_m2_to_mW_per_cm2 = 0.1
         intensity_W_per_m2 = intensity_mW_per_cm2 / convert_W_per_m2_to_mW_per_cm2
         return intensity_W_per_m2 / self.intensity(1,r,z)
