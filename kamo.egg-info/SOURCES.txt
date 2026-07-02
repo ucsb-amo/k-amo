@@ -14,6 +14,11 @@ kamo/atom_properties/k39.py
 kamo/gaussian_beam/__init__.py
 kamo/gaussian_beam/gaussian.py
 kamo/gaussian_beam/thin_lens_gaussian.py
+kamo/hamiltonian/__init__.py
+kamo/hamiltonian/basis.py
+kamo/hamiltonian/builder.py
+kamo/hamiltonian/diagonalize.py
+kamo/hamiltonian/model.py
 kamo/light_shift/__init__.py
 kamo/light_shift/compute_light_shift.py
 kamo/light_shift/compute_polarizabilities.py

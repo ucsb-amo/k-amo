@@ -1,2 +1,5 @@
 arc
 numpy
+scipy
+sympy
+matplotlib

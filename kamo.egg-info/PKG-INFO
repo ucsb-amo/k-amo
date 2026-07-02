@@ -11,5 +11,8 @@ Requires-Python: ==3.13.*
 Description-Content-Type: text/markdown
 Requires-Dist: arc
 Requires-Dist: numpy
+Requires-Dist: scipy
+Requires-Dist: sympy
+Requires-Dist: matplotlib
 Dynamic: author
 Dynamic: home-page
