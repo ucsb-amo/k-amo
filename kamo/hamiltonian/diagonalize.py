@@ -147,14 +147,17 @@ class SweepResult:
         elements:
 
         * ``(n, l, j, m_j: float, m_i: float)`` → ``(n, l, j, F: int, mF: int)``
-          — finds the F with the largest CG weight for the given ``(m_j, m_i)``.
         * ``(n, l, j, F: int, mF: int)`` → ``(n, l, j, m_j: float, m_i: float)``
-          — finds the ``(m_j, m_i)`` pair with the largest CG weight for the
-          given ``(F, mF)``.
 
-        The conversion uses Clebsch-Gordan coefficients and is purely algebraic
-        (no sweep data required).  It is most meaningful at low field where the
-        coupled and uncoupled labels are nearly exact.
+        The mapping is **bijective**: F values are processed in ascending order
+        and each claims the available ``(m_j, m_i)`` component with the largest
+        CG magnitude (ties broken by most-negative ``m_j``).  This ensures that
+        equal-weight cases such as ``|F=1, mF=0>`` and ``|F=2, mF=0>`` (both
+        50/50 superpositions of the same two uncoupled states) get distinct
+        representatives:
+
+        * ``(F=1, mF=0)`` ↔ ``(m_j=-1/2, m_i=+1/2)``   [lower mJ → lower F]
+        * ``(F=2, mF=0)`` ↔ ``(m_j=+1/2, m_i=-1/2)``   [upper mJ → upper F]
 
         Parameters
         ----------
@@ -184,42 +187,61 @@ class SweepResult:
         if i_nuc is None:
             raise KeyError(f"Manifold ({n}, {l}, {j}) not in basis.")
 
-        allowed_F = [abs(j - i_nuc) + k
-                     for k in range(int(round(2 * min(j, i_nuc))) + 1)]
+        # build the bijective {F: (mj, mi)} map for the relevant mF
+        mF_query = (a + b) if not (isinstance(a, int) and isinstance(b, int)) else b
+        rep_map = self._bijective_F_representative(n, l, j, mF_query, i_nuc)
 
         if isinstance(a, int) and isinstance(b, int):
-            # F, mF -> dominant (m_j, m_i)
             F, mF = a, b
-            best_mj, best_mi, best_cg = None, None, -1.0
-            mj_vals = [-j + k for k in range(int(round(2 * j)) + 1)]
-            mi_vals = [-i_nuc + k for k in range(int(round(2 * i_nuc)) + 1)]
-            for m_j in mj_vals:
-                m_i = mF - m_j
-                if not any(abs(m_i - v) < 1e-9 for v in mi_vals):
-                    continue
-                cg = abs(_clebsch(j, m_j, i_nuc, m_i, F, mF))
-                if cg > best_cg:
-                    best_cg, best_mj, best_mi = cg, m_j, m_i
-            if best_mj is None:
-                raise ValueError(
-                    f"|{n},{l},{j}; F={F}, mF={mF}> has no valid (m_j, m_i).")
-            return (n, l, j, best_mj, best_mi)
-
+            key = round(float(F), 9)
+            if key not in rep_map:
+                raise ValueError(f"|{n},{l},{j}; F={F}, mF={mF}> has no valid (m_j, m_i).")
+            return (n, l, j, rep_map[key][0], rep_map[key][1])
         else:
-            # m_j, m_i -> dominant F  (mF = m_j + m_i is fixed)
             m_j, m_i = float(a), float(b)
-            mF = m_j + m_i
-            best_F, best_cg = None, -1.0
-            for F in allowed_F:
-                if abs(mF) > F + 1e-9:
+            for F_key, (mj, mi) in rep_map.items():
+                if abs(mj - m_j) < 1e-9 and abs(mi - m_i) < 1e-9:
+                    return (n, l, j, int(round(F_key)), int(round(m_j + m_i)))
+            raise ValueError(f"|{n},{l},{j}; m_j={m_j}, m_i={m_i}> is not a representative state.")
+
+    def _bijective_F_representative(self, n, l, j, mF, i_nuc) -> dict:
+        """Return ``{F: (mj, mi)}`` giving each F's unique representative
+        uncoupled component for the given ``mF``.
+
+        F values are processed in ascending order; each claims the available
+        ``(mj, mi)`` component with the largest CG magnitude.  In case of a
+        tie (equal CG magnitudes for multiple remaining components), the
+        component with the most-negative ``mj`` is preferred — this guarantees
+        that lower-F states are associated with lower-``mj`` components.
+        """
+        mj_vals = [-j + k for k in range(int(round(2 * j)) + 1)]
+        mi_vals_set = {round(-i_nuc + k, 9)
+                       for k in range(int(round(2 * i_nuc)) + 1)}
+        allowed_F = sorted(abs(j - i_nuc) + k
+                           for k in range(int(round(2 * min(j, i_nuc))) + 1))
+
+        claimed: set = set()
+        result: dict = {}
+        for F in allowed_F:
+            if abs(mF) > F + 1e-9:
+                continue
+            best_mj, best_mi, best_cg = None, None, -1.0
+            for mj in mj_vals:  # already ascending (most-negative first)
+                mi = mF - mj
+                if round(mi, 9) not in mi_vals_set:
                     continue
-                cg = abs(_clebsch(j, m_j, i_nuc, m_i, F, mF))
-                if cg > best_cg:
-                    best_cg, best_F = cg, F
-            if best_F is None:
-                raise ValueError(
-                    f"|{n},{l},{j}; m_j={m_j}, m_i={m_i}> has no valid F.")
-            return (n, l, j, int(round(best_F)), int(round(mF)))
+                if (round(mj, 9), round(mi, 9)) in claimed:
+                    continue
+                cg = abs(_clebsch(j, mj, i_nuc, mi, F, mF))
+                if cg > best_cg + 1e-12:  # strictly better
+                    best_cg, best_mj, best_mi = cg, mj, mi
+                # equal: keep first (most-negative mj) — no update
+            if best_mj is not None:
+                result[round(F, 9)] = (best_mj, best_mi)
+                claimed.add((round(best_mj, 9), round(best_mi, 9)))
+        return result
+
+
 
     # -- state lookup -------------------------------------------------------
     def indices_for(self, n: int, l: int, j: float,
