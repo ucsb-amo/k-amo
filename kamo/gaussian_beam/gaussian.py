@@ -36,7 +36,13 @@ class GaussianBeam():
     beam_radius
     intensity
     '''
-    def __init__(self,waist,wavelength,power=0.,n_medium=1.,include_trap_properties=False):
+    def __init__(self,waist,wavelength=None,power=0.,n_medium=1.,include_trap_properties=False,frequency=None):
+        if wavelength is None and frequency is None:
+            raise ValueError("Must provide either wavelength or frequency.")
+        if wavelength is not None and frequency is not None:
+            raise ValueError("Provide either wavelength or frequency, not both.")
+        if frequency is not None:
+            wavelength = c.c / frequency
         self.waist = waist
         self.wavelength = wavelength
         self.n_medium = n_medium
