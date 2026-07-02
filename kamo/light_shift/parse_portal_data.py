@@ -218,8 +218,8 @@ class PortalDataParser():
             ni,li,ji = self.state_label_to_quantum_numbers(state_i)
             matrix_element_au, transition_energy_J = self.matrix_element_arc(ni,li,ji,nf,lf,jf)
         else:
-            matrix_element_au = elem_i_to_f['Matrix element (a.u.)'].values
-            transition_wavelength_m = elem_i_to_f['Wavelength (nm)'].values * 1.e-9
+            matrix_element_au = elem_i_to_f['Matrix element (a.u.)'].values[0]
+            transition_wavelength_m = elem_i_to_f['Wavelength (nm)'].values[0] * 1.e-9
 
             transition_energy_J = c.h * c.c / transition_wavelength_m
 

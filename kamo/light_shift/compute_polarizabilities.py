@@ -167,10 +167,7 @@ class ComputePolarizabilities():
             state.
         """   
         
-        if isinstance(wavelength_m,list):
-            wavelength_m = np.array(wavelength_m)
-        elif isinstance(wavelength_m,float):
-            wavelength_m = np.array([wavelength_m])
+        wavelength_m = self._handle_wavelength_arraylike(wavelength_m)
 
         if isinstance(polarization,list):
             polarization = np.array(polarization)
