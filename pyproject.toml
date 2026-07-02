@@ -9,6 +9,9 @@ authors = [
 dependencies = [
     "arc",
     "numpy",
+    "scipy",
+    "sympy",
+    "matplotlib",
 ]
 requires-python = "==3.13.*"
 readme = "README.md"

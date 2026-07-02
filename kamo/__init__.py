@@ -9,6 +9,7 @@ if TYPE_CHECKING:
     from .gaussian_beam import GaussianBeam
     from .light_shift import ComputeLightShift, ComputePolarizabilities
     from .BEC_properties import bec
+    from .hamiltonian import AtomicStructure
 
 _lazy = {
     'Potassium39':             '.atom_properties.k39',
@@ -16,6 +17,7 @@ _lazy = {
     'ComputeLightShift':       '.light_shift',
     'ComputePolarizabilities': '.light_shift',
     'bec':                     '.BEC_properties',
+    'AtomicStructure':         '.hamiltonian',
 }
 
 def __getattr__(name):
