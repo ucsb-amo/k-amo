@@ -52,6 +52,35 @@ class AtomicStructure:
         self.builder = HamiltonianBuilder(
             self.basis, atom=atom, energy_reference_nlj=energy_reference_nlj)
 
+    def __getitem__(self, key):
+        """Access a manifold in the atomic structure.
+
+        Parameters
+        ----------
+        key : int or tuple
+            - int: index of the manifold by order of appearance (0-based).
+            - 3-tuple (n, l, j): manifold with those quantum numbers.
+
+        Returns
+        -------
+        Manifold
+
+        Examples
+        --------
+        >>> model = AtomicStructure([(4, 0, 0.5), (4, 1, 0.5), (4, 1, 1.5)])
+        >>> model[0]                    # first manifold: (4, 0, 0.5)
+        >>> model[(4, 1, 0.5)]          # second manifold by quantum numbers
+        """
+        if isinstance(key, int):
+            return self.basis.manifold_by_index(key)
+        elif isinstance(key, tuple) and len(key) == 3:
+            return self.basis[key]
+        else:
+            raise TypeError(
+                "AtomicStructure indices must be int (manifold order) "
+                "or 3-tuple (n, l, j) (manifold quantum numbers)."
+            )
+
     # ------------------------------------------------------------------ H0
     def h0(self, include_quadrupole: bool = True) -> np.ndarray:
         """Field-free Hamiltonian (Hz)."""

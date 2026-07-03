@@ -138,20 +138,27 @@ class SweepResult:
     def label(self, i: int, step: int = 0) -> str:
         """Return a human-readable label for tracked state ``i`` at ``step``.
 
-        Uses the **adiabatic (Paschen-Back) convention**: the state is
-        identified by its ``(F, mF)`` via CG overlap of the eigenvector,
-        and the displayed ``(mJ, mI)`` are the high-field limiting quantum
-        numbers from :meth:`convert_label`.
+        The label uses the **Paschen-Back (adiabatic) convention**:
+
+        * ``(m_j, m_i)`` are the high-field limiting quantum numbers of the
+          dominant uncoupled component of the eigenstate.
+        * ``(F, m_F)`` are the zero-field hyperfine quantum numbers that
+          adiabatically connect to those high-field numbers.
+
+        The label is looked up from the manifold's cached
+        :attr:`~.basis.Manifold.label_map`, so this method is O(1) after the
+        first call and is correct for both magnetic-field and laser-intensity
+        sweeps (the dressed states of a laser sweep are labelled by their
+        dominant bare-state character).
         """
-        s = self.dominant_state(i, step)   # for n, l, j context only
-        F, mF = self._identify_F_mF(s.n, s.l, s.j, i, step)
-        i_nuc = next(man.i_nuclear for man in self.basis.manifolds
-                     if man.n == s.n and man.l == s.l
-                     and abs(man.j - s.j) < 1e-9)
-        rep = self._bijective_F_representative(s.n, s.l, s.j, mF, i_nuc)
-        mj, mi = rep.get(round(float(F), 9), (s.m_j, s.m_i))
-        return (f"|{s.n},{s.l},{s.j}; m_j={mj:+.1f}, m_i={mi:+.1f}> "
-                f"(F={F}, mF={mF:+d})")
+        s = self.dominant_state(i, step)
+        man = next((m for m in self.basis.manifolds
+                    if m.n == s.n and m.l == s.l and abs(m.j - s.j) < 1e-9), None)
+        if man is not None:
+            F, mF = man.label_for(s.m_j, s.m_i)
+            return (f"|{s.n},{s.l},{s.j}; m_j={s.m_j:+.1f}, m_i={s.m_i:+.1f}> "
+                    f"(F={F}, mF={mF:+d})")
+        return f"|{s.n},{s.l},{s.j}; m_j={s.m_j:+.1f}, m_i={s.m_i:+.1f}>"
 
     def convert_label(self, state: tuple) -> tuple:
         """Convert a state 5-tuple between uncoupled and coupled-basis labels.
@@ -291,17 +298,22 @@ class SweepResult:
         --------------
         ``None``
             All states.
+        ``Manifold``
+            All tracked states in that manifold.
         ``(n, l, j)`` — 3-tuple of numbers
             All tracked states in the ``(n, l, j)`` manifold.
         ``(n, l, j, m_j, m_i)`` — 5-tuple of numbers
             The single tracked state whose dominant component is
             ``|n l j; m_j m_i>``.
-        list/sequence of tuples
-            Each element is a ``(n, l, j)`` or ``(n, l, j, m_j, m_i)`` tuple;
-            results are concatenated (duplicates preserved).
+        list/sequence of tuples or Manifold objects
+            Each element is a ``Manifold``, ``(n, l, j)`` tuple,
+            or ``(n, l, j, m_j, m_i)`` tuple; results are concatenated
+            (duplicates preserved).
         sequence of int
             Explicit index list (existing behaviour).
         """
+        from .basis import Manifold
+
         if states is None:
             return list(range(self.energies.shape[1]))
 
@@ -311,23 +323,31 @@ class SweepResult:
                     and all(isinstance(s, (int, float)) for s in t))
 
         def _resolve_one(t):
-            if len(t) == 3:
+            if isinstance(t, Manifold):
+                return self.indices_for(t.n, t.l, t.j, step=step)
+            elif len(t) == 3:
                 n, l, j = t
                 return self.indices_for(n, l, j, step=step)
             else:
                 n, l, j, m_j, m_i = t
                 return self.indices_for(n, l, j, m_j, m_i, step=step)
 
+        # Handle single Manifold
+        if isinstance(states, Manifold):
+            return _resolve_one(states)
+
+        # Handle single qn-tuple
         if _is_qn_tuple(states):
             return _resolve_one(states)
 
-        # list/sequence — check whether elements are qn-tuples or plain ints
+        # list/sequence — check whether elements are qn-tuples, Manifolds, or plain ints
         items = list(states)
-        if items and _is_qn_tuple(items[0]):
-            out = []
-            for t in items:
-                out.extend(_resolve_one(t))
-            return out
+        if items:
+            if isinstance(items[0], Manifold) or _is_qn_tuple(items[0]):
+                out = []
+                for t in items:
+                    out.extend(_resolve_one(t))
+                return out
 
         return [int(i) for i in items]
 
@@ -389,46 +409,6 @@ class SweepResult:
         # vectors[step] has shape (n_basis, n_tracked); columns are eigenvectors
         overlaps = np.abs(psi @ self.vectors[step]) ** 2
         return int(np.argmax(overlaps))
-
-    def _identify_F_mF(self, n: int, l: int, j: float,
-                       tracked_idx: int, step: int) -> tuple:
-        """Identify the ``(F, mF)`` label for tracked state ``tracked_idx``
-        at ``step`` via CG overlap.
-
-        For each ``(F, mF)`` in the ``(n, l, j)`` manifold, the squared
-        overlap ``|<F,mF|eigenvec>|^2`` is computed; the ``(F, mF)`` with
-        the largest overlap is returned as ``(int, int)``.
-        """
-        i_nuc = None
-        for man in self.basis.manifolds:
-            if man.n == n and man.l == l and abs(man.j - j) < 1e-9:
-                i_nuc = man.i_nuclear
-                break
-        if i_nuc is None:
-            raise KeyError(f"Manifold ({n}, {l}, {j}) not in basis.")
-
-        vec = self.vectors[step][:, tracked_idx]
-        all_F = [abs(j - i_nuc) + k
-                 for k in range(int(round(2 * min(j, i_nuc))) + 1)]
-        mF_vals = {round(s.m_j + s.m_i, 9)
-                   for s in self.basis.states
-                   if s.n == n and s.l == l and abs(s.j - j) < 1e-9}
-
-        best_F, best_mF, best_ov = None, None, -1.0
-        for F in all_F:
-            for mF in mF_vals:
-                if abs(mF) > F + 1e-9:
-                    continue
-                psi = np.zeros(self.basis.dim, dtype=complex)
-                for s in self.basis.states:
-                    if s.n == n and s.l == l and abs(s.j - j) < 1e-9:
-                        cg = _clebsch(j, s.m_j, i_nuc, s.m_i, F, mF)
-                        if cg:
-                            psi[s.index] = cg
-                ov = abs(np.vdot(psi, vec)) ** 2
-                if ov > best_ov:
-                    best_ov, best_F, best_mF = ov, F, mF
-        return int(round(best_F)), int(round(best_mF))
 
     def get_energy(self, n: int, l: int, j: float,
                    m_j: float, m_i: float,
@@ -538,12 +518,13 @@ class SweepResult:
             Units for the energy axis (default MHz).
         x_unit : str, optional
             Passed to :meth:`x_axis` (e.g. ``"mW/cm^2"`` for intensity sweeps).
-        states : sequence of int, or (n, l, j) tuple, or (n, l, j, m_j, m_i) tuple, or list of such tuples, optional
+        states : Manifold, sequence of int, (n, l, j) tuple, (n, l, j, m_j, m_i) tuple, or list of such, optional
             Which states to plot.  Accepts:
             - ``None`` (default): all states.
+            - ``Manifold`` object: all states in that manifold.
             - ``(n, l, j)`` 3-tuple: all states in that manifold.
             - ``(n, l, j, m_j, m_i)`` 5-tuple: a single state.
-            - list of 3- or 5-tuples: union of the above, concatenated.
+            - list of Manifolds and/or 3- or 5-tuples: union, concatenated.
             - sequence of int: explicit tracked-state indices.
         label_states : bool
             Annotate each line with its dominant-basis-state label.
@@ -560,6 +541,15 @@ class SweepResult:
         Returns
         -------
         matplotlib Axes.
+
+        Examples
+        --------
+        Plot all ground-manifold states in a magnetic sweep:
+
+        >>> model = AtomicStructure([(4, 0, 0.5), (4, 1, 0.5), (4, 1, 1.5)])
+        >>> res = model.magnetic_sweep(B_max=600.0)
+        >>> res.plot(states=model[0])  # first manifold (4, 0, 0.5)
+        >>> res.plot(states=(4, 0, 0.5))  # equivalent: by quantum numbers
         """
         import matplotlib.pyplot as plt
 

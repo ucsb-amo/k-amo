@@ -71,6 +71,9 @@ class Manifold:
         self.l = int(l)
         self.j = float(j)
         self.i_nuclear = float(i_nuclear)
+        # Lazily built by _build_label_cache()
+        self._label_cache: dict | None = None      # (mj, mi) -> (F, mF)
+        self._label_cache_rev: dict | None = None  # (F, mF) -> (mj, mi)
 
     @property
     def nlj(self) -> Tuple[int, int, float]:
@@ -94,6 +97,226 @@ class Manifold:
         f_max = self.j + self.i_nuclear
         n = int(round(f_max - f_min)) + 1
         return [f_min + k for k in range(n)]
+
+    def states(self, *, F=None, mF=None, mJ=None, mI=None
+                   ) -> List[Tuple[int, int, float, float, float]]:
+        """Return states in this manifold, optionally filtered by quantum numbers.
+
+        All keyword arguments are optional and combinable.  At least one filter
+        must match — any state failing any supplied filter is excluded.
+
+        Parameters
+        ----------
+        F : int or float, optional
+            Total angular momentum F = j + I.  Must lie in ``allowed_F()``.
+        mF : float, optional
+            Total magnetic quantum number m_F = m_j + m_i.  Range: [-F, F]
+            if F is also given, otherwise [-j-I, j+I].
+            Incompatible with simultaneously specifying mJ and mI (since those
+            already fix m_F = mJ + mI).
+        mJ : float, optional
+            Magnetic quantum number of J.  Range: [-j, j].
+        mI : float, optional
+            Magnetic quantum number of nuclear spin I.  Range: [-I, I].
+
+        Returns
+        -------
+        list of (n, l, j, m_j, m_i) 5-tuples
+
+        Raises
+        ------
+        ValueError
+            If a supplied value is out of range for this manifold, if mF is
+            given together with both mJ and mI (over-constrained), or if F is
+            not in ``allowed_F()``.
+
+        Examples
+        --------
+        >>> gs = model[0]
+        >>> gs.get_states()                        # all 8 states
+        >>> gs.get_states(mJ=-0.5)                 # m_j = -1/2 sector (4 states)
+        >>> gs.get_states(mI=1.5)                  # m_i = +3/2 (2 states)
+        >>> gs.get_states(mF=0.0)                  # m_F = 0 (2 states)
+        >>> gs.get_states(F=2)                     # states with F=2 label (5 states)
+        >>> gs.get_states(F=1, mF=-1)              # single (F=1, mF=-1) state
+        >>> gs.get_states(mJ=0.5, mI=-0.5)         # single uncoupled state
+        >>> gs.get_states(mJ=0.5, mF=0.0)          # mJ + mI = 0 and mJ = 0.5 -> mI = -0.5
+        >>> res.plot(states=gs.get_states(mF=0.0)) # pass directly to plot
+        """
+        # ---- validate individual values against manifold ranges ----
+        valid_mj = set(round(v, 9) for v in _half_integer_range(self.j))
+        valid_mi = set(round(v, 9) for v in _half_integer_range(self.i_nuclear))
+        valid_F  = set(round(v, 9) for v in self.allowed_F())
+        mF_range = self.j + self.i_nuclear  # max |m_F|
+
+        if mJ is not None and round(float(mJ), 9) not in valid_mj:
+            raise ValueError(
+                f"mJ={mJ} is not valid for j={self.j}; "
+                f"allowed: {sorted(valid_mj)}")
+        if mI is not None and round(float(mI), 9) not in valid_mi:
+            raise ValueError(
+                f"mI={mI} is not valid for I={self.i_nuclear}; "
+                f"allowed: {sorted(valid_mi)}")
+        if F is not None and round(float(F), 9) not in valid_F:
+            raise ValueError(
+                f"F={F} is not valid for this manifold (j={self.j}, I={self.i_nuclear}); "
+                f"allowed: {sorted(valid_F)}")
+        if mF is not None and abs(float(mF)) > mF_range + 1e-9:
+            raise ValueError(
+                f"mF={mF} is out of range for this manifold; "
+                f"|mF| must be <= {mF_range}")
+        if F is not None and mF is not None and abs(float(mF)) > float(F) + 1e-9:
+            raise ValueError(
+                f"mF={mF} is out of range for F={F}; |mF| must be <= F")
+
+        # ---- over-constrained check: mJ + mI already fix mF ----
+        if mF is not None and mJ is not None and mI is not None:
+            implied = round(float(mJ) + float(mI), 9)
+            if abs(implied - float(mF)) > 1e-9:
+                raise ValueError(
+                    f"mJ={mJ} + mI={mI} = {implied} is inconsistent with mF={mF}")
+            # redundant but harmless — drop mF and proceed via mJ+mI
+            mF = None
+
+        # ---- build the set of (m_j, m_i) that satisfy F filter ----
+        # Use the bijective Paschen-Back representative convention: for each mF,
+        # sort valid (mj, mi) pairs by mj ascending and valid F values ascending,
+        # then pair them bijectively.  This gives exactly 2F+1 states per F.
+        f_pairs: set | None = None
+        if F is not None:
+            f_pairs = set()
+            F_float = float(F)
+            all_F = sorted(self.allowed_F())
+            for mF_v in _half_integer_range(F_float):
+                mj_vals = sorted(-self.j + k for k in range(int(round(2 * self.j)) + 1))
+                mi_set = set(round(-self.i_nuclear + k, 9)
+                             for k in range(int(round(2 * self.i_nuclear)) + 1))
+                valid_pairs = [(mj, mF_v - mj) for mj in mj_vals
+                               if round(mF_v - mj, 9) in mi_set]
+                valid_F_for_mF = [f for f in all_F if abs(mF_v) <= f + 1e-9]
+                # k-th F (ascending) <-> k-th (mj, mi) pair (mj ascending)
+                rep_map = {round(f, 9): pair
+                           for f, pair in zip(valid_F_for_mF, valid_pairs)}
+                key = round(F_float, 9)
+                if key in rep_map:
+                    mj_r, mi_r = rep_map[key]
+                    f_pairs.add((round(mj_r, 9), round(mi_r, 9)))
+
+        # ---- filter all substates ----
+        result = []
+        for m_j, m_i in self.substates():
+            m_j_r = round(m_j, 9)
+            m_i_r = round(m_i, 9)
+            if mJ is not None and abs(m_j_r - round(float(mJ), 9)) > 1e-9:
+                continue
+            if mI is not None and abs(m_i_r - round(float(mI), 9)) > 1e-9:
+                continue
+            if mF is not None and abs(round(m_j + m_i, 9) - round(float(mF), 9)) > 1e-9:
+                continue
+            if f_pairs is not None and (m_j_r, m_i_r) not in f_pairs:
+                continue
+            result.append((self.n, self.l, self.j, m_j, m_i))
+        return result
+
+    # -- Paschen-Back label map --------------------------------------------
+    def _build_label_cache(self) -> None:
+        """Build the bijective Paschen-Back (mj, mi) <-> (F, mF) label map.
+
+        For each total magnetic quantum number m_F, the valid (m_j, m_i)
+        pairs are sorted by m_j ascending and the valid F values are sorted
+        ascending, then paired bijectively.  This gives the adiabatic
+        connection between the high-field Paschen-Back states and the
+        zero-field hyperfine (F, m_F) states.
+        """
+        fwd: dict = {}   # (mj, mi) -> (F, mF)
+        rev: dict = {}   # (F, mF) -> (mj, mi)
+
+        all_F = sorted(self.allowed_F())
+        mj_vals = sorted(-self.j + k for k in range(int(round(2 * self.j)) + 1))
+        mi_set = {round(-self.i_nuclear + k, 9)
+                  for k in range(int(round(2 * self.i_nuclear)) + 1)}
+
+        # all possible m_F = m_j + m_i
+        n_mF = int(round(2 * (self.j + self.i_nuclear))) + 1
+        all_mF = [-self.j - self.i_nuclear + k for k in range(n_mF)]
+
+        for mF_v in all_mF:
+            # (mj, mi) pairs with the right m_F, ordered by mj ascending
+            valid_pairs = []
+            for mj in mj_vals:
+                mi = round(mF_v - mj, 9)
+                if mi in mi_set:
+                    valid_pairs.append((mj, mi))
+            # F values that can have this m_F, ordered ascending
+            valid_F = [f for f in all_F if abs(mF_v) <= f + 1e-9]
+            # k-th F (ascending) <-> k-th (mj, mi) pair (mj ascending)
+            for F_v, (mj_r, mi_r) in zip(valid_F, valid_pairs):
+                key_fwd = (round(mj_r, 9), mi_r)
+                key_rev = (int(round(F_v)), int(round(mF_v)))
+                fwd[key_fwd] = key_rev
+                rev[key_rev] = key_fwd
+
+        self._label_cache = fwd
+        self._label_cache_rev = rev
+
+    @property
+    def label_map(self) -> dict:
+        """Bijective map ``{(mj, mi): (F, mF)}`` (Paschen-Back adiabatic connection).
+
+        Built on first access; subsequent accesses are O(1).
+        """
+        if self._label_cache is None:
+            self._build_label_cache()
+        return self._label_cache
+
+    @property
+    def reverse_label_map(self) -> dict:
+        """Bijective map ``{(F, mF): (mj, mi)}`` (inverse of :attr:`label_map`)."""
+        if self._label_cache_rev is None:
+            self._build_label_cache()
+        return self._label_cache_rev
+
+    def label_for(self, m_j: float, m_i: float) -> tuple:
+        """Return ``(F, mF)`` for the state that adiabatically connects to
+        the high-field Paschen-Back state ``|m_j, m_i>``.
+
+        Parameters
+        ----------
+        m_j, m_i : float
+            Uncoupled magnetic quantum numbers.
+
+        Returns
+        -------
+        (F, mF) : (int, int)
+        """
+        key = (round(float(m_j), 9), round(float(m_i), 9))
+        try:
+            return self.label_map[key]
+        except KeyError:
+            raise KeyError(
+                f"|{self.n},{self.l},{self.j}; m_j={m_j}, m_i={m_i}> "
+                f"not found in label map for this manifold.")
+
+    def state_for(self, F: int, mF: int) -> tuple:
+        """Return ``(mj, mi)`` for the high-field Paschen-Back state that
+        adiabatically connects to the zero-field state ``|F, mF>``.
+
+        Parameters
+        ----------
+        F, mF : int
+            Coupled-basis quantum numbers.
+
+        Returns
+        -------
+        (mj, mi) : (float, float)
+        """
+        key = (int(round(F)), int(round(mF)))
+        try:
+            return self.reverse_label_map[key]
+        except KeyError:
+            raise KeyError(
+                f"|{self.n},{self.l},{self.j}; F={F}, mF={mF}> "
+                f"not found in label map for this manifold.")
 
     def __repr__(self) -> str:
         return f"Manifold(n={self.n}, l={self.l}, j={self.j}, dim={self.dim})"
@@ -140,8 +363,37 @@ class Basis:
     def __iter__(self):
         return iter(self.states)
 
-    def __getitem__(self, i: int) -> BasisState:
-        return self.states[i]
+    def __getitem__(self, key):
+        """Access a basis state or manifold.
+
+        Parameters
+        ----------
+        key : int or tuple
+            - int: index into the basis states; returns a BasisState.
+            - 3-tuple (n, l, j): returns the Manifold with those quantum numbers.
+
+        Returns
+        -------
+        BasisState or Manifold
+
+        Examples
+        --------
+        >>> basis[0]                    # first basis state
+        >>> basis[(4, 0, 0.5)]          # manifold by (n, l, j)
+        """
+        if isinstance(key, int):
+            return self.states[key]
+        elif isinstance(key, tuple) and len(key) == 3:
+            n, l, j = key
+            for man in self.manifolds:
+                if man.n == n and man.l == l and abs(man.j - j) < 1e-9:
+                    return man
+            raise KeyError(f"Manifold {key} not in basis.")
+        else:
+            raise TypeError(
+                "Basis indices must be int (for states) or "
+                "3-tuple (n, l, j) (for manifolds)."
+            )
 
     @property
     def dim(self) -> int:
@@ -162,6 +414,20 @@ class Basis:
         for man in self.manifolds:
             yield man, slice(start, start + man.dim)
             start += man.dim
+
+    def manifold_by_index(self, idx: int) -> Manifold:
+        """Return the manifold at the given index (0-based, ordered by appearance).
+
+        Parameters
+        ----------
+        idx : int
+            Index into the manifolds list.
+
+        Returns
+        -------
+        Manifold
+        """
+        return self.manifolds[idx]
 
     def m_f_values(self) -> np.ndarray:
         return np.array([s.m_f for s in self.states])
