@@ -136,9 +136,22 @@ class SweepResult:
         return self.basis[int(np.argmax(weights))]
 
     def label(self, i: int, step: int = 0) -> str:
-        s = self.dominant_state(i, step)
-        return (f"|{s.n},{s.l},{s.j}; m_j={s.m_j:+.1f}, m_i={s.m_i:+.1f}> "
-                f"(m_F={s.m_f:+.1f})")
+        """Return a human-readable label for tracked state ``i`` at ``step``.
+
+        Uses the **adiabatic (Paschen-Back) convention**: the state is
+        identified by its ``(F, mF)`` via CG overlap of the eigenvector,
+        and the displayed ``(mJ, mI)`` are the high-field limiting quantum
+        numbers from :meth:`convert_label`.
+        """
+        s = self.dominant_state(i, step)   # for n, l, j context only
+        F, mF = self._identify_F_mF(s.n, s.l, s.j, i, step)
+        i_nuc = next(man.i_nuclear for man in self.basis.manifolds
+                     if man.n == s.n and man.l == s.l
+                     and abs(man.j - s.j) < 1e-9)
+        rep = self._bijective_F_representative(s.n, s.l, s.j, mF, i_nuc)
+        mj, mi = rep.get(round(float(F), 9), (s.m_j, s.m_i))
+        return (f"|{s.n},{s.l},{s.j}; m_j={mj:+.1f}, m_i={mi:+.1f}> "
+                f"(F={F}, mF={mF:+d})")
 
     def convert_label(self, state: tuple) -> tuple:
         """Convert a state 5-tuple between uncoupled and coupled-basis labels.
@@ -208,38 +221,33 @@ class SweepResult:
         """Return ``{F: (mj, mi)}`` giving each F's unique representative
         uncoupled component for the given ``mF``.
 
-        F values are processed in ascending order; each claims the available
-        ``(mj, mi)`` component with the largest CG magnitude.  In case of a
-        tie (equal CG magnitudes for multiple remaining components), the
-        component with the most-negative ``mj`` is preferred — this guarantees
-        that lower-F states are associated with lower-``mj`` components.
+        Uses the **Paschen-Back adiabatic-connection** convention: for a given
+        mF, the valid ``(mJ, mI)`` pairs are sorted by mJ ascending and the
+        valid F values are sorted ascending, then paired bijectively.
+
+        This correctly handles states that swap their dominant uncoupled
+        character across avoided crossings in the Breit-Rabi diagram — e.g.
+        in K-39 (inverted hyperfine, A < 0) the F=1,mF=−1 state is
+        predominantly ``(mJ=+½, mI=−3/2)`` at zero field but adiabatically
+        connects to ``(mJ=−½, mI=−½)`` at high field.  The CG-dominant
+        zero-field label is therefore misleading; the high-field label is used
+        here.
         """
-        mj_vals = [-j + k for k in range(int(round(2 * j)) + 1)]
+        mj_vals = sorted(-j + k for k in range(int(round(2 * j)) + 1))
         mi_vals_set = {round(-i_nuc + k, 9)
                        for k in range(int(round(2 * i_nuc)) + 1)}
-        allowed_F = sorted(abs(j - i_nuc) + k
-                           for k in range(int(round(2 * min(j, i_nuc))) + 1))
 
-        claimed: set = set()
-        result: dict = {}
-        for F in allowed_F:
-            if abs(mF) > F + 1e-9:
-                continue
-            best_mj, best_mi, best_cg = None, None, -1.0
-            for mj in mj_vals:  # already ascending (most-negative first)
-                mi = mF - mj
-                if round(mi, 9) not in mi_vals_set:
-                    continue
-                if (round(mj, 9), round(mi, 9)) in claimed:
-                    continue
-                cg = abs(_clebsch(j, mj, i_nuc, mi, F, mF))
-                if cg > best_cg + 1e-12:  # strictly better
-                    best_cg, best_mj, best_mi = cg, mj, mi
-                # equal: keep first (most-negative mj) — no update
-            if best_mj is not None:
-                result[round(F, 9)] = (best_mj, best_mi)
-                claimed.add((round(best_mj, 9), round(best_mi, 9)))
-        return result
+        # valid (mJ, mI) pairs for this mF, ordered by mJ ascending
+        valid_pairs = [(mj, mF - mj) for mj in mj_vals
+                       if round(mF - mj, 9) in mi_vals_set]
+
+        # valid F values for this mF, sorted ascending
+        all_F = sorted(abs(j - i_nuc) + k
+                       for k in range(int(round(2 * min(j, i_nuc))) + 1))
+        valid_F = [F for F in all_F if abs(mF) <= F + 1e-9]
+
+        # k-th F (ascending) ↔ k-th (mJ, mI) pair (mJ ascending)
+        return {round(F, 9): pair for F, pair in zip(valid_F, valid_pairs)}
 
 
 
@@ -321,19 +329,34 @@ class SweepResult:
                 out.extend(_resolve_one(t))
             return out
 
-        return items
+        return [int(i) for i in items]
 
     def _tracked_index(self, n: int, l: int, j: float,
                        m_j: float, m_i: float, step: int) -> int:
-        """Return the tracked-state column index whose uncoupled component
-        ``|n l j; m_j m_i>`` has the largest weight at ``step``."""
-        try:
-            basis_idx = self.basis.index_of(n, l, j, m_j, m_i)
-        except KeyError:
-            raise KeyError(
-                f"|{n},{l},{j}; m_j={m_j}, m_i={m_i}> is not in the basis.")
-        weights = np.abs(self.vectors[step][basis_idx, :]) ** 2
-        return int(np.argmax(weights))
+        """Return the tracked-state column index for the state whose
+        **adiabatic (Paschen-Back) label** is ``(m_j, m_i)``.
+
+        ``(m_j, m_i)`` is interpreted as the high-field limiting quantum
+        numbers (same convention as :meth:`convert_label`): the bijective
+        representative map is inverted to find ``(F, mF)`` and then the
+        tracked state is located via CG overlap with ``|F, mF>``.
+        """
+        mF = m_j + m_i
+        i_nuc = None
+        for man in self.basis.manifolds:
+            if man.n == n and man.l == l and abs(man.j - j) < 1e-9:
+                i_nuc = man.i_nuclear
+                break
+        if i_nuc is None:
+            raise KeyError(f"Manifold ({n}, {l}, {j}) not in basis.")
+        rep_map = self._bijective_F_representative(n, l, j, mF, i_nuc)
+        for F_key, (mj_rep, mi_rep) in rep_map.items():
+            if abs(mj_rep - m_j) < 1e-9 and abs(mi_rep - m_i) < 1e-9:
+                return self._tracked_index_F_mF(
+                    n, l, j, int(round(F_key)), int(round(mF)), step)
+        raise KeyError(
+            f"|{n},{l},{j}; m_j={m_j}, m_i={m_i}> is not a valid "
+            f"adiabatic-label representative.")
 
     def _tracked_index_F_mF(self, n: int, l: int, j: float,
                             F: int, mF: int, step: int) -> int:
@@ -366,6 +389,46 @@ class SweepResult:
         # vectors[step] has shape (n_basis, n_tracked); columns are eigenvectors
         overlaps = np.abs(psi @ self.vectors[step]) ** 2
         return int(np.argmax(overlaps))
+
+    def _identify_F_mF(self, n: int, l: int, j: float,
+                       tracked_idx: int, step: int) -> tuple:
+        """Identify the ``(F, mF)`` label for tracked state ``tracked_idx``
+        at ``step`` via CG overlap.
+
+        For each ``(F, mF)`` in the ``(n, l, j)`` manifold, the squared
+        overlap ``|<F,mF|eigenvec>|^2`` is computed; the ``(F, mF)`` with
+        the largest overlap is returned as ``(int, int)``.
+        """
+        i_nuc = None
+        for man in self.basis.manifolds:
+            if man.n == n and man.l == l and abs(man.j - j) < 1e-9:
+                i_nuc = man.i_nuclear
+                break
+        if i_nuc is None:
+            raise KeyError(f"Manifold ({n}, {l}, {j}) not in basis.")
+
+        vec = self.vectors[step][:, tracked_idx]
+        all_F = [abs(j - i_nuc) + k
+                 for k in range(int(round(2 * min(j, i_nuc))) + 1)]
+        mF_vals = {round(s.m_j + s.m_i, 9)
+                   for s in self.basis.states
+                   if s.n == n and s.l == l and abs(s.j - j) < 1e-9}
+
+        best_F, best_mF, best_ov = None, None, -1.0
+        for F in all_F:
+            for mF in mF_vals:
+                if abs(mF) > F + 1e-9:
+                    continue
+                psi = np.zeros(self.basis.dim, dtype=complex)
+                for s in self.basis.states:
+                    if s.n == n and s.l == l and abs(s.j - j) < 1e-9:
+                        cg = _clebsch(j, s.m_j, i_nuc, s.m_i, F, mF)
+                        if cg:
+                            psi[s.index] = cg
+                ov = abs(np.vdot(psi, vec)) ** 2
+                if ov > best_ov:
+                    best_ov, best_F, best_mF = ov, F, mF
+        return int(round(best_F)), int(round(best_mF))
 
     def get_energy(self, n: int, l: int, j: float,
                    m_j: float, m_i: float,
