@@ -99,7 +99,8 @@ class HamiltonianBuilder:
 
         for man, sl in self.basis.manifold_slices():
             e_fine = self.atom.getEnergy(man.n, man.l, man.j) * _EV_TO_HZ - self._e_ref_hz
-            A_hz = c.get_hyperfine_constant(man.l, man.j) / c.h  # A already carries h
+            _A = c.get_hyperfine_constant(man.l, man.j, n=man.n)
+            A_hz = (_A / c.h) if _A is not None else 0.0  # A carries h; None → no hf data for this state
             IJ = self._ij_operator(man.j, self.I)
             block = e_fine * np.eye(man.dim) + A_hz * IJ
 

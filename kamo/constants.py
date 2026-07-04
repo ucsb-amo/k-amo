@@ -44,46 +44,66 @@ def __getattr__(name):
 g_I = -0.00014193489
 
 #hyperfine constants
-def get_hyperfine_constant(l,j,iso=39):
-    """Args:
-        l (int): the l quantum number, must be either 0 or 1
-        j (float): the J quantum number, must be either .5 or 1.5
-        iso (optional): the isotope, either 39, 40, or 41, 39 by default.
+def get_hyperfine_constant(l, j, iso=39, n=None):
+    """Return the magnetic-dipole hyperfine A constant in Joules (A * h).
+
+    Args:
+        l (int): orbital angular momentum quantum number.
+        j (float): total angular momentum quantum number.
+        iso (int): isotope mass number; 39 (default), 40, or 41.
+        n (int, optional): principal quantum number.  When supplied and no
+            hardcoded value exists for the requested (l, j) pair, the function
+            falls back to ``arc.Potassium39().getHFSCoefficients(n, l, j)``
+            (iso=39 only).  Pass n=None to suppress the ARC fallback.
 
     Returns:
-        hyperfine constant for the specified fine structure manifold and isotope in unites of Hz
-    """  
-    if iso==39:
-        if l==0:
-            return h*230.8598601e6
-        if l==1:
-            if j==.5:
-                return h*27.775e6
-            elif j==1.5:
-                return h*6.093e6
-    elif iso==40:
-        if l==0:
-            return h*-285.7308e6
-        if l==1:
-            if j==.5:
-                return h*-34.523e6
-            elif j==1.5:
-                return h*-7.585e6
-    elif iso==41:
-        if l==0:
-            return h*127.0069352e6
-        if l==1:
-            if j==.5:
-                return h*15.245e6
-            elif j==1.5:
-                return h*3.363e6
+        float | None: A constant in Joules, or None if no data is available.
+    """
+    # ── hardcoded table (n-independent approximation) ─────────────────────
+    if iso == 39:
+        if l == 0:
+            return h * 230.8598601e6
+        if l == 1:
+            if j == 0.5:
+                return h * 27.775e6
+            elif j == 1.5:
+                return h * 6.093e6
+    elif iso == 40:
+        if l == 0:
+            return h * -285.7308e6
+        if l == 1:
+            if j == 0.5:
+                return h * -34.523e6
+            elif j == 1.5:
+                return h * -7.585e6
+    elif iso == 41:
+        if l == 0:
+            return h * 127.0069352e6
+        if l == 1:
+            if j == 0.5:
+                return h * 15.245e6
+            elif j == 1.5:
+                return h * 3.363e6
+
+    # ── ARC fallback (requires n; iso=39 only) ────────────────────────────
+    if n is not None and iso == 39:
+        try:
+            A_hz, _ = atom_K39.getHFSCoefficients(n, l, j)
+            return h * A_hz
+        except (ValueError, Exception):
+            pass
+
+    return None
             
 #total electronic g-factors
-def get_total_electronic_g_factor(l,j):
-    if l==0:
+def get_total_electronic_g_factor(l, j, s=0.5):
+    # Hardcoded precise values for the principal K-39 manifolds
+    if l == 0:
         return 2.00229421
-    if l==1:
-        if j==.5:
+    if l == 1:
+        if j == 0.5:
             return 2/3
-        if j==1.5:
+        if j == 1.5:
             return 4/3
+    # Landé formula fallback for any other (l, j)
+    return 1.0 + (j*(j+1) + s*(s+1) - l*(l+1)) / (2*j*(j+1))
