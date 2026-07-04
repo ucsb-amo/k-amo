@@ -399,7 +399,7 @@ class SweepResult:
 
         # build the |F, mF> state vector in the full basis
         psi = np.zeros(self.basis.dim, dtype=complex)
-        for s in self.basis.states:
+        for s in self.basis.state_list:
             if s.n == n and s.l == l and abs(s.j - j) < 1e-9:
                 cg = _clebsch(j, s.m_j, i_nuc, s.m_i, F, mF)
                 if cg:
@@ -507,7 +507,8 @@ class SweepResult:
 
     def plot(self, ax=None, energy_unit: str = "MHz", x_unit: Optional[str] = None,
              states=None, label_states: bool = False, label_step: int = 0,
-             energy_offset: float = 0.0, legend: bool = False, **plot_kwargs):
+             energy_offset: float = 0.0, legend: bool = False,
+             plot_differential=False, **plot_kwargs):
         """Plot tracked eigen-energies versus the swept parameter.
 
         Parameters
@@ -536,6 +537,18 @@ class SweepResult:
             referencing to a particular state or manifold.
         legend : bool
             Show a legend built from the state labels.
+        plot_differential : bool or (n, l, j, m_j, m_i) 5-tuple, default False
+            Subtract a reference energy from every plotted state:
+
+            * ``False`` (default) — no subtraction.
+            * ``True`` — subtract each state's own value at the *first* sweep
+              step (step 0), so every line starts at zero.  Useful for seeing
+              how states shift relative to their zero-field / zero-intensity
+              starting energy.
+            * ``(n, l, j, m_j, m_i)`` 5-tuple — subtract the full energy track
+              of the specified state from every plotted state.  Useful for
+              computing differential shifts relative to a reference state (e.g.
+              a clock state) across the whole sweep.
         **plot_kwargs : forwarded to ``ax.plot``.
 
         Returns
@@ -550,6 +563,11 @@ class SweepResult:
         >>> res = model.magnetic_sweep(B_max=600.0)
         >>> res.plot(states=model[0])  # first manifold (4, 0, 0.5)
         >>> res.plot(states=(4, 0, 0.5))  # equivalent: by quantum numbers
+
+        Differential plots:
+
+        >>> res.plot(states=model[0], plot_differential=True)
+        >>> res.plot(states=model[0], plot_differential=(4, 0, 0.5, -0.5, -1.5))
         """
         import matplotlib.pyplot as plt
 
@@ -560,18 +578,39 @@ class SweepResult:
 
         x, xlabel = self.x_axis(x_unit)
         idxs = self._resolve_states(states, label_step)
-        y = (self.energies - energy_offset) / scale
+
+        # --- build reference track (shape: (n_steps,) or None) ---
+        ref_track: np.ndarray | None = None
+        if plot_differential is True:
+            pass  # handled per-state below
+        elif plot_differential is not False:
+            # treat as a state specifier — resolve to a single tracked index
+            ref_idxs = self._resolve_states(plot_differential, label_step)
+            if len(ref_idxs) != 1:
+                raise ValueError(
+                    "plot_differential state specifier must resolve to exactly "
+                    f"one tracked state; got {len(ref_idxs)}.")
+            ref_track = self.energies[:, ref_idxs[0]]
+
+        y_all = (self.energies - energy_offset) / scale
 
         for i in idxs:
+            yi = y_all[:, i].copy()
+            if plot_differential is True:
+                yi = yi - yi[0]
+            elif ref_track is not None:
+                yi = yi - ref_track / scale
+
             lbl = self.label(i, label_step) if (label_states or legend) else None
-            (line,) = ax.plot(x, y[:, i], label=lbl, **plot_kwargs)
+            (line,) = ax.plot(x, yi, label=lbl, **plot_kwargs)
             if label_states:
-                ax.annotate(lbl, (x[-1], y[-1, i]), fontsize=6,
+                ax.annotate(lbl, (x[-1], yi[-1]), fontsize=6,
                             va="center", ha="left",
                             xytext=(3, 0), textcoords="offset points")
 
         ax.set_xlabel(xlabel)
-        ax.set_ylabel(f"Energy ({energy_unit})")
+        diff_suffix = " (differential)" if plot_differential is not False else ""
+        ax.set_ylabel(f"Energy ({energy_unit}){diff_suffix}")
         if legend:
             ax.legend(fontsize=6, loc="best")
         return ax

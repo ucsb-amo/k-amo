@@ -102,8 +102,8 @@ class Manifold:
                    ) -> List[Tuple[int, int, float, float, float]]:
         """Return states in this manifold, optionally filtered by quantum numbers.
 
-        All keyword arguments are optional and combinable.  At least one filter
-        must match — any state failing any supplied filter is excluded.
+        All keyword arguments are optional and combinable.  All supplied filters
+        must match simultaneously — a state failing any single filter is excluded.
 
         Parameters
         ----------
@@ -133,15 +133,15 @@ class Manifold:
         Examples
         --------
         >>> gs = model[0]
-        >>> gs.get_states()                        # all 8 states
-        >>> gs.get_states(mJ=-0.5)                 # m_j = -1/2 sector (4 states)
-        >>> gs.get_states(mI=1.5)                  # m_i = +3/2 (2 states)
-        >>> gs.get_states(mF=0.0)                  # m_F = 0 (2 states)
-        >>> gs.get_states(F=2)                     # states with F=2 label (5 states)
-        >>> gs.get_states(F=1, mF=-1)              # single (F=1, mF=-1) state
-        >>> gs.get_states(mJ=0.5, mI=-0.5)         # single uncoupled state
-        >>> gs.get_states(mJ=0.5, mF=0.0)          # mJ + mI = 0 and mJ = 0.5 -> mI = -0.5
-        >>> res.plot(states=gs.get_states(mF=0.0)) # pass directly to plot
+        >>> gs.states()                        # all 8 states
+        >>> gs.states(mJ=-0.5)                 # m_j = -1/2 sector (4 states)
+        >>> gs.states(mI=1.5)                  # m_i = +3/2 (2 states)
+        >>> gs.states(mF=0.0)                  # m_F = 0 (2 states)
+        >>> gs.states(F=2)                     # states with F=2 label (5 states)
+        >>> gs.states(F=1, mF=-1)              # single (F=1, mF=-1) state
+        >>> gs.states(mJ=0.5, mI=-0.5)         # single uncoupled state
+        >>> gs.states(mJ=0.5, mF=0.0)          # mJ + mI = 0 and mJ = 0.5 -> mI = -0.5
+        >>> res.plot(states=gs.states(mF=0.0)) # pass directly to plot
         """
         # ---- validate individual values against manifold ranges ----
         valid_mj = set(round(v, 9) for v in _half_integer_range(self.j))
@@ -178,19 +178,23 @@ class Manifold:
             # redundant but harmless — drop mF and proceed via mJ+mI
             mF = None
 
-        # ---- build the set of (m_j, m_i) that satisfy F filter ----
-        # Use the bijective Paschen-Back representative convention: for each mF,
-        # sort valid (mj, mi) pairs by mj ascending and valid F values ascending,
-        # then pair them bijectively.  This gives exactly 2F+1 states per F.
+        # ---- build the set of (m_j, m_i) that satisfy the F [AND mF] filter ----
+        # Use the bijective Paschen-Back representative convention.
+        # AND logic: when mF is also specified we only build the representative
+        # for that specific mF, not for every mF in F's range.  When mF is not
+        # specified, we collect representatives for all mF values of F.
         f_pairs: set | None = None
         if F is not None:
             f_pairs = set()
             F_float = float(F)
             all_F = sorted(self.allowed_F())
-            for mF_v in _half_integer_range(F_float):
-                mj_vals = sorted(-self.j + k for k in range(int(round(2 * self.j)) + 1))
-                mi_set = set(round(-self.i_nuclear + k, 9)
-                             for k in range(int(round(2 * self.i_nuclear)) + 1))
+            mj_vals = sorted(-self.j + k for k in range(int(round(2 * self.j)) + 1))
+            mi_set = set(round(-self.i_nuclear + k, 9)
+                         for k in range(int(round(2 * self.i_nuclear)) + 1))
+            # AND: if mF is specified, restrict to just that mF value
+            mF_values = ([float(mF)] if mF is not None
+                         else list(_half_integer_range(F_float)))
+            for mF_v in mF_values:
                 valid_pairs = [(mj, mF_v - mj) for mj in mj_vals
                                if round(mF_v - mj, 9) in mi_set]
                 valid_F_for_mF = [f for f in all_F if abs(mF_v) <= f + 1e-9]
@@ -202,7 +206,7 @@ class Manifold:
                     mj_r, mi_r = rep_map[key]
                     f_pairs.add((round(mj_r, 9), round(mi_r, 9)))
 
-        # ---- filter all substates ----
+        # ---- filter all substates (all active conditions must pass = AND) ----
         result = []
         for m_j, m_i in self.substates():
             m_j_r = round(m_j, 9)
@@ -349,19 +353,24 @@ class Basis:
                 raise ValueError(f"Duplicate manifold {key} in basis.")
             seen.add(key)
 
-        self.states: List[BasisState] = []
+        self._states: List[BasisState] = []
         idx = 0
         for man in self.manifolds:
             for (m_j, m_i) in man.substates():
-                self.states.append(BasisState(man.n, man.l, man.j, m_j, m_i, idx))
+                self._states.append(BasisState(man.n, man.l, man.j, m_j, m_i, idx))
                 idx += 1
 
     # -- container protocol -------------------------------------------------
+    @property
+    def state_list(self) -> List[BasisState]:
+        """Flat list of all :class:`BasisState` objects in basis order."""
+        return self._states
+
     def __len__(self) -> int:
-        return len(self.states)
+        return len(self._states)
 
     def __iter__(self):
-        return iter(self.states)
+        return iter(self._states)
 
     def __getitem__(self, key):
         """Access a basis state or manifold.
@@ -382,7 +391,7 @@ class Basis:
         >>> basis[(4, 0, 0.5)]          # manifold by (n, l, j)
         """
         if isinstance(key, int):
-            return self.states[key]
+            return self._states[key]
         elif isinstance(key, tuple) and len(key) == 3:
             n, l, j = key
             for man in self.manifolds:
@@ -397,12 +406,12 @@ class Basis:
 
     @property
     def dim(self) -> int:
-        return len(self.states)
+        return len(self._states)
 
     # -- lookups ------------------------------------------------------------
     def index_of(self, n: int, l: int, j: float, m_j: float, m_i: float) -> int:
         """Index of the state with the given quantum numbers."""
-        for s in self.states:
+        for s in self._states:
             if (s.n == n and s.l == l and abs(s.j - j) < 1e-9
                     and abs(s.m_j - m_j) < 1e-9 and abs(s.m_i - m_i) < 1e-9):
                 return s.index
@@ -429,7 +438,50 @@ class Basis:
         """
         return self.manifolds[idx]
 
-    def m_f_values(self) -> np.ndarray:
+    def states(self, n=None, l=None, j=None, F=None, mF=None, mJ=None, mI=None
+               ) -> List[Tuple[int, int, float, float, float]]:
+        """Return states in the basis, with optional filtering.
+
+        Manifold filters ``n``, ``l``, ``j`` restrict which manifolds are
+        searched; state-level filters ``F``, ``mF``, ``mJ``, ``mI`` are
+        forwarded to each matching manifold's own
+        :meth:`~Manifold.states` method.
+
+        Parameters
+        ----------
+        n : int, optional
+            Principal quantum number.
+        l : int, optional
+            Orbital angular momentum quantum number.
+        j : float, optional
+            Total angular momentum quantum number.
+        F, mF, mJ, mI : optional
+            Forwarded to :meth:`Manifold.states` for sub-manifold filtering.
+            See that method for full documentation.
+
+        Returns
+        -------
+        list of (n, l, j, m_j, m_i) 5-tuples
+
+        Examples
+        --------
+        >>> basis.states()                       # all states in every manifold
+        >>> basis.states(n=4, l=0)               # ground manifold states
+        >>> basis.states(j=1.5)                  # all j=3/2 manifolds
+        >>> basis.states(n=4, l=0, mJ=-0.5)      # ground manifold, mJ=-1/2
+        >>> basis.states(F=2, mF=0)              # F=2, mF=0 across all manifolds
+        """
+        result = []
+        for man in self.manifolds:
+            if n is not None and man.n != int(n):
+                continue
+            if l is not None and man.l != int(l):
+                continue
+            if j is not None and abs(man.j - float(j)) > 1e-9:
+                continue
+            result.extend(man.states(F=F, mF=mF, mJ=mJ, mI=mI))
+        return result
+
         return np.array([s.m_f for s in self.states])
 
     def __repr__(self) -> str:

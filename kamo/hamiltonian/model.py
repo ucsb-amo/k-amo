@@ -81,6 +81,34 @@ class AtomicStructure:
                 "or 3-tuple (n, l, j) (manifold quantum numbers)."
             )
 
+    def states(self, n=None, l=None, j=None, F=None, mF=None, mJ=None, mI=None):
+        """Return states in the basis, with optional filtering.
+
+        Delegates to :meth:`~.basis.Basis.states`; all keyword arguments
+        are forwarded unchanged.
+
+        Parameters
+        ----------
+        n, l, j : optional
+            Restrict to manifolds matching these quantum numbers.
+        F, mF, mJ, mI : optional
+            Sub-manifold quantum-number filters (see :meth:`~.basis.Manifold.states`).
+
+        Returns
+        -------
+        list of (n, l, j, m_j, m_i) 5-tuples
+
+        Examples
+        --------
+        >>> model.states()                  # all states
+        >>> model.states(n=4, l=0)          # ground manifold
+        >>> model.states(n=4, l=0, mJ=0.5)  # ground manifold, mJ=+1/2
+        >>> model.states(F=1, mF=-1)        # |F=1, mF=-1> across all manifolds
+        >>> res.plot(states=model.states(n=4, l=0, F=2))  # pass directly to plot
+        """
+        return self.basis.states(n=n, l=l, j=j, F=F, mF=mF, mJ=mJ, mI=mI)
+
+
     # ------------------------------------------------------------------ H0
     def h0(self, include_quadrupole: bool = True) -> np.ndarray:
         """Field-free Hamiltonian (Hz)."""

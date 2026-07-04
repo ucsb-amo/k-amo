@@ -370,7 +370,7 @@ class HamiltonianBuilder:
                 man.n, man.l, man.j, beam.wavelength)
             a_s = float(np.atleast_1d(a_s)[0])
             a_t = float(np.atleast_1d(a_t)[0]) if a_t is not None else 0.0
-            for s in self.basis.states[sl]:
+            for s in self.basis.state_list[sl]:
                 shift = pre * a_s
                 if include_tensor and man.j > 0.5 and a_t != 0.0:
                     j = man.j
