@@ -13,8 +13,8 @@ crossings, starting from the zero-field / zero-intensity ordering.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import Any, List, Optional, Tuple, Union
 
 import numpy as np
 
@@ -96,6 +96,62 @@ def eigenshuffle(matrices) -> Tuple[np.ndarray, np.ndarray]:
         prev_v = v
 
     return energies, vectors
+
+
+# ---------------------------------------------------------------------------
+# Interpolation helpers shared by SweepResult methods and subclasses
+# ---------------------------------------------------------------------------
+
+def _interp_at(
+    param: np.ndarray, track: np.ndarray, at: "float | np.ndarray | None"
+) -> "float | np.ndarray":
+    """Interpolate *track* (shape ``(n_steps,)``) at *at* parameter value(s).
+
+    Parameters
+    ----------
+    at : None, scalar, or array-like
+        * ``None`` → return *track* unchanged.
+        * scalar float → return a single ``float``.
+        * array-like → return an ``ndarray`` of the same shape.
+    """
+    if at is None:
+        return track
+    scalar_in = np.ndim(at) == 0
+    at_arr = np.atleast_1d(np.asarray(at, dtype=float))
+    out = np.interp(at_arr, param, track)
+    return float(out[0]) if scalar_in else out
+
+
+def _interpolate_crossing(
+    x: np.ndarray, diff: np.ndarray, branch: int
+) -> float:
+    """Linear interpolation of the *branch*-th zero-crossing of *diff*."""
+    sign_changes = np.where(np.diff(np.sign(diff)))[0]
+    if len(sign_changes) == 0:
+        raise ValueError("No crossing found in the sweep range.")
+    if branch >= len(sign_changes):
+        raise ValueError(
+            f"Only {len(sign_changes)} crossing(s) found; "
+            f"branch={branch} is out of range."
+        )
+    k = sign_changes[branch]
+    x0, x1 = x[k], x[k + 1]
+    y0, y1 = diff[k], diff[k + 1]
+    return float(x0 - y0 * (x1 - x0) / (y1 - y0))
+
+
+def _zeeman_eigensystem(builder, B_gauss: float):
+    """Lab-frame Zeeman-dressed eigensystem at *B_gauss*.
+
+    Returns ``(E_lab, V_lab)`` — eigenvalues in Hz and eigenvector matrix
+    (columns = eigenvectors in the uncoupled basis).  Unlike the vectors
+    stored in a ``LaserSweepResult`` from an RWA sweep, these are NOT in the
+    rotating frame and can be used directly for optical detuning calculations.
+    """
+    H = builder.h0()
+    if B_gauss:
+        H = H + builder.zeeman_operator() * B_gauss
+    return diagonalize(H)
 
 
 @dataclass
@@ -410,60 +466,97 @@ class SweepResult:
         overlaps = np.abs(psi @ self.vectors[step]) ** 2
         return int(np.argmax(overlaps))
 
-    def get_energy(self, n: int, l: int, j: float,
-                   m_j: float, m_i: float,
-                   identify_at_step: int = 0) -> np.ndarray:
-        """Return the energy track (Hz) for the state whose dominant uncoupled
-        component is ``|n l j; m_j m_i>``.
+    def get_energy(
+        self,
+        n: int, l: int, j: float, m_j: float, m_i: float,
+        identify_at_step: int = 0,
+        at: "float | np.ndarray | None" = None,
+    ) -> "np.ndarray | float":
+        """Return the energy (Hz) of the state ``|n l j; m_j m_i>``.
 
         The state is identified at ``identify_at_step`` (default 0, i.e. the
-        start of the sweep where the uncoupled labels are most meaningful) and
-        then followed continuously across the entire sweep.
+        start of the sweep) and then followed via eigenshuffle.
 
         Parameters
         ----------
         n, l, j : fine-structure quantum numbers.
         m_j, m_i : magnetic quantum numbers of J and I.
         identify_at_step : int
-            Step at which to choose the tracked state by maximum uncoupled-
-            basis weight (default 0).
+            Step at which to choose the tracked state by dominant uncoupled
+            weight (default 0).
+        at : None, float, or array-like
+            * ``None`` (default) — return the full energy track, shape
+              ``(n_steps,)``.
+            * scalar — return a single ``float`` via linear interpolation.
+            * array-like — return an ``ndarray`` interpolated at each value.
 
         Returns
         -------
-        energies : ndarray, shape (n_steps,)
-            Energy in Hz of the tracked state at every sweep point.
+        ndarray or float
         """
         i = self._tracked_index(n, l, j, m_j, m_i, identify_at_step)
-        return self.energies[:, i]
+        return _interp_at(self.param, self.energies[:, i], at)
 
-    def get_transition_frequency(self, state_a, state_b,
-                                 identify_at_step: int = 0) -> np.ndarray:
-        """Return the transition frequency ``E_b - E_a`` (Hz) across the sweep.
-
-        Each state is specified as a ``(n, l, j, m_j, m_i)`` 5-tuple; the
-        dominant uncoupled-basis component is used to identify and track the
-        state throughout the sweep.
+    def get_transition_frequency(
+        self,
+        state_a, state_b,
+        identify_at_step: int = 0,
+        at: "float | np.ndarray | None" = None,
+    ) -> "np.ndarray | float":
+        """Return the transition frequency ``E_b − E_a`` (Hz).
 
         Parameters
         ----------
         state_a, state_b : tuple ``(n, l, j, m_j, m_i)``
             Quantum numbers identifying each state.
         identify_at_step : int
-            Sweep step at which quantum-number labels are most meaningful
-            (default 0, i.e. the start of the sweep).
+            Sweep step for dominant-basis identification (default 0).
+        at : None, float, or array-like
+            * ``None`` — return full track, shape ``(n_steps,)``.
+            * scalar — single ``float`` via interpolation.
+            * array-like — ``ndarray`` interpolated at each value.
 
         Returns
         -------
-        freq : ndarray, shape (n_steps,)
-            ``E_b - E_a`` in Hz at every sweep point.  Positive when state b
-            lies above state a.
+        ndarray or float
         """
         if len(state_a) != 5 or len(state_b) != 5:
             raise ValueError(
                 "Each state must be a (n, l, j, m_j, m_i) 5-tuple.")
         ea = self.get_energy(*state_a, identify_at_step=identify_at_step)
         eb = self.get_energy(*state_b, identify_at_step=identify_at_step)
-        return eb - ea
+        track = eb - ea
+        return _interp_at(self.param, track, at)
+
+    def transition_frequency_shift(
+        self,
+        state_a, state_b,
+        identify_at_step: int = 0,
+        at: "float | np.ndarray | None" = None,
+    ) -> "np.ndarray | float":
+        """Net shift of the ``E_b − E_a`` transition frequency relative to the
+        first sweep step (zero-field / zero-intensity value).
+
+        Parameters
+        ----------
+        state_a, state_b : 5-tuples ``(n, l, j, m_j, m_i)``
+        identify_at_step : int
+            Step for dominant-basis identification (default 0).
+        at : None, float, or array-like
+            * ``None`` — return full shift track, shape ``(n_steps,)``.
+            * scalar — single ``float`` via interpolation.
+            * array-like — ``ndarray`` interpolated at each value.
+
+        Returns
+        -------
+        ndarray or float
+            Shift in Hz: ``f_transition(param) − f_transition(param[0])``.
+        """
+        freq = self.get_transition_frequency(
+            state_a, state_b, identify_at_step=identify_at_step
+        )
+        shift = freq - freq[0]
+        return _interp_at(self.param, shift, at)
 
     # -- convenience --------------------------------------------------------
     def nearest_step(self, value: float) -> int:
@@ -616,6 +709,303 @@ class SweepResult:
         return ax
 
 
+# ---------------------------------------------------------------------------
+# Typed sweep-result subclasses
+# ---------------------------------------------------------------------------
+
+@dataclass
+class MagneticSweepResult(SweepResult):
+    """Result of a magnetic-field sweep, with B-specific inversion methods.
+
+    Returned by :func:`sweep_field` and
+    :meth:`~.model.AtomicStructure.magnetic_sweep`.
+    """
+
+    _builder: Any = field(default=None, repr=False)
+
+    def field_from_splitting(
+        self,
+        state_a: tuple, state_b: tuple,
+        f_measured_hz: float,
+        branch: int = 0,
+    ) -> float:
+        """Return the field (G) where |E_b − E_a| equals *f_measured_hz*.
+
+        Parameters
+        ----------
+        state_a, state_b : 5-tuples ``(n, l, j, m_j, m_i)``
+        f_measured_hz : float
+            Target splitting in Hz.
+        branch : int
+            Which zero-crossing to return (0 = first from zero field).
+
+        Raises
+        ------
+        ValueError
+            If no crossing is found.  Re-run
+            :meth:`~.model.AtomicStructure.magnetic_sweep` with a larger
+            ``B_max``.
+        """
+        freq = self.get_transition_frequency(state_a, state_b)
+        diff = np.abs(freq) - f_measured_hz
+        try:
+            return _interpolate_crossing(self.param, diff, branch)
+        except ValueError:
+            raise ValueError(
+                f"Splitting never equals {f_measured_hz / 1e6:.4f} MHz in "
+                f"[0, {self.param[-1]:.1f}] G.  Re-run magnetic_sweep with a "
+                f"larger B_max."
+            ) from None
+
+    def laser_sweep(
+        self,
+        beam,
+        B_gauss: Optional[float] = None,
+        I_max: Optional[float] = None,
+        n_points: int = 200,
+        model: str = "rwa",
+        polarization: str = "pi",
+        include_quadrupole: bool = True,
+        polarizabilities=None,
+    ) -> "LaserSweepResult":
+        """Chain: run a laser-intensity sweep at a field from this sweep.
+
+        Parameters
+        ----------
+        beam : GaussianBeam
+        B_gauss : float, optional
+            Field offset for the laser sweep (G).  Uses
+            :meth:`~.diagonalize.SweepResult.field_at` to snap to the nearest
+            swept step.  Defaults to the last step of this sweep.
+        I_max : float, optional
+            Maximum intensity (W/m²).  Defaults to ``beam.I0``.
+        """
+        if self._builder is None:
+            raise RuntimeError(
+                "No builder stored.  Use model.magnetic_sweep() to create "
+                "this result."
+            )
+        b = self.field_at(B_gauss) if B_gauss is not None else float(self.param[-1])
+        if I_max is None:
+            I_max = beam.I0
+        return sweep_intensity(
+            self._builder, beam, I_max, n_points=n_points,
+            model=model, polarization=polarization,
+            B_gauss=b, include_quadrupole=include_quadrupole,
+            polarizabilities=polarizabilities,
+        )
+
+
+@dataclass
+class LaserSweepResult(SweepResult):
+    """Result of a laser-intensity sweep, with spectroscopy methods.
+
+    Returned by :func:`sweep_intensity` and
+    :meth:`~.model.AtomicStructure.laser_sweep`.
+
+    Extra attributes
+    ----------------
+    beam : GaussianBeam
+        The laser beam used for this sweep.
+    polarization : str or dict
+        Beam polarization.
+    B_gauss : float
+        Static magnetic field offset (G) used in the sweep Hamiltonian.
+    """
+
+    beam: Any = field(default=None, repr=False)
+    polarization: Any = "pi"
+    B_gauss: float = 0.0
+    _builder: Any = field(default=None, repr=False)
+
+    def intensity_from_splitting_shift(
+        self,
+        state_a: tuple, state_b: tuple,
+        df_measured_hz: float,
+        branch: int = 0,
+    ) -> float:
+        """Return the intensity (W/m²) where the splitting shift equals *df_measured_hz*.
+
+        The shift is ``|f_ab(I) − f_ab(0)|``.
+
+        Parameters
+        ----------
+        state_a, state_b : 5-tuples ``(n, l, j, m_j, m_i)``
+        df_measured_hz : float
+            Target shift magnitude in Hz.
+        branch : int
+            Which crossing (0 = first from zero intensity).
+
+        Raises
+        ------
+        ValueError
+            If no crossing is found.  Re-run with a larger ``I_max``.
+        """
+        freq = self.get_transition_frequency(state_a, state_b)
+        shift = np.abs(freq - freq[0])
+        diff = shift - df_measured_hz
+        try:
+            return _interpolate_crossing(self.param, diff, branch)
+        except ValueError:
+            raise ValueError(
+                f"Splitting shift never reaches {df_measured_hz / 1e3:.3f} kHz "
+                f"within [0, {self.param[-1]:.3e}] W/m².  Re-run laser_sweep "
+                f"with a larger I_max."
+            ) from None
+
+    def scattering_rate(
+        self,
+        ground_state: tuple,
+        intensity_Wpm2: "float | np.ndarray",
+        delta_hz: float = 0.0,
+        weak_probe: bool = True,
+    ) -> "float | np.ndarray":
+        """Total photon scattering rate (s⁻¹) for *ground_state* at *intensity_Wpm2*.
+
+        Sums two-level RWA contributions from every excited eigenstate in the
+        basis, using the **Zeeman-dressed** (I=0) basis for transition
+        frequencies and coupling elements::
+
+            Γ_scatter = Σ_e  Γ_e · Ω_ge² / (2 · (Δ_ge² + Γ_e²/4))
+
+        where ``Ω_ge = 2 |C_ge| E₀``, ``E₀ = sqrt(2I/(ε₀c))``, and
+        ``Δ_ge = f_laser − (E_e − E_g)``.
+
+        Parameters
+        ----------
+        ground_state : 5-tuple ``(n, l, j, m_j, m_i)``
+        intensity_Wpm2 : float or array-like
+            Laser intensity in W/m².  Returns a float when scalar, ndarray
+            when array-like.
+        delta_hz : float
+            Additional frequency offset added to the laser frequency
+            (positive = blue shift).  Use to scan detuning.
+        weak_probe : bool
+            If True (default), unsaturated formula.  If False, includes
+            saturation: ``Ω²/2`` added to the denominator.
+
+        Returns
+        -------
+        float or ndarray : scattering rate(s) in s⁻¹.
+        """
+        if self._builder is None:
+            raise RuntimeError(
+                "No builder stored.  Use model.laser_sweep() to create this result."
+            )
+        from kamo import constants as c
+
+        # Re-solve the lab-frame Hamiltonian (H0 + B·Zeeman, no rotating frame).
+        # self.vectors[0] from an RWA sweep is in the rotating frame and cannot
+        # be used directly for computing optical detunings.
+        E_lab, V_lab = _zeeman_eigensystem(self._builder, self.B_gauss)
+
+        # Identify ground dressed state by max overlap with uncoupled ket
+        n_g, l_g, j_g, mj_g, mi_g = ground_state
+        g_bare = self._builder.basis.index_of(n_g, l_g, j_g, mj_g, mi_g)
+        g_idx = int(np.argmax(np.abs(V_lab[g_bare, :]) ** 2))
+        E_g = E_lab[g_idx]
+
+        # RWA coupling in lab-frame Zeeman basis
+        rwa = self._builder.laser_rwa_operator(
+            self.beam, polarization=self.polarization
+        )
+        C = V_lab.conj().T @ rwa["coupling"] @ V_lab
+
+        # Natural linewidths (per excited manifold)
+        gamma_by_nlj: dict = {}
+        for man in self._builder.basis.manifolds:
+            if man.l > 0:
+                tau = self._builder.atom.getStateLifetime(man.n, man.l, man.j)
+                gamma_by_nlj[(man.n, man.l, man.j)] = 1.0 / tau
+
+        if not gamma_by_nlj:
+            raise ValueError(
+                "No excited (l > 0) manifolds in the basis."
+            )
+
+        # Precompute per-transition (gamma, |C_ge|, Delta) — independent of I
+        transitions: list = []
+        f_laser = self.beam.frequency() + delta_hz
+        for e_idx in range(len(E_lab)):
+            s_dom = self._builder.basis[
+                int(np.argmax(np.abs(V_lab[:, e_idx]) ** 2))
+            ]
+            gamma_e = gamma_by_nlj.get((s_dom.n, s_dom.l, s_dom.j))
+            if gamma_e is None:
+                continue
+            c_abs = abs(C[g_idx, e_idx])
+            if c_abs == 0.0:
+                continue
+            Delta = f_laser - (E_lab[e_idx] - E_g)   # lab-frame detuning
+            transitions.append((gamma_e, c_abs, Delta))
+
+        # Vectorised over intensity
+        scalar_in = np.ndim(intensity_Wpm2) == 0
+        I_arr = np.atleast_1d(np.asarray(intensity_Wpm2, dtype=float))
+        E0_arr = np.sqrt(2.0 * I_arr / (c.epsilon0 * c.c))
+
+        rates = np.zeros(len(I_arr))
+        for gamma_e, c_abs, Delta in transitions:
+            Omega = 2.0 * c_abs * E0_arr          # shape (n_I,)
+            if weak_probe:
+                denom = 2.0 * (Delta ** 2 + gamma_e ** 2 / 4.0)
+                rates += gamma_e * Omega ** 2 / denom
+            else:
+                denom = 2.0 * (Delta ** 2 + gamma_e ** 2 / 4.0 + Omega ** 2 / 2.0)
+                rates += gamma_e * Omega ** 2 / denom
+
+        return float(rates[0]) if scalar_in else rates
+
+    def dominant_couplings(
+        self,
+        n_top: Optional[int] = None,
+    ) -> List[Tuple[tuple, tuple, float]]:
+        """Sorted list of (ground_label, excited_label, |C| Hz/(V/m)) pairs.
+
+        Coupling elements are evaluated in the **lab-frame Zeeman-dressed**
+        basis so the result is frame-independent.
+
+        Parameters
+        ----------
+        n_top : int, optional
+            Return only the *n_top* strongest pairs (all by default).
+
+        Returns
+        -------
+        list of ``(ground_5tuple, excited_5tuple, |C| [Hz/(V/m)])``
+
+            Each label is the dominant uncoupled component
+            ``(n, l, j, m_j, m_i)`` of the dressed eigenstate.
+        """
+        if self._builder is None:
+            raise RuntimeError(
+                "No builder stored.  Use model.laser_sweep() to create this result."
+            )
+        _, V_lab = _zeeman_eigensystem(self._builder, self.B_gauss)
+        rwa = self._builder.laser_rwa_operator(
+            self.beam, polarization=self.polarization
+        )
+        C = V_lab.conj().T @ rwa["coupling"] @ V_lab
+
+        ground_idxs: list = []
+        excited_idxs: list = []
+        labels: dict = {}
+        for k in range(self.energies.shape[1]):
+            s = self._builder.basis[int(np.argmax(np.abs(V_lab[:, k]) ** 2))]
+            labels[k] = (s.n, s.l, s.j, s.m_j, s.m_i)
+            (ground_idxs if s.l == 0 else excited_idxs).append(k)
+
+        pairs: list = []
+        for g in ground_idxs:
+            for e in excited_idxs:
+                strength = abs(C[g, e])
+                if strength > 0.0:
+                    pairs.append((labels[g], labels[e], strength))
+
+        pairs.sort(key=lambda t: t[2], reverse=True)
+        return pairs[:n_top] if n_top is not None else pairs
+
+
 def sweep_field(builder, B_max: float, dB: float = 0.1,
                 include_diamagnetic: bool = False,
                 include_quadrupole: bool = True) -> SweepResult:
@@ -652,7 +1042,10 @@ def sweep_field(builder, B_max: float, dB: float = 0.1,
         mats.append(H)
 
     energies, vectors = eigenshuffle(mats)
-    return SweepResult(B, "B (Gauss)", energies, vectors, builder.basis)
+    return MagneticSweepResult(
+        B, "B (Gauss)", energies, vectors, builder.basis,
+        _builder=builder,
+    )
 
 
 def sweep_intensity(builder, beam, I_max: float, n_points: int = 200,
@@ -699,4 +1092,8 @@ def sweep_intensity(builder, beam, I_max: float, n_points: int = 200,
         raise ValueError("model must be 'rwa' or 'stark'.")
 
     energies, vectors = eigenshuffle(mats)
-    return SweepResult(I, "Intensity (W/m^2)", energies, vectors, builder.basis)
+    return LaserSweepResult(
+        I, "Intensity (W/m^2)", energies, vectors, builder.basis,
+        beam=beam, polarization=polarization, B_gauss=B_gauss,
+        _builder=builder,
+    )

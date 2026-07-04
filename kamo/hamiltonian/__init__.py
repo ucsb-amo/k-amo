@@ -15,10 +15,18 @@ Quick start
 
 from .basis import Basis, BasisState, Manifold
 from .builder import HamiltonianBuilder
-from .diagonalize import (SweepResult, diagonalize, eigenshuffle, sweep_field,
+from .diagonalize import (MagneticSweepResult, LaserSweepResult,
+                          SweepResult, diagonalize, eigenshuffle, sweep_field,
                           sweep_intensity)
 from .model import AtomicStructure
 from .state_labels import uncoupled_label, coupled_label, both_labels, format_state
+from .spectroscopy import (
+    field_from_splitting,
+    intensity_from_splitting_shift,
+    scattering_rate,
+    dominant_couplings,
+    transition_frequency_shift,
+)
 
 __all__ = [
     "Basis",
@@ -31,8 +39,15 @@ __all__ = [
     "sweep_field",
     "sweep_intensity",
     "SweepResult",
+    "MagneticSweepResult",
+    "LaserSweepResult",
     "uncoupled_label",
     "coupled_label",
     "both_labels",
     "format_state",
+    "field_from_splitting",
+    "intensity_from_splitting_shift",
+    "scattering_rate",
+    "dominant_couplings",
+    "transition_frequency_shift",
 ]

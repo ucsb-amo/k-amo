@@ -30,7 +30,8 @@ import numpy as np
 
 from .basis import Basis
 from .builder import HamiltonianBuilder
-from .diagonalize import (SweepResult, diagonalize, sweep_field,
+from .diagonalize import (MagneticSweepResult, LaserSweepResult,
+                          SweepResult, diagonalize, sweep_field,
                           sweep_intensity)
 
 
@@ -133,12 +134,11 @@ class AtomicStructure:
                    B_gauss: float = 0.0,
                    include_diamagnetic: bool = False,
                    include_quadrupole: bool = True) -> float:
-        """Return the energy (Hz) of the state ``|n l j; m_j m_i>`` at ``B_gauss``.
+        """Return the energy (Hz) of ``|n l j; m_j m_i>`` at *B_gauss*.
 
-        The Hamiltonian is diagonalized at ``B_gauss`` and the eigenstate with
-        the largest overlap on the specified uncoupled basis state is returned.
-        At low fields this is exact; at high fields it reflects the dominant
-        uncoupled character of the dressed eigenstate.
+        Uses a magnetic sweep from 0 to *B_gauss* with eigenshuffle tracking
+        so that state labels are correct through avoided crossings.  At
+        ``B_gauss=0`` the field-free Hamiltonian is diagonalized directly.
 
         Parameters
         ----------
@@ -155,21 +155,29 @@ class AtomicStructure:
         -------
         float : energy in Hz.
         """
-        try:
-            basis_idx = self.basis.index_of(n, l, j, m_j, m_i)
-        except KeyError:
-            raise KeyError(
-                f"|{n},{l},{j}; m_j={m_j}, m_i={m_i}> is not in the basis.")
-        E, V = self.solve(B_gauss=B_gauss,
-                          include_diamagnetic=include_diamagnetic,
-                          include_quadrupole=include_quadrupole)
-        weights = np.abs(V[basis_idx, :]) ** 2
-        return float(E[np.argmax(weights)])
+        if B_gauss == 0.0:
+            E, V = self.solve(B_gauss=0.0,
+                              include_diamagnetic=include_diamagnetic,
+                              include_quadrupole=include_quadrupole)
+            try:
+                basis_idx = self.basis.index_of(n, l, j, m_j, m_i)
+            except KeyError:
+                raise KeyError(
+                    f"|{n},{l},{j}; m_j={m_j}, m_i={m_i}> is not in the basis.")
+            weights = np.abs(V[basis_idx, :]) ** 2
+            return float(E[np.argmax(weights)])
+        dB = 0.1
+        res = self.magnetic_sweep(
+            B_max=abs(B_gauss) + dB, dB=dB,
+            diamagnetic=include_diamagnetic,
+            include_quadrupole=include_quadrupole,
+        )
+        return res.get_energy(n, l, j, m_j, m_i, at=B_gauss)
 
     # -------------------------------------------------------------- sweeps
     def magnetic_sweep(self, B_max: float, dB: float = 0.1,
                        diamagnetic: bool = False,
-                       include_quadrupole: bool = True) -> SweepResult:
+                       include_quadrupole: bool = True) -> MagneticSweepResult:
         """Sweep B from 0 to ``B_max`` (step ``dB``, default 0.1 G) with
         eigenshuffle state tracking.  See :func:`sweep_field`."""
         return sweep_field(self.builder, B_max, dB=dB,
@@ -180,7 +188,7 @@ class AtomicStructure:
                     model: str = "rwa", polarization="pi",
                     B_gauss: float = 0.0,
                     include_quadrupole: bool = True,
-                    polarizabilities=None) -> SweepResult:
+                    polarizabilities=None) -> LaserSweepResult:
         """Sweep laser intensity from 0 to ``I_max`` with eigenshuffle tracking.
 
         ``model="rwa"`` uses rotating-wave dipole coupling built from ``beam``;
