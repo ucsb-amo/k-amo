@@ -24,7 +24,7 @@ Example
 
 from __future__ import annotations
 
-from typing import Iterable, Optional, Tuple
+from typing import Iterable, List, Optional, Tuple
 
 import numpy as np
 
@@ -33,6 +33,67 @@ from .builder import HamiltonianBuilder
 from .diagonalize import (MagneticSweepResult, LaserSweepResult,
                           SweepResult, diagonalize, sweep_field,
                           sweep_intensity)
+
+
+def make_nlj_basis(
+    n: int,
+    l: int,
+    n_range: int = 0,
+    l_range: int = 1,
+) -> List[Tuple[int, int, float]]:
+    """Build a list of ``(n, l, j)`` manifold tuples centred on ``(n, l)``.
+
+    The basis spans:
+
+    * principal quantum number  ``n' ∈ [n - n_range, n + n_range]``
+    * orbital angular momentum  ``l' ∈ [max(0, l - l_range), l + l_range]``
+      (capped to ``l' ≤ n' - 1``);
+    * all physically valid ``j'`` for each ``(n', l')``
+      (i.e. ``j' = l' + 1/2`` and, for ``l' > 0``, also ``j' = l' - 1/2``).
+
+    Parameters
+    ----------
+    n : int
+        Centre principal quantum number.
+    l : int
+        Centre orbital angular-momentum quantum number.
+    n_range : int, optional
+        Half-width of the n window (default 0 → only ``n``).
+    l_range : int, optional
+        Half-width of the l window (default 1 → ``l ± 1``).
+
+    Returns
+    -------
+    list of (n, l, j) tuples
+
+    Examples
+    --------
+    >>> make_nlj_basis(4, 0)
+    # n_range=0, l_range=1 → l ∈ {0, 1}
+    [(4, 0, 0.5), (4, 1, 0.5), (4, 1, 1.5)]
+
+    >>> make_nlj_basis(4, 0, n_range=1)
+    # n ∈ {3, 4, 5}, l ∈ {0, 1}
+    [(3, 0, 0.5), (3, 1, 0.5), (3, 1, 1.5),
+     (4, 0, 0.5), (4, 1, 0.5), (4, 1, 1.5),
+     (5, 0, 0.5), (5, 1, 0.5), (5, 1, 1.5)]
+
+    >>> make_nlj_basis(59, 0, n_range=3, l_range=2)
+    # matches pairinteraction default basis for Rydberg S states
+    """
+    manifolds = []
+    l_lo = max(0, l - l_range)
+    l_hi = l + l_range
+    for n_prime in range(n - n_range, n + n_range + 1):
+        if n_prime < 1:
+            continue
+        for l_prime in range(l_lo, min(l_hi, n_prime - 1) + 1):
+            # j = l - 1/2 (only valid when l > 0)
+            if l_prime > 0:
+                manifolds.append((n_prime, l_prime, l_prime - 0.5))
+            # j = l + 1/2 (always valid)
+            manifolds.append((n_prime, l_prime, l_prime + 0.5))
+    return manifolds
 
 
 class AtomicStructure:
@@ -52,6 +113,37 @@ class AtomicStructure:
         self.basis = Basis(manifolds)
         self.builder = HamiltonianBuilder(
             self.basis, atom=atom, energy_reference_nlj=energy_reference_nlj)
+
+    @classmethod
+    def around(cls, n: int, l: int, n_range: int = 0, l_range: int = 1,
+               atom=None, energy_reference_nlj=None) -> "AtomicStructure":
+        """Construct an :class:`AtomicStructure` centred on ``(n, l)``.
+
+        Shorthand for ``AtomicStructure(make_nlj_basis(n, l, n_range, l_range))``.
+
+        Parameters
+        ----------
+        n : int
+            Centre principal quantum number.
+        l : int
+            Centre orbital angular-momentum quantum number.
+        n_range : int, optional
+            Half-width of the n window (default 0 → only shell ``n``).
+        l_range : int, optional
+            Half-width of the l window (default 1 → ``l ± 1``).
+        atom, energy_reference_nlj :
+            Forwarded to :class:`AtomicStructure` (see its docstring).
+
+        Examples
+        --------
+        # 4S₁/₂ + 4P₁/₂ + 4P₃/₂  (ground state + first excited manifolds)
+        >>> model = AtomicStructure.around(4, 0)
+
+        # n=59 Rydberg S-state with ±3 n shells and l up to 2
+        >>> model = AtomicStructure.around(59, 0, n_range=3, l_range=2)
+        """
+        manifolds = make_nlj_basis(n, l, n_range=n_range, l_range=l_range)
+        return cls(manifolds, atom=atom, energy_reference_nlj=energy_reference_nlj)
 
     def __getitem__(self, key):
         """Access a manifold in the atomic structure.

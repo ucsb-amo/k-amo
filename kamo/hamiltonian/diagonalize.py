@@ -630,7 +630,7 @@ class SweepResult:
             referencing to a particular state or manifold.
         legend : bool
             Show a legend built from the state labels.
-        plot_differential : bool or (n, l, j, m_j, m_i) 5-tuple, default False
+        plot_differential : bool, (n, l, j) 3-tuple, or (n, l, j, m_j, m_i) 5-tuple, default False
             Subtract a reference energy from every plotted state:
 
             * ``False`` (default) — no subtraction.
@@ -638,10 +638,15 @@ class SweepResult:
               step (step 0), so every line starts at zero.  Useful for seeing
               how states shift relative to their zero-field / zero-intensity
               starting energy.
-            * ``(n, l, j, m_j, m_i)`` 5-tuple — subtract the full energy track
-              of the specified state from every plotted state.  Useful for
-              computing differential shifts relative to a reference state (e.g.
-              a clock state) across the whole sweep.
+            * ``(n, l, j)`` 3-tuple — subtract the **fine-structure
+              centre-of-gravity** energy of that manifold at zero field
+              (step 0), computed as the mean energy over all states in the
+              manifold.  This removes the absolute fine-structure energy so
+              that the plot shows only hyperfine and Zeeman shifts.
+            * ``(n, l, j, m_j, m_i)`` 5-tuple — subtract the zero-field
+              energy of the specified state from every plotted state.  Useful
+              for computing differential shifts relative to a reference state
+              (e.g. a clock state) across the whole sweep.
         **plot_kwargs : forwarded to ``ax.plot``.
 
         Returns
@@ -677,13 +682,27 @@ class SweepResult:
         if plot_differential is True:
             pass  # handled per-state below
         elif plot_differential is not False:
-            # treat as a state specifier — resolve to a single tracked index
-            ref_idxs = self._resolve_states(plot_differential, label_step)
-            if len(ref_idxs) != 1:
-                raise ValueError(
-                    "plot_differential state specifier must resolve to exactly "
-                    f"one tracked state; got {len(ref_idxs)}.")
-            ref_track = self.energies[:, ref_idxs[0]]
+            # 3-tuple (n, l, j) → fine-structure CoG at zero field (constant)
+            if (isinstance(plot_differential, tuple)
+                    and len(plot_differential) == 3
+                    and all(isinstance(x, (int, float))
+                            for x in plot_differential)):
+                n_ref, l_ref, j_ref = plot_differential
+                man_idxs = self.indices_for(n_ref, l_ref, float(j_ref), step=0)
+                if not man_idxs:
+                    raise ValueError(
+                        f"No states found in manifold "
+                        f"({n_ref}, {l_ref}, {j_ref}).")
+                cog_hz = float(np.mean(self.energies[0, man_idxs]))
+                ref_track = np.full(len(self.param), cog_hz)
+            else:
+                # treat as a single state specifier — resolve to one index
+                ref_idxs = self._resolve_states(plot_differential, label_step)
+                if len(ref_idxs) != 1:
+                    raise ValueError(
+                        "plot_differential state specifier must resolve to "
+                        f"exactly one tracked state; got {len(ref_idxs)}.")
+                ref_track = self.energies[:, ref_idxs[0]]
 
         y_all = (self.energies - energy_offset) / scale
 
@@ -692,7 +711,7 @@ class SweepResult:
             if plot_differential is True:
                 yi = yi - yi[0]
             elif ref_track is not None:
-                yi = yi - ref_track / scale
+                yi = yi - ref_track[0] / scale
 
             lbl = self.label(i, label_step) if (label_states or legend) else None
             (line,) = ax.plot(x, yi, label=lbl, **plot_kwargs)

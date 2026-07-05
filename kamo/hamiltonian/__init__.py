@@ -18,7 +18,7 @@ from .builder import HamiltonianBuilder
 from .diagonalize import (MagneticSweepResult, LaserSweepResult,
                           SweepResult, diagonalize, eigenshuffle, sweep_field,
                           sweep_intensity)
-from .model import AtomicStructure
+from .model import AtomicStructure, make_nlj_basis
 from .state_labels import uncoupled_label, coupled_label, both_labels, format_state
 from .spectroscopy import (
     field_from_splitting,
@@ -34,6 +34,7 @@ __all__ = [
     "Manifold",
     "HamiltonianBuilder",
     "AtomicStructure",
+    "make_nlj_basis",
     "diagonalize",
     "eigenshuffle",
     "sweep_field",
