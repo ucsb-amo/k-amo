@@ -6,6 +6,11 @@ import csv
 
 dv = -1000.
 
+# States with n below this threshold use kamo.hamiltonian exact diagonalization,
+# which includes nuclear spin (m_j, m_i basis).  States at or above use
+# pairinteraction, which has no nuclear spin and works in the m_j basis only.
+_HAMILTONIAN_N_THRESHOLD = 10
+
 class Potassium39(arc.Potassium39):
     def __init__(self):
         super().__init__()
@@ -81,6 +86,67 @@ class Potassium39(arc.Potassium39):
         f_B = self.get_ground_state_transition_frequency(f1,mf1,f2,mf2,B)
         return (f_B_plus_dB - f_B) / dB
     
+    def _zeeman_hamiltonian_multi(self, states, B_gauss):
+        """Run one kamo.hamiltonian sweep covering all requested states.
+
+        Parameters
+        ----------
+        states : list of ``(n, l, j, m_j, m_i)`` tuples
+        B_gauss : scalar or 1-D array
+
+        Returns
+        -------
+        energies : list of ndarray (MHz), one per entry in *states*
+        sweep : MagneticSweepResult
+        """
+        from kamo.hamiltonian import AtomicStructure
+        B_arr = np.atleast_1d(np.asarray(B_gauss, dtype=float))
+        B_max = max(float(np.max(B_arr)), 0.01)
+        dB = max(B_max / 500, 0.01)
+
+        # Collect unique (n, l, j) fine-structure levels spanning all requests
+        njl_levels = list(dict.fromkeys((s[0], s[1], s[2]) for s in states))
+        model = AtomicStructure(njl_levels)
+        res = model.magnetic_sweep(B_max=B_max, dB=dB, diamagnetic=True, include_quadrupole=True)
+
+        energies = [res.get_energy(n, l, j, m_j, m_i, at=B_arr) / 1e6
+                    for n, l, j, m_j, m_i in states]
+        return energies, res
+
+    def _zeeman_hamiltonian(self, n, l, j, m_j, m_i, B_gauss):
+        """Energy track (MHz) via kamo.hamiltonian exact diagonalization.
+
+        Uses the adiabatic (Paschen-Back) connection: ``m_j`` and ``m_i`` are
+        the high-field limiting quantum numbers, resolved to a tracked state by
+        :meth:`~kamo.hamiltonian.SweepResult.get_energy`.
+
+        ``B_gauss`` may be a scalar or 1-D array; returns ``(energies_MHz, sweep_result)``.
+        """
+        (energy,), res = self._zeeman_hamiltonian_multi([(n, l, j, m_j, m_i)], B_gauss)
+        return energy, res
+
+    def _zeeman_pairinteraction(self, n, l, j, m_j, B_gauss):
+        """Zeeman *shift* from zero field (MHz) via pairinteraction.
+
+        Only uses ``m_j`` (pairinteraction has no nuclear spin).
+        ``B_gauss`` may be a scalar or 1-D array; returns matching ndarray.
+        """
+        import pairinteraction as pi
+        B_arr = np.atleast_1d(np.asarray(B_gauss, dtype=float))
+        shifts = np.zeros(len(B_arr))
+        ket = pi.KetAtom("K", n=n, l=l, j=j, m=m_j)
+        zero_field_energy = ket.get_energy()
+        l_max = min(l + 2, n - 1)
+        basis = pi.BasisAtom("K", n=(n - 3, n + 3), l=(l, l_max))
+        for idx, b_val in enumerate(B_arr):
+            system = pi.SystemAtom(basis)
+            system.set_diamagnetism_enabled(True)
+            system.set_magnetic_field([0.0, 0.0, float(b_val)], unit="gauss")
+            pi.diagonalize([system])
+            shifted = system.get_corresponding_energy(ket)
+            shifts[idx] = (shifted - zero_field_energy).to("J").magnitude / c.h / 1e6
+        return shifts
+
     def get_semiclassical_polarizability(self,n1,l1,j1,n2,l2,j2,detuning_Hz):
         """See Grimm 1999 equation 8.
         """        
@@ -155,63 +221,112 @@ class Potassium39(arc.Potassium39):
         scattering_cross_section = g_ratio * np.pi**2 * c.c**2 / omega0**2 * A21 * lineshape
         return scattering_cross_section
     
-    def get_zeeman_shift(self,n,l,j,f,m_f,B):
-        '''
-        Returns the zeeman energy in units of MHz as a function of B field (in
-        Gauss) for a given F, m_f (will also accept mj mi basis) sublevel in the
-        specified fine structure manifold.
-        '''
-        B = np.atleast_1d(B)
+    def get_zeeman_shift(self, n, l, j, m_j, m_i=None, B=0, return_sweep=False):
+        """Return the Zeeman energy (MHz) for state |n l j; m_j [m_i]> at B (Gauss).
 
-        # nuclear spin
-        n_s = 1.5
-        # convert B field in gauss to Tesla
-        B = B / 1.e4
+        Routing:
+        - ``n < 10``: kamo.hamiltonian exact diagonalization.  ``m_i`` required.
+          Quantum numbers use the **adiabatic (Paschen-Back) convention**: ``m_j``
+          and ``m_i`` are the high-field limiting values.
+        - ``n >= 10``: pairinteraction.  Only ``m_j`` is used; ``m_i`` is ignored.
 
-        # lookup the input state and reassign quantum numbers if input is given in mj mi basis
-        state = self.state_lookup(n,l,j,f,m_f)
-        (f,m_f) = state['lf']
-        (F1_arc,mf1_arc) = state['lf_arc']
+        ``B`` may be a scalar or array; returns matching shape.
 
-        #for some reason ARCs breit-rabi function doesn't work for K39 ground state, use this instead:
-        if n == 4 and l==0:
-            if f==1:
-                return (((-c.get_hyperfine_constant(0,.5) / 4) 
-                        + c.g_I * c.mu_b * m_f * B
-                        - (c.get_hyperfine_constant(0,.5)*(n_s+.5) / 2)
-                        * np.sqrt(1 + (4 * m_f * (c.get_total_electronic_g_factor(0,.5) - c.g_I) * c.mu_b * B) / (((2 * n_s) + 1) * c.get_hyperfine_constant(0,.5) * (n_s + .5)) 
-                                   + (((c.get_total_electronic_g_factor(0,.5) - c.g_I) * c.mu_b * B) / (c.get_hyperfine_constant(0,.5) * (n_s + .5)))**2))
-                                   / (c.h * 1.e6))
-            if f==2:
-                if m_f != -2:
-                    return (((-c.get_hyperfine_constant(0,.5) / 4) 
-                            + c.g_I * c.mu_b * m_f * B
-                            + (c.get_hyperfine_constant(0,.5)*(n_s+.5) / 2)
-                            * np.sqrt(1 + (4 * m_f * (c.get_total_electronic_g_factor(0,.5) - c.g_I) * c.mu_b * B) / (((2 * n_s) + 1) * c.get_hyperfine_constant(0,.5) * (n_s + .5)) 
-                                    + (((c.get_total_electronic_g_factor(0,.5) - c.g_I) * c.mu_b * B) / (c.get_hyperfine_constant(0,.5) * (n_s + .5)))**2))
-                                    / (c.h * 1.e6))
-                elif m_f == -2:
-                    return (((-c.get_hyperfine_constant(0,.5) / 4) 
-                            + c.g_I * c.mu_b * m_f * B
-                            + (c.get_hyperfine_constant(0,.5)*(n_s+.5) / 2)
-                            * (1 - ((c.get_total_electronic_g_factor(0,.5) - c.g_I) * c.mu_b * B) / (c.get_hyperfine_constant(0,.5) * (n_s + .5))))
-                                    / (c.h * 1.e6))
-        #for all others use ARC breit rabi function:
+        Parameters
+        ----------
+        return_sweep : bool, optional
+            If True, return a ``(energy, sweep)`` tuple where ``sweep`` is the
+            :class:`~kamo.hamiltonian.MagneticSweepResult` (n < 10 only; ``None``
+            for the pairinteraction path).
+        """
+        B_arr = np.atleast_1d(np.asarray(B, dtype=float))
+        scalar_in = np.ndim(B) == 0
+
+        if n < _HAMILTONIAN_N_THRESHOLD:
+            if m_i is None:
+                raise ValueError(
+                    f"m_i must be provided for n < {_HAMILTONIAN_N_THRESHOLD} "
+                    "(kamo.hamiltonian includes nuclear Zeeman)."
+                )
+            result, sweep = self._zeeman_hamiltonian(n, l, j, m_j, m_i, B_arr)
         else:
-            zeeman_Evs = self.breitRabi(n, l, j, B)
-            zeeman_Es = np.transpose(zeeman_Evs[0])
-            for idx in range(len(zeeman_Evs[1])):
-                # loop through all the F, mF until you have the right one
-                f=zeeman_Evs[1][idx]
-                mf=zeeman_Evs[2][idx]
-                # bugfix -- ARC returns f=0.5 and mf=0 for 5p3/2 f=0 mf=0, so
-                # fix it explicitly here
-                if f == 0.5 and mf == 0:
-                    f = 0
-                # find the index for the state that matches the one we want
-                if f == F1_arc:
-                    if mf == mf1_arc:
-                        return zeeman_Es[idx] / 1.e6
+            result = self._zeeman_pairinteraction(n, l, j, m_j, B_arr)
+            sweep = None
+
+        energy = float(result[0]) if scalar_in else result
+        return (energy, sweep) if return_sweep else energy
+
+    def get_transition_frequency(self,
+                                  n1, l1, j1, m_j1, m_i1,
+                                  n2, l2, j2, m_j2, m_i2,
+                                 B=0):
+        """Return |E(m_j2,m_i2) − E(m_j1,m_i1)| (MHz) at field B (Gauss).
+
+        When both states are low-n (below the hamiltonian threshold), a single
+        sweep covers all requested fine-structure levels regardless of whether
+        they are in the same or different manifolds.
+        """
+        B_arr = np.atleast_1d(np.asarray(B, dtype=float))
+        scalar_in = np.ndim(B) == 0
+
+        if n1 < _HAMILTONIAN_N_THRESHOLD and n2 < _HAMILTONIAN_N_THRESHOLD:
+            # Single sweep covers both manifolds (same or different).
+            [e1_arr, e2_arr], _ = self._zeeman_hamiltonian_multi(
+                [(n1, l1, j1, m_j1, m_i1), (n2, l2, j2, m_j2, m_i2)], B_arr
+            )
+            result = np.abs(e2_arr - e1_arr)
+        else:
+            e1 = self.get_zeeman_shift(n1, l1, j1, m_j1, m_i1, B)
+            e2 = self.get_zeeman_shift(n2, l2, j2, m_j2, m_i2, B)
+            result = np.atleast_1d(np.abs(e2 - e1))
+
+        return float(result[0]) if scalar_in else result
+        B_arr = np.atleast_1d(np.asarray(B, dtype=float))
+        scalar_in = np.ndim(B) == 0
+
+        same_manifold = (n1 == n2 and l1 == l2 and j1 == j2)
+        if same_manifold and n1 < _HAMILTONIAN_N_THRESHOLD:
+            # Run the sweep once and extract both state energies from it.
+            e1_arr, sweep = self._zeeman_hamiltonian(n1, l1, j1, m_j1, m_i1, B_arr)
+            e2_arr = sweep.get_energy(n2, l2, j2, m_j2, m_i2, at=B_arr) / 1e6
+            result = np.abs(e2_arr - e1_arr)
+        else:
+            e1 = self.get_zeeman_shift(n1, l1, j1, m_j1, m_i1, B)
+            e2 = self.get_zeeman_shift(n2, l2, j2, m_j2, m_i2, B)
+            result = np.atleast_1d(np.abs(e2 - e1))
+
+        return float(result[0]) if scalar_in else result
+
+    def get_microwave_transition_frequency(self, n, l, j, m_j1, m_i1, m_j2, m_i2, B=0):
+        """Alias for :meth:`get_transition_frequency` (backwards-compatible name)."""
+        return self.get_transition_frequency(n, l, j, m_j1, m_i1, n, l, j, m_j2, m_i2, B)
+
+    def get_magnetic_field_from_splitting(
+        self, n, l, j, m_j1, m_i1, m_j2, m_i2,
+        target_freq_mhz, B_max=1000.0, n_points=500
+    ):
+        """Return the field (Gauss) at which |E2 − E1| equals ``target_freq_mhz`` MHz.
+
+        Sweeps from 0 to ``B_max`` G in ``n_points`` steps and interpolates.
+
+        Raises
+        ------
+        ValueError
+            If the target splitting is never reached within ``[0, B_max]``.
+        """
+        B_arr = np.linspace(0.0, B_max, n_points)
+        freq = self.get_transition_frequency(n, l, j, m_j1, m_i1, n, l, j, m_j2, m_i2, B_arr)
+        diff = freq - target_freq_mhz
+        sign_changes = np.where(np.diff(np.sign(diff)))[0]
+        if len(sign_changes) == 0:
+            raise ValueError(
+                f"Splitting never equals {target_freq_mhz:.4f} MHz in "
+                f"[0, {B_max:.1f}] G.  Try a larger B_max."
+            )
+        k = sign_changes[0]
+        x0, x1 = B_arr[k], B_arr[k + 1]
+        y0, y1 = diff[k], diff[k + 1]
+        return float(x0 - y0 * (x1 - x0) / (y1 - y0))
 
     def get_ground_state_transition_frequency(self,f1,m_f1,f2,m_f2,B=0):
         '''
@@ -225,23 +340,19 @@ class Potassium39(arc.Potassium39):
 
         return transition_frequency
 
-    def get_transition_shift(self,n1,l1,j1,f1,m_f1,n2,l2,j2,f2,m_f2,B=0):
-        '''
-        Subtracts the calculated Zeeman shift of the excited state (n2,l2,j2,f2,m2) from that of the ground state (n1,l1,j1,f1,m1)
-        Returns the amount of shift in MHz of a given optical transition under external magnetic field B (in Gauss). 
-        '''
-        state1 = self.state_lookup(n1,l1,j1,f1,m_f1)
-        state2 = self.state_lookup(n2,l2,j2,f2,m_f2)
+    def get_transition_shift(
+        self, n1, l1, j1, m_j1, m_i1, n2, l2, j2, m_j2, m_i2, B=0
+    ):
+        """Differential Zeeman shift of optical transition at field B (MHz).
 
-        (F1_arc,mf1_arc) = state1['lf_arc']
-        (F2_arc,mf2_arc) = state2['lf_arc']
-
-        state1_shift = self.get_zeeman_shift(n1,l1,j1,F1_arc,mf1_arc,B) - self.get_zeeman_shift(n1,l1,j1,F1_arc,mf1_arc,0)
-        state2_shift = self.get_zeeman_shift(n2,l2,j2,F2_arc,mf2_arc,B) - self.get_zeeman_shift(n2,l2,j2,F2_arc,mf2_arc,0)
-
-        transition_frequency_shift = state2_shift - state1_shift
-
-        return transition_frequency_shift
+        Returns ``ΔE(state2, B) − ΔE(state1, B)`` where
+        ``ΔE(state, B) = E(state, B) − E(state, 0)``.
+        """
+        e1_B = self.get_zeeman_shift(n1, l1, j1, m_j1, m_i1, B)
+        e1_0 = self.get_zeeman_shift(n1, l1, j1, m_j1, m_i1, 0.0)
+        e2_B = self.get_zeeman_shift(n2, l2, j2, m_j2, m_i2, B)
+        e2_0 = self.get_zeeman_shift(n2, l2, j2, m_j2, m_i2, 0.0)
+        return (e2_B - e2_0) - (e1_B - e1_0)
     
     def state_dicts(self,n,l,j,hf=True) -> dict:
         '''
