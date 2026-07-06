@@ -672,7 +672,7 @@ class SweepResult:
         scale = {"Hz": 1.0, "kHz": 1e3, "MHz": 1e6, "GHz": 1e9,
                  "THz": 1e12}[energy_unit]
         if ax is None:
-            _, ax = plt.subplots()
+            fig, ax = plt.subplots()
 
         x, xlabel = self.x_axis(x_unit)
         idxs = self._resolve_states(states, label_step)
@@ -725,7 +725,7 @@ class SweepResult:
         ax.set_ylabel(f"Energy ({energy_unit}){diff_suffix}")
         if legend:
             ax.legend(fontsize=6, loc="best")
-        return ax
+        return fig, ax
 
 
 # ---------------------------------------------------------------------------
