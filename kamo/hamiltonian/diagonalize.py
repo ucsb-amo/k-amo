@@ -673,6 +673,8 @@ class SweepResult:
                  "THz": 1e12}[energy_unit]
         if ax is None:
             fig, ax = plt.subplots()
+        else:
+            fig = ax.figure
 
         x, xlabel = self.x_axis(x_unit)
         idxs = self._resolve_states(states, label_step)
