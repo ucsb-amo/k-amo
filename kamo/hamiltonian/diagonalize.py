@@ -601,7 +601,7 @@ class SweepResult:
     def plot(self, ax=None, energy_unit: str = "MHz", x_unit: Optional[str] = None,
              states=None, label_states: bool = False, label_step: int = 0,
              energy_offset: float = 0.0, legend: bool = False,
-             plot_differential=False, **plot_kwargs):
+             plot_differential=False, xlim=None, **plot_kwargs):
         """Plot tracked eigen-energies versus the swept parameter.
 
         Parameters
@@ -647,6 +647,11 @@ class SweepResult:
               energy of the specified state from every plotted state.  Useful
               for computing differential shifts relative to a reference state
               (e.g. a clock state) across the whole sweep.
+        xlim : (float, float), optional
+            X-axis limits (in the units set by ``x_unit``/``x_axis``). When
+            given, ``ax.set_xlim`` is applied and the y-axis is autoscaled to
+            fit the plotted energy data within that x range, padded by 5% of
+            the y-span on each side.
         **plot_kwargs : forwarded to ``ax.plot``.
 
         Returns
@@ -708,12 +713,14 @@ class SweepResult:
 
         y_all = (self.energies - energy_offset) / scale
 
+        y_plotted = []
         for i in idxs:
             yi = y_all[:, i].copy()
             if plot_differential is True:
                 yi = yi - yi[0]
             elif ref_track is not None:
                 yi = yi - ref_track[0] / scale
+            y_plotted.append(yi)
 
             lbl = self.label(i, label_step) if (label_states or legend) else None
             (line,) = ax.plot(x, yi, label=lbl, **plot_kwargs)
@@ -727,6 +734,18 @@ class SweepResult:
         ax.set_ylabel(f"Energy ({energy_unit}){diff_suffix}")
         if legend:
             ax.legend(fontsize=6, loc="best")
+
+        if xlim is not None:
+            ax.set_xlim(xlim)
+            x0, x1 = min(xlim), max(xlim)
+            mask = (x >= x0) & (x <= x1)
+            if mask.any() and y_plotted:
+                y_in_range = np.concatenate([yi[mask] for yi in y_plotted])
+                y_min, y_max = np.min(y_in_range), np.max(y_in_range)
+                span = y_max - y_min
+                pad = 0.05 * span if span > 0 else 0.05 * abs(y_max) or 1.0
+                ax.set_ylim(y_min - pad, y_max + pad)
+
         return fig, ax
 
 
