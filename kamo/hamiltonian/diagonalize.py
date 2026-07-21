@@ -20,6 +20,7 @@ import numpy as np
 
 from .basis import Basis
 from .builder import _clebsch
+from .state_labels import StateLabelMixin
 
 
 def diagonalize(H: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -155,7 +156,7 @@ def _zeeman_eigensystem(builder, B_gauss: float):
 
 
 @dataclass
-class SweepResult:
+class SweepResult(StateLabelMixin):
     """Result of a magnetic-field or laser-intensity sweep.
 
     Attributes
@@ -347,6 +348,54 @@ class SweepResult:
                 out.append(i)
         return out
 
+    def indices_for_F_or_m_j(self, n: int, l: int, j: float,
+                             F_or_m_j: float, step: int = 0) -> List[int]:
+        """Return tracked-state indices in manifold ``(n, l, j)`` matching
+        either a given coupled-basis ``F`` or uncoupled-basis ``m_j`` value.
+
+        This supports 4-tuple state filters ``(n, l, j, q)`` where ``q`` can
+        be an int or half-int. Any state with ``F == q`` or ``m_j == q`` is
+        included.
+
+        Each matching ``(m_j, m_i)`` representative is resolved to a tracked
+        index via :meth:`_tracked_index` (exact CG-overlap lookup), avoiding
+        the ambiguity of picking a "dominant" basis component: at ``m_F = 0``
+        (and similar cases) two different tracked eigenstates can have an
+        *exact* 50/50 split between two basis components, so an argmax-based
+        lookup can incorrectly assign the same label to both.
+        """
+        from .basis import _half_integer_range
+
+        man = next((m for m in self.basis.manifolds
+                    if m.n == n and m.l == l and abs(m.j - j) < 1e-9), None)
+        if man is None:
+            raise KeyError(f"Manifold ({n}, {l}, {j}) not in basis.")
+
+        target = float(F_or_m_j)
+        key = round(target, 9)
+        valid_F = {round(F, 9) for F in man.allowed_F()}
+        valid_mj = {round(v, 9) for v in _half_integer_range(j)}
+        if key not in valid_F and key not in valid_mj:
+            raise ValueError(
+                f"{F_or_m_j} is not a valid F or m_j for manifold "
+                f"({n}, {l}, {j}); allowed F: {sorted(valid_F)}, "
+                f"allowed m_j: {sorted(valid_mj)}")
+
+        substates = []
+        if key in valid_F:
+            substates.extend(man.states(F=target))
+        if key in valid_mj:
+            substates.extend(man.states(mJ=target))
+
+        out = []
+        seen = set()
+        for (n_, l_, j_, m_j, m_i) in substates:
+            idx = self._tracked_index(n_, l_, j_, m_j, m_i, step)
+            if idx not in seen:
+                seen.add(idx)
+                out.append(idx)
+        return out
+
     def _resolve_states(self, states, step: int = 0) -> List[int]:
         """Convert a *states* specifier to a list of tracked-state indices.
 
@@ -358,13 +407,16 @@ class SweepResult:
             All tracked states in that manifold.
         ``(n, l, j)`` — 3-tuple of numbers
             All tracked states in the ``(n, l, j)`` manifold.
+        ``(n, l, j, F_or_m_j)`` — 4-tuple of numbers
+            All tracked states in the manifold whose label satisfies
+            ``F == F_or_m_j`` or ``m_j == F_or_m_j`` (int or half-int).
         ``(n, l, j, m_j, m_i)`` — 5-tuple of numbers
             The single tracked state whose dominant component is
             ``|n l j; m_j m_i>``.
         list/sequence of tuples or Manifold objects
             Each element is a ``Manifold``, ``(n, l, j)`` tuple,
-            or ``(n, l, j, m_j, m_i)`` tuple; results are concatenated
-            (duplicates preserved).
+            ``(n, l, j, F_or_m_j)`` tuple, or ``(n, l, j, m_j, m_i)``
+            tuple; results are concatenated (duplicates preserved).
         sequence of int
             Explicit index list (existing behaviour).
         """
@@ -375,7 +427,7 @@ class SweepResult:
 
         def _is_qn_tuple(t):
             return (isinstance(t, tuple)
-                    and len(t) in (3, 5)
+                    and len(t) in (3, 4, 5)
                     and all(isinstance(s, (int, float)) for s in t))
 
         def _resolve_one(t):
@@ -384,6 +436,9 @@ class SweepResult:
             elif len(t) == 3:
                 n, l, j = t
                 return self.indices_for(n, l, j, step=step)
+            elif len(t) == 4:
+                n, l, j, F_or_m_j = t
+                return self.indices_for_F_or_m_j(n, l, j, F_or_m_j, step=step)
             else:
                 n, l, j, m_j, m_i = t
                 return self.indices_for(n, l, j, m_j, m_i, step=step)
@@ -612,13 +667,15 @@ class SweepResult:
             Units for the energy axis (default MHz).
         x_unit : str, optional
             Passed to :meth:`x_axis` (e.g. ``"mW/cm^2"`` for intensity sweeps).
-        states : Manifold, sequence of int, (n, l, j) tuple, (n, l, j, m_j, m_i) tuple, or list of such, optional
+        states : Manifold, sequence of int, (n, l, j) tuple, (n, l, j, F_or_m_j) tuple, (n, l, j, m_j, m_i) tuple, or list of such, optional
             Which states to plot.  Accepts:
             - ``None`` (default): all states.
             - ``Manifold`` object: all states in that manifold.
             - ``(n, l, j)`` 3-tuple: all states in that manifold.
+            - ``(n, l, j, F_or_m_j)`` 4-tuple: all states in that manifold
+              with ``F == F_or_m_j`` or ``m_j == F_or_m_j`` (int or half-int).
             - ``(n, l, j, m_j, m_i)`` 5-tuple: a single state.
-            - list of Manifolds and/or 3- or 5-tuples: union, concatenated.
+            - list of Manifolds and/or 3-, 4-, or 5-tuples: union, concatenated.
             - sequence of int: explicit tracked-state indices.
         label_states : bool
             Annotate each line with its dominant-basis-state label.

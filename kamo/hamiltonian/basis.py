@@ -16,6 +16,8 @@ from typing import Iterable, List, Sequence, Tuple
 
 import numpy as np
 
+from .state_labels import StateLabelMixin
+
 # K39 nuclear spin
 I_NUCLEAR = 1.5
 
@@ -58,7 +60,7 @@ class BasisState:
                 f"m_i={self.m_i:+.1f}>")
 
 
-class Manifold:
+class Manifold(StateLabelMixin):
     """A single (n, l, j) fine-structure manifold of K39.
 
     Enumerates all uncoupled sublevels |m_j, m_i> with I = 3/2.
@@ -326,7 +328,7 @@ class Manifold:
         return f"Manifold(n={self.n}, l={self.l}, j={self.j}, dim={self.dim})"
 
 
-class Basis:
+class Basis(StateLabelMixin):
     """An ordered collection of (n, l, j) manifolds and their sublevels.
 
     Parameters

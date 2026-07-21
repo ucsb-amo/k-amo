@@ -33,6 +33,7 @@ from .builder import HamiltonianBuilder
 from .diagonalize import (MagneticSweepResult, LaserSweepResult,
                           SweepResult, diagonalize, sweep_field,
                           sweep_intensity)
+from .state_labels import StateLabelMixin
 
 
 def make_nlj_basis(
@@ -96,7 +97,7 @@ def make_nlj_basis(
     return manifolds
 
 
-class AtomicStructure:
+class AtomicStructure(StateLabelMixin):
     """Build a basis from (n, l, j) manifolds and diagonalize its Hamiltonian.
 
     Parameters

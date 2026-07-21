@@ -19,7 +19,8 @@ from .diagonalize import (MagneticSweepResult, LaserSweepResult,
                           SweepResult, diagonalize, eigenshuffle, sweep_field,
                           sweep_intensity)
 from .model import AtomicStructure, make_nlj_basis
-from .state_labels import uncoupled_label, coupled_label, both_labels, format_state
+from .state_labels import (uncoupled_label, coupled_label, both_labels,
+                           format_state, rs_state_label, StateLabelMixin)
 from .spectroscopy import (
     field_from_splitting,
     intensity_from_splitting_shift,
@@ -46,6 +47,8 @@ __all__ = [
     "coupled_label",
     "both_labels",
     "format_state",
+    "rs_state_label",
+    "StateLabelMixin",
     "field_from_splitting",
     "intensity_from_splitting_shift",
     "scattering_rate",
