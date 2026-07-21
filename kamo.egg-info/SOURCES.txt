@@ -19,6 +19,8 @@ kamo/hamiltonian/basis.py
 kamo/hamiltonian/builder.py
 kamo/hamiltonian/diagonalize.py
 kamo/hamiltonian/model.py
+kamo/hamiltonian/spectroscopy.py
+kamo/hamiltonian/state_labels.py
 kamo/light_shift/__init__.py
 kamo/light_shift/compute_light_shift.py
 kamo/light_shift/compute_polarizabilities.py
