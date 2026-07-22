@@ -46,10 +46,6 @@ class Potassium39(arc.Potassium39):
             float or np.ndarray: the magnetic field(s) in G.
         """
 
-        # if isinstance(transition_frequency_Hz,float) or isinstance(transition_frequency_Hz,int):
-        #     transition_frequency_Hz = [transition_frequency_Hz]
-        # if isinstance(transition_frequency_Hz,list):
-        #     transition_frequency_Hz = np.array(transition_frequency_Hz)
         transition_frequency_Hz = np.atleast_1d(transition_frequency_Hz)
 
         b = np.linspace(B_bounds_G[0], B_bounds_G[1], N_interp)
@@ -86,7 +82,7 @@ class Potassium39(arc.Potassium39):
         f_B = self.get_ground_state_transition_frequency(f1,mf1,f2,mf2,B)
         return (f_B_plus_dB - f_B) / dB
     
-    def _zeeman_hamiltonian_multi(self, states, B_gauss):
+    def _zeeman_hamiltonian_multi(self, states, B_gauss, B_sweep_steps=500):
         """Run one kamo.hamiltonian sweep covering all requested states.
 
         Parameters
@@ -102,7 +98,9 @@ class Potassium39(arc.Potassium39):
         from kamo.hamiltonian import AtomicStructure
         B_arr = np.atleast_1d(np.asarray(B_gauss, dtype=float))
         B_max = max(float(np.max(B_arr)), 0.01)
-        dB = max(B_max / 500, 0.01)
+        dB = min(B_max / B_sweep_steps, 0.01)
+        if dB > 0.1:
+            print(f"Sweep steps are large ({dB:1.2e} G per step). Consider increasing sampling if adiabatic state detection suffers.")
 
         # Collect unique (n, l, j) fine-structure levels spanning all requests
         njl_levels = list(dict.fromkeys((s[0], s[1], s[2]) for s in states))
@@ -221,7 +219,8 @@ class Potassium39(arc.Potassium39):
         scattering_cross_section = g_ratio * np.pi**2 * c.c**2 / omega0**2 * A21 * lineshape
         return scattering_cross_section
     
-    def get_zeeman_shift(self, n, l, j, m_j, m_i=None, B=0, return_sweep=False):
+    def get_zeeman_shift(self, n, l, j, m_j, m_i=None,
+                         B=0, return_sweep=False):
         """Return the Zeeman energy (MHz) for state |n l j; m_j [m_i]> at B (Gauss).
 
         Routing:
@@ -274,21 +273,6 @@ class Potassium39(arc.Potassium39):
             [e1_arr, e2_arr], _ = self._zeeman_hamiltonian_multi(
                 [(n1, l1, j1, m_j1, m_i1), (n2, l2, j2, m_j2, m_i2)], B_arr
             )
-            result = np.abs(e2_arr - e1_arr)
-        else:
-            e1 = self.get_zeeman_shift(n1, l1, j1, m_j1, m_i1, B)
-            e2 = self.get_zeeman_shift(n2, l2, j2, m_j2, m_i2, B)
-            result = np.atleast_1d(np.abs(e2 - e1))
-
-        return float(result[0]) if scalar_in else result
-        B_arr = np.atleast_1d(np.asarray(B, dtype=float))
-        scalar_in = np.ndim(B) == 0
-
-        same_manifold = (n1 == n2 and l1 == l2 and j1 == j2)
-        if same_manifold and n1 < _HAMILTONIAN_N_THRESHOLD:
-            # Run the sweep once and extract both state energies from it.
-            e1_arr, sweep = self._zeeman_hamiltonian(n1, l1, j1, m_j1, m_i1, B_arr)
-            e2_arr = sweep.get_energy(n2, l2, j2, m_j2, m_i2, at=B_arr) / 1e6
             result = np.abs(e2_arr - e1_arr)
         else:
             e1 = self.get_zeeman_shift(n1, l1, j1, m_j1, m_i1, B)
