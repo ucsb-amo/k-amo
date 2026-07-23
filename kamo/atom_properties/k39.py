@@ -255,11 +255,17 @@ class Potassium39(arc.Potassium39):
         energy = float(result[0]) if scalar_in else result
         return (energy, sweep) if return_sweep else energy
 
-    def get_transition_frequency(self,
+    def _get_transition_frequency_legacy(self,
                                   n1, l1, j1, m_j1, m_i1,
                                   n2, l2, j2, m_j2, m_i2,
                                  B=0):
         """Return |E(m_j2,m_i2) − E(m_j1,m_i1)| (MHz) at field B (Gauss).
+
+        Legacy flat-argument implementation, reached via the
+        :meth:`get_transition_frequency` dispatcher when the first positional
+        argument is a number rather than a state tuple.  Supports array-valued
+        ``B`` and high-n states (pairinteraction) that the state-tuple API does
+        not.
 
         When both states are low-n (below the hamiltonian threshold), a single
         sweep covers all requested fine-structure levels regardless of whether
@@ -327,18 +333,39 @@ class Potassium39(arc.Potassium39):
     def get_transition_shift(
         self, n1, l1, j1, m_j1, m_i1, n2, l2, j2, m_j2, m_i2, B=0
     ):
-        """Differential Zeeman shift of optical transition at field B (MHz).
+        """Differential Zeeman shift of a transition at field B (MHz).
 
-        Returns ``ΔE(state2, B) − ΔE(state1, B)`` where
-        ``ΔE(state, B) = E(state, B) − E(state, 0)``.
+        Returns ``f(B) − f(0)`` for the transition ``state1 -> state2``, i.e.
+        ``ΔE(state2, B) − ΔE(state1, B)`` with ``ΔE(state, B) = E(state, B) −
+        E(state, 0)``.  Computed via :meth:`get_transition_frequency` in
+        ``relative_mode="magnetic"`` (Hz), converted to MHz.
         """
-        e1_B = self.get_zeeman_shift(n1, l1, j1, m_j1, m_i1, B)
-        e1_0 = self.get_zeeman_shift(n1, l1, j1, m_j1, m_i1, 0.0)
-        e2_B = self.get_zeeman_shift(n2, l2, j2, m_j2, m_i2, B)
-        e2_0 = self.get_zeeman_shift(n2, l2, j2, m_j2, m_i2, 0.0)
-        return (e2_B - e2_0) - (e1_B - e1_0)
+        shift_hz = self.get_transition_frequency(
+            (n1, l1, j1, m_j1, m_i1), (n2, l2, j2, m_j2, m_i2),
+            B=B, relative_mode="magnetic",
+        )
+        return shift_hz / 1e6
     
-    def get_transition_frequency(
+    def get_transition_frequency(self, *args, **kwargs):
+        """Transition frequency between two states, with optional light shift.
+
+        This is a dispatcher supporting two calling conventions:
+
+        * **State-tuple API** (preferred) --
+          ``get_transition_frequency(state1, state2, B=..., beam=..., ...)``
+          where each state is a 5-tuple ``(n, l, j, a, b)``.  See
+          :meth:`_get_transition_frequency_states` for the full signature.
+        * **Legacy flat API** --
+          ``get_transition_frequency(n1, l1, j1, m_j1, m_i1, n2, l2, j2,
+          m_j2, m_i2, B=...)``.  Reached when the first positional argument is a
+          number instead of a tuple/list.  See
+          :meth:`_get_transition_frequency_legacy`.
+        """
+        if args and not isinstance(args[0], (tuple, list)):
+            return self._get_transition_frequency_legacy(*args, **kwargs)
+        return self._get_transition_frequency_states(*args, **kwargs)
+
+    def _get_transition_frequency_states(
         self,
         state1,
         state2,
@@ -352,6 +379,7 @@ class Potassium39(arc.Potassium39):
         n_points=200,
         dB=0.1,
         diamagnetic=True,
+        relative_mode=None,
         return_sweep=False,
     ):
         """Transition frequency (Hz) between two states at field ``B``, with an
@@ -367,7 +395,7 @@ class Potassium39(arc.Potassium39):
         The calculation uses ``kamo.hamiltonian`` exact diagonalization with
         eigenshuffle state tracking, so states are followed adiabatically (the
         same magnetic-sweep connection used everywhere else) through avoided
-        crossings.  The returned value is ``E(state2) - E(state1)`` (signed).
+        crossings.
 
         How the two fields combine
         --------------------------
@@ -375,15 +403,28 @@ class Potassium39(arc.Potassium39):
           bare transition frequency at ``B``.
         * **Magnetic + laser**: the bare transition at ``B`` is computed from
           the magnetic sweep first; then a laser-intensity sweep *at the same
-          field* ``B`` provides the light shift of the transition, which is
-          added on.  The light shift is taken as an intensity *difference*
-          (``f(I) - f(0)``), so it is a true lab-frame shift regardless of the
-          rotating frame used internally by the RWA model.
+          field* ``B`` provides the light shift of the transition.  The light
+          shift is taken as an intensity *difference* (``f(I) - f(0)``), so it
+          is a true lab-frame shift regardless of the rotating frame used
+          internally by the RWA model.
+
+        Reference (``relative_mode``)
+        -----------------------------
+        Let ``f(B, I)`` be the absolute transition frequency ``E2 - E1``.
+
+        * ``"absolute"`` -- return ``f(B, I)`` (the full transition frequency).
+        * ``"magnetic"`` -- return ``f(B, I) - f(0, 0)``, i.e. relative to the
+          zero-magnetic-field, zero-intensity transition frequency (the Zeeman
+          shift of the transition when no laser is present).
+        * ``"optical"`` -- return ``f(B, I) - f(B, 0)``, i.e. relative to zero
+          intensity at the given (high) magnetic field (the pure light shift).
+        * ``None`` (default) -- ``"optical"`` when a laser is supplied,
+          otherwise ``"magnetic"``.
 
         Parameters
         ----------
         state1, state2 : (n, l, j, a, b) tuples
-            Lower/upper states of the transition.
+            Lower/upper states of the transition (result is ``E2 - E1``, signed).
         B : float, optional
             Static magnetic field in Gauss (default 0).
         beam : kamo.GaussianBeam, optional
@@ -401,15 +442,19 @@ class Potassium39(arc.Potassium39):
         laser_model : {"rwa", "stark"}, optional
             Light-shift model (default "rwa").
         basis : AtomicStructure, optional
-            Override the atomic-structure basis.  When omitted, a default basis
-            covering both states' manifolds and their dipole-coupled neighbours
-            is built automatically.
+            Override the atomic-structure basis.  When omitted, a basis is built
+            automatically: just the two states' own manifolds for a pure
+            magnetic calculation (e.g. only ``(4, 0, 1/2)`` for a ground-state
+            transition), or those manifolds plus their dipole-coupled
+            neighbours when a light shift is requested.
         n_points : int, optional
             Intensity steps for the laser sweep (default 200).
         dB : float, optional
             Magnetic-sweep step in Gauss (default 0.1).
         diamagnetic : bool, optional
             Include the diamagnetic term in the magnetic sweep (default True).
+        relative_mode : {None, "absolute", "magnetic", "optical"}, optional
+            Reference for the returned frequency (see above).  Default None.
         return_sweep : bool, optional
             If True, also return the underlying sweep result (the laser sweep
             when a laser is supplied, otherwise the magnetic sweep).
@@ -437,44 +482,70 @@ class Potassium39(arc.Potassium39):
             raise ValueError("`frequency_Hz` requires `intensity` (W/m^2).")
         use_light = has_beam or has_freq
 
+        # ---- resolve the reference mode ----
+        if relative_mode is None:
+            relative_mode = "optical" if use_light else "magnetic"
+        if relative_mode not in ("absolute", "magnetic", "optical"):
+            raise ValueError(
+                "relative_mode must be None, 'absolute', 'magnetic', or "
+                f"'optical'; got {relative_mode!r}.")
+
         # ---- build / accept the basis ----
-        if basis is None:
+        if basis is not None:
+            model = basis
+        elif use_light:
+            # light shift needs the dipole-coupled (Δl = ±1) manifolds present
             manifolds = []
             for st in (s1, s2):
-                n_s, l_s = int(st[0]), int(st[1])
-                for m in make_nlj_basis(n_s, l_s, n_range=0, l_range=1):
+                for m in make_nlj_basis(int(st[0]), int(st[1]),
+                                        n_range=0, l_range=1):
                     if m not in manifolds:
                         manifolds.append(m)
             model = AtomicStructure(manifolds, atom=self)
         else:
-            model = basis
+            # pure magnetic: only the states' own manifolds are needed
+            manifolds = list(dict.fromkeys(
+                (int(st[0]), int(st[1]), float(st[2])) for st in (s1, s2)))
+            model = AtomicStructure(manifolds, atom=self)
 
         # ---- bare transition frequency at B (magnetic sweep, lab frame) ----
         B = float(B)
         B_max = max(B + dB, dB)
         resB = model.magnetic_sweep(B_max=B_max, dB=dB, diamagnetic=diamagnetic)
-        freq = resB.get_transition_frequency(s1, s2, at=B)
-
-        if not use_light:
-            return (freq, resB) if return_sweep else freq
+        f_B0 = resB.get_transition_frequency(s1, s2, at=B)      # f(B, 0)
 
         # ---- add the laser light shift at the same field ----
-        if has_beam:
-            I_max = float(intensity) if intensity is not None else float(beam.I0)
-        else:
-            beam = GaussianBeam(waist=1e-6, frequency=float(frequency_Hz),
-                                power=0.0)
-            I_max = float(intensity)
+        df_light = 0.0
+        resL = None
+        if use_light:
+            if has_beam:
+                I_max = (float(intensity) if intensity is not None
+                         else float(beam.I0))
+            else:
+                beam = GaussianBeam(waist=1e-6, frequency=float(frequency_Hz),
+                                    power=0.0)
+                I_max = float(intensity)
+            resL = model.laser_sweep(
+                beam, I_max=I_max, n_points=n_points,
+                model=laser_model, polarization=polarization, B_gauss=B,
+            )
+            # intensity difference cancels the RWA rotating-frame offset,
+            # leaving the true lab-frame light shift of the transition.
+            df_light = resL.transition_frequency_shift(s1, s2, at=I_max)
 
-        resL = model.laser_sweep(
-            beam, I_max=I_max, n_points=n_points,
-            model=laser_model, polarization=polarization, B_gauss=B,
-        )
-        # intensity difference cancels the RWA rotating-frame offset, leaving
-        # the true lab-frame light shift of the transition.
-        df_light = resL.transition_frequency_shift(s1, s2, at=I_max)
-        freq = freq + df_light
-        return (freq, resL) if return_sweep else freq
+        f_BI = f_B0 + df_light                                  # f(B, I)
+
+        # ---- apply the requested reference ----
+        if relative_mode == "absolute":
+            result = f_BI
+        elif relative_mode == "optical":
+            result = f_BI - f_B0                                # pure light shift
+        else:  # "magnetic"
+            f_00 = resB.get_transition_frequency(s1, s2, at=0.0)  # f(0, 0)
+            result = f_BI - f_00
+
+        sweep = resL if use_light else resB
+        return (result, sweep) if return_sweep else result
 
     def state_dicts(self,n,l,j,hf=True) -> dict:
         '''
