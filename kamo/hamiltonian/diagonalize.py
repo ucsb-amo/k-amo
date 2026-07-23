@@ -489,34 +489,48 @@ class SweepResult(StateLabelMixin):
             f"|{n},{l},{j}; m_j={m_j}, m_i={m_i}> is not a valid "
             f"adiabatic-label representative.")
 
-    def _tracked_index_F_mF(self, n: int, l: int, j: float,
-                            F: int, mF: int, step: int) -> int:
-        """Return the tracked-state column index for the low-field state
-        ``|n l j; F, mF>`` (coupled basis).
-
-        The coupled state is CG-expanded into the uncoupled ``|m_j, m_i>``
-        basis; the tracked state at ``step`` with the largest overlap is
-        returned.  This is most meaningful at low field (step 0) where the
-        hyperfine eigenstates are nearly pure ``|F, mF>``.
-        """
-        # find i_nuclear from the basis manifold
-        i_nuc = None
+    def _i_nuclear(self, n: int, l: int, j: float) -> float:
+        """Nuclear spin ``I`` of manifold ``(n, l, j)`` in the basis."""
         for man in self.basis.manifolds:
             if man.n == n and man.l == l and abs(man.j - j) < 1e-9:
-                i_nuc = man.i_nuclear
-                break
-        if i_nuc is None:
-            raise KeyError(f"Manifold ({n}, {l}, {j}) not in basis.")
+                return man.i_nuclear
+        raise KeyError(f"Manifold ({n}, {l}, {j}) not in basis.")
 
-        # build the |F, mF> state vector in the full basis
+    def _reference_uncoupled_vector(self, n: int, l: int, j: float,
+                                    F: int, mF: int, step: int) -> np.ndarray:
+        """Uncoupled-basis vector the tracked state ``|n l j; F, mF>`` matches.
+
+        This is the vector overlapped against the tracked eigenvectors to
+        locate a state from its adiabatic (zero-field) ``|F, mF>`` label.
+
+        Base implementation (magnetic sweep): the zero-field ``|F, mF>``
+        Clebsch-Gordan vector, which is the exact eigenstate at step 0 (B=0).
+        Subclasses whose step 0 is *not* at zero field (e.g. a laser sweep at
+        finite ``B_gauss``) override this so identification follows the same
+        adiabatic connection the magnetic sweep would give.
+        """
+        i_nuc = self._i_nuclear(n, l, j)
         psi = np.zeros(self.basis.dim, dtype=complex)
         for s in self.basis.state_list:
             if s.n == n and s.l == l and abs(s.j - j) < 1e-9:
                 cg = _clebsch(j, s.m_j, i_nuc, s.m_i, F, mF)
                 if cg:
                     psi[s.index] = cg
+        return psi
 
-        # overlap of each tracked eigenvector with |F, mF>
+    def _tracked_index_F_mF(self, n: int, l: int, j: float,
+                            F: int, mF: int, step: int) -> int:
+        """Return the tracked-state column index for the state whose adiabatic
+        (zero-field) label is ``|n l j; F, mF>`` (coupled basis).
+
+        The target vector is built by :meth:`_reference_uncoupled_vector`
+        (the zero-field ``|F, mF>`` CG state for a magnetic sweep, or the
+        adiabatically-connected Zeeman-dressed state for a laser sweep at
+        finite field); the tracked state at ``step`` with the largest overlap
+        is returned.
+        """
+        psi = self._reference_uncoupled_vector(n, l, j, F, mF, step)
+        # overlap of each tracked eigenvector with the reference vector;
         # vectors[step] has shape (n_basis, n_tracked); columns are eigenvectors
         overlaps = np.abs(psi @ self.vectors[step]) ** 2
         return int(np.argmax(overlaps))
@@ -535,7 +549,10 @@ class SweepResult(StateLabelMixin):
         Parameters
         ----------
         n, l, j : fine-structure quantum numbers.
-        m_j, m_i : magnetic quantum numbers of J and I.
+        m_j, m_i : magnetic quantum numbers of J and I. If both are Python
+            ``int``, they are interpreted as coupled-basis **F, mF** labels
+            (same convention as :meth:`indices_for` and :meth:`convert_label`);
+            half-integer floats are the uncoupled adiabatic ``(m_j, m_i)``.
         identify_at_step : int
             Step at which to choose the tracked state by dominant uncoupled
             weight (default 0).
@@ -549,7 +566,11 @@ class SweepResult(StateLabelMixin):
         -------
         ndarray or float
         """
-        i = self._tracked_index(n, l, j, m_j, m_i, identify_at_step)
+        if isinstance(m_j, int) and isinstance(m_i, int):
+            # integer args -> coupled-basis (F, mF) labels (low field)
+            i = self._tracked_index_F_mF(n, l, j, m_j, m_i, identify_at_step)
+        else:
+            i = self._tracked_index(n, l, j, m_j, m_i, identify_at_step)
         return _interp_at(self.param, self.energies[:, i], at)
 
     def get_transition_frequency(
@@ -914,6 +935,44 @@ class LaserSweepResult(SweepResult):
     polarization: Any = "pi"
     B_gauss: float = 0.0
     _builder: Any = field(default=None, repr=False)
+
+    def _reference_magnetic_sweep(self) -> "MagneticSweepResult":
+        """Cached B=0 -> ``B_gauss`` magnetic sweep used to obtain the
+        adiabatically-tracked Zeeman-dressed eigenvectors for state
+        identification and labelling.  Built on first use."""
+        cached = getattr(self, "_ref_Bsweep_cache", None)
+        if cached is None:
+            if self._builder is None:
+                raise RuntimeError(
+                    "No builder stored.  Use model.laser_sweep() to create "
+                    "this result.")
+            cached = sweep_field(self._builder,
+                                 B_max=abs(self.B_gauss) + 0.1, dB=0.1)
+            self._ref_Bsweep_cache = cached
+        return cached
+
+    def _reference_uncoupled_vector(self, n: int, l: int, j: float,
+                                    F: int, mF: int, step: int) -> np.ndarray:
+        """Identify states via the **magnetic-sweep adiabatic connection**.
+
+        A laser sweep is taken at fixed field ``B_gauss``; at intensity 0 its
+        eigenstates are the Zeeman-dressed states there, *not* the zero-field
+        ``|F, mF>`` hyperfine states.  Matching a bare ``|F, mF>``
+        Clebsch-Gordan vector therefore selects the wrong state in the
+        Paschen-Back regime, where the F label and the dominant ``(m_j, m_i)``
+        character swap across the Breit-Rabi avoided crossings.  Instead,
+        return the Zeeman-dressed eigenvector at ``B_gauss`` that adiabatically
+        connects to ``|F, mF>`` at zero field, taken from a tracked magnetic
+        sweep so the labelling matches the magnetic-sweep convention exactly.
+        """
+        if not self.B_gauss:
+            return super()._reference_uncoupled_vector(n, l, j, F, mF, step)
+        resB = self._reference_magnetic_sweep()
+        # tracked index is step-independent; identify at B=0 where |F, mF> is
+        # pure, then read the eigenvector at the step nearest B_gauss.
+        iB = resB._tracked_index_F_mF(n, l, j, F, mF, step=0)
+        step_B = resB.nearest_step(abs(self.B_gauss))
+        return resB.vectors[step_B][:, iB]
 
     def intensity_from_splitting_shift(
         self,

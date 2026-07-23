@@ -29,12 +29,23 @@ mu_b = e * hbar / (2 * m_e)
 # cached value stored back into the module namespace.
 _arc_atom_K39 = None
 
+def _atom_K39():
+    """Return the lazily-instantiated ARC Potassium39 singleton.
+
+    Use this inside module functions: module-level ``__getattr__`` only fires on
+    *attribute* access (``constants.atom_K39``), not on bare global-name lookups
+    inside functions, so referencing ``atom_K39`` directly there raises
+    ``NameError`` until something first accesses it as an attribute.
+    """
+    global _arc_atom_K39
+    if _arc_atom_K39 is None:
+        _arc_atom_K39 = arc.Potassium39()
+    return _arc_atom_K39
+
 def __getattr__(name):
     if name in ('atom_K39', 'm_K'):
-        global _arc_atom_K39
-        if _arc_atom_K39 is None:
-            _arc_atom_K39 = arc.Potassium39()
-        val = _arc_atom_K39 if name == 'atom_K39' else _arc_atom_K39.mass
+        atom = _atom_K39()
+        val = atom if name == 'atom_K39' else atom.mass
         # Cache in module namespace so __getattr__ is not called again
         globals()[name] = val
         return val
@@ -51,16 +62,23 @@ def get_hyperfine_constant(l, j, iso=39, n=None):
         l (int): orbital angular momentum quantum number.
         j (float): total angular momentum quantum number.
         iso (int): isotope mass number; 39 (default), 40, or 41.
-        n (int, optional): principal quantum number.  When supplied and no
-            hardcoded value exists for the requested (l, j) pair, the function
-            falls back to ``arc.Potassium39().getHFSCoefficients(n, l, j)``
-            (iso=39 only).  Pass n=None to suppress the ARC fallback.
+        n (int, optional): principal quantum number.  The hardcoded S/P values
+            are the precise measured 4S/4P constants, so they are only used when
+            ``n`` is 4 or None (the latter being an n-independent request).  For
+            any other ``n``, and whenever no hardcoded value exists for the
+            requested (l, j) pair, the function falls back to
+            ``arc.Potassium39().getHFSCoefficients(n, l, j)`` (iso=39 only).
+            Pass n=None to suppress the ARC fallback.
 
     Returns:
         float | None: A constant in Joules, or None if no data is available.
     """
-    # ── hardcoded table (n-independent approximation) ─────────────────────
-    if iso == 39:
+    # ── hardcoded table ───────────────────────────────────────────────────
+    # The iso=39 S/P constants are precise measured 4S/4P values, so only use
+    # them for n=4 (or n=None, an explicitly n-independent request); other n
+    # fall through to the ARC per-n lookup below.
+    hardcoded_ok = n in (None, 4)
+    if iso == 39 and hardcoded_ok:
         if l == 0:
             return h * 230.8598601e6
         if l == 1:
@@ -88,10 +106,11 @@ def get_hyperfine_constant(l, j, iso=39, n=None):
     # ── ARC fallback (requires n; iso=39 only) ────────────────────────────
     if n is not None and iso == 39:
         try:
-            A_hz, _ = atom_K39.getHFSCoefficients(n, l, j)
-            return h * A_hz
-        except (ValueError, Exception):
-            pass
+            A_hz, _ = _atom_K39().getHFSCoefficients(n, l, j)
+        except (ValueError, KeyError):
+            # ARC has no HFS data for this state; fall through to None.
+            return None
+        return h * A_hz
 
     return None
             
