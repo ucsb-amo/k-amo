@@ -573,6 +573,46 @@ class SweepResult(StateLabelMixin):
             i = self._tracked_index(n, l, j, m_j, m_i, identify_at_step)
         return _interp_at(self.param, self.energies[:, i], at)
 
+    def field_energy(
+        self,
+        states=None,
+        step: int = 0,
+    ) -> "Tuple[np.ndarray, np.ndarray, List[str]]":
+        """Return the swept field array, tracked energies, and labels for *states*.
+
+        Parameters
+        ----------
+        states : None, Manifold, int, (n, l, j), (n, l, j, F_or_m_j), (n, l, j, m_j, m_i), or list of such
+            Which tracked states to extract, using the same specifier grammar as
+            :meth:`plot` / :meth:`_resolve_states`:
+
+            * ``None`` (default) — every tracked state.
+            * ``Manifold`` or ``(n, l, j)`` — all states in that manifold.
+            * ``(n, l, j, F_or_m_j)`` — states with ``F == q`` or ``m_j == q``.
+            * ``(n, l, j, m_j, m_i)`` — a single state.
+            * list of any of the above, or a sequence of int indices.
+        step : int
+            Sweep step at which the specifier is resolved to tracked-state
+            indices (where dominant-basis labels are evaluated; default 0).
+
+        Returns
+        -------
+        field : ndarray, shape (n_points,)
+            The swept parameter values — the magnetic-field array (Gauss) for a
+            field sweep, or the intensity array (W/m^2) for an intensity sweep.
+            Same as :attr:`param`.
+        energies : ndarray, shape (n_states, n_points)
+            ``energies[k]`` is the energy track (Hz) of the ``k``-th resolved
+            state, ordered to match *labels*.  Always 2-D, even for a single
+            state (shape ``(1, n_points)``) — divide by ``1e6`` for MHz.
+        labels : list of str, length n_states
+            Human-readable label for each row of *energies*, in the same order.
+        """
+        idxs = self._resolve_states(states, step)
+        energies = self.energies[:, idxs].T
+        labels = [self.label(i, step) for i in idxs]
+        return self.param, energies, labels
+
     def get_transition_frequency(
         self,
         state_a, state_b,

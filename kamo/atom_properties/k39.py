@@ -255,31 +255,39 @@ class Potassium39(arc.Potassium39):
         energy = float(result[0]) if scalar_in else result
         return (energy, sweep) if return_sweep else energy
 
-    def _get_transition_frequency_legacy(self,
-                                  n1, l1, j1, m_j1, m_i1,
-                                  n2, l2, j2, m_j2, m_i2,
-                                 B=0):
-        """Return |E(m_j2,m_i2) − E(m_j1,m_i1)| (MHz) at field B (Gauss).
+    def _splitting_mhz(self, state1, state2, B=0):
+        """Return |E2 − E1| (MHz) versus field, vectorized over ``B`` (Gauss).
 
-        Legacy flat-argument implementation, reached via the
-        :meth:`get_transition_frequency` dispatcher when the first positional
-        argument is a number rather than a state tuple.  Supports array-valued
-        ``B`` and high-n states (pairinteraction) that the state-tuple API does
-        not.
+        ``state1``/``state2`` are ``(n, l, j, m_j, m_i)`` tuples.  ``B`` may be a
+        scalar or 1-D array (the return matches its shape).  When both states are
+        low-n (below :data:`_HAMILTONIAN_N_THRESHOLD`) a single magnetic sweep
+        covers both manifolds and the states are followed adiabatically; high-n
+        states fall back to per-state :meth:`get_zeeman_shift`.
 
-        When both states are low-n (below the hamiltonian threshold), a single
-        sweep covers all requested fine-structure levels regardless of whether
-        they are in the same or different manifolds.
+        This is the vectorized splitting engine used by
+        :meth:`get_microwave_transition_frequency` and
+        :meth:`get_magnetic_field_from_splitting`, which need array-valued ``B``
+        and MHz units that the scalar, Hz-valued
+        :meth:`get_transition_frequency` state-tuple API does not provide.
         """
+        n1, l1, j1, m_j1, m_i1 = state1
+        n2, l2, j2, m_j2, m_i2 = state2
         B_arr = np.atleast_1d(np.asarray(B, dtype=float))
         scalar_in = np.ndim(B) == 0
 
         if n1 < _HAMILTONIAN_N_THRESHOLD and n2 < _HAMILTONIAN_N_THRESHOLD:
-            # Single sweep covers both manifolds (same or different).
-            [e1_arr, e2_arr], _ = self._zeeman_hamiltonian_multi(
-                [(n1, l1, j1, m_j1, m_i1), (n2, l2, j2, m_j2, m_i2)], B_arr
+            # One magnetic sweep up to the largest requested field covers both
+            # manifolds; each requested field is then read back at its nearest
+            # swept step (no per-B re-diagonalization).
+            _, res = self._zeeman_hamiltonian_multi(
+                [tuple(state1), tuple(state2)], B_arr
             )
-            result = np.abs(e2_arr - e1_arr)
+            e1_track = res.get_energy(n1, l1, j1, m_j1, m_i1) / 1e6  # MHz track
+            e2_track = res.get_energy(n2, l2, j2, m_j2, m_i2) / 1e6
+            steps = np.argmin(
+                np.abs(res.param[:, None] - B_arr[None, :]), axis=0
+            )
+            result = np.abs(e2_track[steps] - e1_track[steps])
         else:
             e1 = self.get_zeeman_shift(n1, l1, j1, m_j1, m_i1, B)
             e2 = self.get_zeeman_shift(n2, l2, j2, m_j2, m_i2, B)
@@ -288,8 +296,29 @@ class Potassium39(arc.Potassium39):
         return float(result[0]) if scalar_in else result
 
     def get_microwave_transition_frequency(self, n, l, j, m_j1, m_i1, m_j2, m_i2, B=0):
-        """Alias for :meth:`get_transition_frequency` (backwards-compatible name)."""
-        return self.get_transition_frequency(n, l, j, m_j1, m_i1, n, l, j, m_j2, m_i2, B)
+        """|E2 − E1| (MHz) for the ``(m_j1,m_i1) → (m_j2,m_i2)`` transition in
+        manifold ``(n, l, j)`` at field ``B`` (Gauss).
+
+        ``B`` is normally a scalar.  Passing a 1-D array is **deprecated**: it
+        still works — a single magnetic sweep is run up to ``max(B)`` and each
+        requested field is read back at its nearest swept step — but prefer a
+        scalar ``B``, or drive a :meth:`~kamo.hamiltonian.model.AtomicStructure.magnetic_sweep`
+        result directly (e.g. ``SweepResult.field_energy`` / ``get_energy``) for
+        full control over the field grid.
+        """
+        if np.ndim(B) > 0:
+            import warnings
+            warnings.warn(
+                "Supplying a vector B to get_microwave_transition_frequency is "
+                "deprecated: one magnetic sweep is run up to max(B) and each "
+                "requested field is returned at its nearest swept step. Pass a "
+                "scalar B, or use a magnetic_sweep result "
+                "(SweepResult.field_energy / get_energy) for full control.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        return self._splitting_mhz(
+            (n, l, j, m_j1, m_i1), (n, l, j, m_j2, m_i2), B)
 
     def get_magnetic_field_from_splitting(
         self, n, l, j, m_j1, m_i1, m_j2, m_i2,
@@ -305,7 +334,8 @@ class Potassium39(arc.Potassium39):
             If the target splitting is never reached within ``[0, B_max]``.
         """
         B_arr = np.linspace(0.0, B_max, n_points)
-        freq = self.get_transition_frequency(n, l, j, m_j1, m_i1, n, l, j, m_j2, m_i2, B_arr)
+        freq = self._splitting_mhz(
+            (n, l, j, m_j1, m_i1), (n, l, j, m_j2, m_i2), B_arr)
         diff = freq - target_freq_mhz
         sign_changes = np.where(np.diff(np.sign(diff)))[0]
         if len(sign_changes) == 0:
@@ -346,26 +376,7 @@ class Potassium39(arc.Potassium39):
         )
         return shift_hz / 1e6
     
-    def get_transition_frequency(self, *args, **kwargs):
-        """Transition frequency between two states, with optional light shift.
-
-        This is a dispatcher supporting two calling conventions:
-
-        * **State-tuple API** (preferred) --
-          ``get_transition_frequency(state1, state2, B=..., beam=..., ...)``
-          where each state is a 5-tuple ``(n, l, j, a, b)``.  See
-          :meth:`_get_transition_frequency_states` for the full signature.
-        * **Legacy flat API** --
-          ``get_transition_frequency(n1, l1, j1, m_j1, m_i1, n2, l2, j2,
-          m_j2, m_i2, B=...)``.  Reached when the first positional argument is a
-          number instead of a tuple/list.  See
-          :meth:`_get_transition_frequency_legacy`.
-        """
-        if args and not isinstance(args[0], (tuple, list)):
-            return self._get_transition_frequency_legacy(*args, **kwargs)
-        return self._get_transition_frequency_states(*args, **kwargs)
-
-    def _get_transition_frequency_states(
+    def get_transition_frequency(
         self,
         state1,
         state2,
