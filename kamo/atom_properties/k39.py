@@ -23,7 +23,8 @@ class Potassium39(arc.Potassium39):
     def get_magnetic_field_from_ground_state_transition_frequency(self,
                                                                 f1, mf1, f2, mf2, transition_frequency_Hz,
                                                                 B_bounds_G=(0., 600.),
-                                                                N_interp=10000):
+                                                                N_interp=10000,
+                                                                B_guess=None):
         """Returns the magnetic field(s) (in G) at which the transition from
         (f1,mf1) to (f2,mf2) would occur at frequency 'transition_frequency_Hz'.
 
@@ -37,31 +38,26 @@ class Potassium39(arc.Potassium39):
             B_bounds_G (tuple, optional): Bounds used for field finding. Only
                 limited to save time computing all the possible transition frequencies. Defaults to (0.,600.).
             N_interp (int, optional): Number of points used for interpolation. Defaults to 10000.
+            B_guess (float, optional): Field (G) used to pick a branch when the
+                splitting is non-monotonic and a target has several solutions.
 
         Raises:
-            ValueError: If any returned value is one of the bounds of the
-                magnetic field specified, raises an error.
+            ValueError: If a target is never reached within the bounds, or if it
+                has multiple branches and no ``B_guess`` was given.
 
         Returns:
             float or np.ndarray: the magnetic field(s) in G.
         """
-
-        transition_frequency_Hz = np.atleast_1d(transition_frequency_Hz)
-
-        b = np.linspace(B_bounds_G[0], B_bounds_G[1], N_interp)
-        f_transitions_MHz = self.get_ground_state_transition_frequency(f1, mf1, f2, mf2, b)
-        
-        if f_transitions_MHz[0] > f_transitions_MHz[-1]:
-            f_transitions_MHz = f_transitions_MHz[::-1]
-            b = b[::-1]
-        B_G = np.interp(transition_frequency_Hz/1.e6, f_transitions_MHz, b)
-
-        if np.any((B_G == B_bounds_G[0]) | (B_G == B_bounds_G[1])):
-            raise ValueError("One or more transition frequencies correspond with one of the bounds of the magnetic field specified in the 'B_bounds_G' argument. Update this argument and re-run.")
-
-        if B_G.size == 1:
-            return B_G[0]
-        return B_G
+        # Ground-state (4S_1/2) special case of the general splitting inverter;
+        # both states share a manifold, so a single sweep serves all targets.
+        return self.get_magnetic_field_from_splitting(
+            (4, 0, 0.5, int(f1), int(mf1)),
+            (4, 0, 0.5, int(f2), int(mf2)),
+            transition_frequency_Hz,
+            B_bounds_G=B_bounds_G,
+            n_points=N_interp,
+            B_guess=B_guess,
+        )
     
     def get_ground_state_transition_sensitivity(self,f1,mf1,f2,mf2,B):
         """Returns the ground state transition sensitivity in MHz/G for (f1,mf1) to
@@ -78,8 +74,12 @@ class Potassium39(arc.Potassium39):
             float: ground state transition sensitivity in MHz/G.
         """        
         dB = B * 0.001
-        f_B_plus_dB = self.get_ground_state_transition_frequency(f1,mf1,f2,mf2,B+dB)
-        f_B = self.get_ground_state_transition_frequency(f1,mf1,f2,mf2,B)
+        # Both fields come from a single sweep (array B) instead of two calls.
+        f_B, f_B_plus_dB = self._splitting_mhz(
+            (4, 0, 0.5, int(f1), int(mf1)),
+            (4, 0, 0.5, int(f2), int(mf2)),
+            np.array([B, B + dB]),
+        )
         return (f_B_plus_dB - f_B) / dB
     
     def _zeeman_hamiltonian_multi(self, states, B_gauss, B_sweep_steps=500):
@@ -277,17 +277,12 @@ class Potassium39(arc.Potassium39):
 
         if n1 < _HAMILTONIAN_N_THRESHOLD and n2 < _HAMILTONIAN_N_THRESHOLD:
             # One magnetic sweep up to the largest requested field covers both
-            # manifolds; each requested field is then read back at its nearest
-            # swept step (no per-B re-diagonalization).
-            _, res = self._zeeman_hamiltonian_multi(
+            # manifolds; each requested field is read back by interpolation
+            # (no per-B re-diagonalization).
+            [e1_arr, e2_arr], _ = self._zeeman_hamiltonian_multi(
                 [tuple(state1), tuple(state2)], B_arr
             )
-            e1_track = res.get_energy(n1, l1, j1, m_j1, m_i1) / 1e6  # MHz track
-            e2_track = res.get_energy(n2, l2, j2, m_j2, m_i2) / 1e6
-            steps = np.argmin(
-                np.abs(res.param[:, None] - B_arr[None, :]), axis=0
-            )
-            result = np.abs(e2_track[steps] - e1_track[steps])
+            result = np.abs(e2_arr - e1_arr)
         else:
             e1 = self.get_zeeman_shift(n1, l1, j1, m_j1, m_i1, B)
             e2 = self.get_zeeman_shift(n2, l2, j2, m_j2, m_i2, B)
@@ -301,8 +296,8 @@ class Potassium39(arc.Potassium39):
 
         ``B`` is normally a scalar.  Passing a 1-D array is **deprecated**: it
         still works — a single magnetic sweep is run up to ``max(B)`` and each
-        requested field is read back at its nearest swept step — but prefer a
-        scalar ``B``, or drive a :meth:`~kamo.hamiltonian.model.AtomicStructure.magnetic_sweep`
+        requested field is interpolated from that sweep — but prefer a scalar
+        ``B``, or drive a :meth:`~kamo.hamiltonian.model.AtomicStructure.magnetic_sweep`
         result directly (e.g. ``SweepResult.field_energy`` / ``get_energy``) for
         full control over the field grid.
         """
@@ -311,7 +306,7 @@ class Potassium39(arc.Potassium39):
             warnings.warn(
                 "Supplying a vector B to get_microwave_transition_frequency is "
                 "deprecated: one magnetic sweep is run up to max(B) and each "
-                "requested field is returned at its nearest swept step. Pass a "
+                "requested field is interpolated from that sweep. Pass a "
                 "scalar B, or use a magnetic_sweep result "
                 "(SweepResult.field_energy / get_energy) for full control.",
                 DeprecationWarning,
@@ -321,44 +316,135 @@ class Potassium39(arc.Potassium39):
             (n, l, j, m_j1, m_i1), (n, l, j, m_j2, m_i2), B)
 
     def get_magnetic_field_from_splitting(
-        self, n, l, j, m_j1, m_i1, m_j2, m_i2,
-        target_freq_mhz, B_max=1000.0, n_points=500
+        self,
+        state1,
+        state2,
+        transition_frequency_Hz,
+        B_bounds_G=(0.0, 600.0),
+        n_points=10000,
+        B_guess=None,
     ):
-        """Return the field (Gauss) at which |E2 − E1| equals ``target_freq_mhz`` MHz.
+        """Return the field(s) (Gauss) at which |E2 − E1| equals ``transition_frequency_Hz``.
 
-        Sweeps from 0 to ``B_max`` G in ``n_points`` steps and interpolates.
+        A **single** magnetic sweep of the two states' manifold(s) is run over
+        ``B_bounds_G`` (``n_points`` samples) and inverted, so the cost is
+        independent of how many target frequencies are requested.
+
+        Monotonic vs non-monotonic
+        --------------------------
+        When the splitting increases (or decreases) monotonically over
+        ``B_bounds_G`` the inversion is a single interpolation.  If the splitting
+        curve turns over, a given target can be reached at **several** fields
+        (branches).  In that case:
+
+        * pass ``B_guess`` (Gauss) and the branch nearest to it is returned;
+        * omit ``B_guess`` and a :class:`ValueError` lists the branch fields so
+          you can pick one via ``B_guess``.
+
+        Parameters
+        ----------
+        state1, state2 : (n, l, j, a, b) 5-tuples
+            The two states, with ``(a, b)`` either ``(F, mF)`` ints or
+            ``(m_j, m_i)`` half-integer floats (standard ``kamo`` convention).
+        transition_frequency_Hz : float or array-like
+            Target splitting |E2 − E1| in Hz.  Array-like returns an array of
+            fields (one per target).
+        B_bounds_G : (float, float)
+            Field-search bounds in Gauss (default ``(0, 600)``).  Only the range
+            searched; widen it if the target lies outside.
+        n_points : int
+            Sweep / interpolation samples across ``B_bounds_G`` (default 10000).
+        B_guess : float, optional
+            Field (Gauss) used to disambiguate multiple branches: the crossing
+            nearest ``B_guess`` is returned.  Required only when the splitting is
+            non-monotonic and a target has more than one solution.
+
+        Returns
+        -------
+        float or np.ndarray
+            The field(s) in Gauss.
 
         Raises
         ------
         ValueError
-            If the target splitting is never reached within ``[0, B_max]``.
+            If a target is never reached within ``B_bounds_G`` (widen the
+            bounds), or if it has multiple branches and no ``B_guess`` was given
+            (the error lists the branch fields).
         """
-        B_arr = np.linspace(0.0, B_max, n_points)
-        freq = self._splitting_mhz(
-            (n, l, j, m_j1, m_i1), (n, l, j, m_j2, m_i2), B_arr)
-        diff = freq - target_freq_mhz
-        sign_changes = np.where(np.diff(np.sign(diff)))[0]
-        if len(sign_changes) == 0:
+        target_hz = np.atleast_1d(np.asarray(transition_frequency_Hz, dtype=float))
+        b = np.linspace(B_bounds_G[0], B_bounds_G[1], n_points)
+        freq_MHz = self._splitting_mhz(state1, state2, b)   # one sweep
+
+        diffs = np.diff(freq_MHz)
+        monotonic = np.all(diffs >= 0) or np.all(diffs <= 0)
+
+        if monotonic and B_guess is None:
+            # single branch → one fast, vectorized interpolation over all targets
+            b_grid, f_grid = b, freq_MHz
+            if f_grid[0] > f_grid[-1]:                 # np.interp needs ascending x
+                f_grid, b_grid = f_grid[::-1], b_grid[::-1]
+            B_G = np.interp(target_hz / 1e6, f_grid, b_grid)
+            if np.any((B_G == B_bounds_G[0]) | (B_G == B_bounds_G[1])):
+                raise ValueError(
+                    "One or more target frequencies fall on a bound of "
+                    f"B_bounds_G {B_bounds_G} G.  Widen the bounds and re-run."
+                )
+        else:
+            # non-monotonic (or an explicit B_guess): resolve each target from
+            # its actual crossing(s) of the splitting curve.
+            B_G = np.array([
+                self._select_branch(b, freq_MHz, t / 1e6, B_guess, B_bounds_G)
+                for t in target_hz
+            ])
+
+        return float(B_G[0]) if B_G.size == 1 else B_G
+
+    @staticmethod
+    def _select_branch(b, freq_MHz, target_MHz, B_guess, B_bounds_G):
+        """Return the field where ``freq_MHz(b) == target_MHz``.
+
+        Finds every crossing (linear root of ``freq_MHz − target_MHz``) in the
+        swept range.  With one crossing it is returned directly; with several,
+        the branch nearest ``B_guess`` is chosen, or a :class:`ValueError`
+        listing the branch fields is raised when ``B_guess`` is ``None``.
+        """
+        diff = freq_MHz - target_MHz
+        sign = np.sign(diff)
+        k = np.where(np.diff(sign) != 0)[0]
+        roots = []
+        for i in k:
+            x0, x1, y0, y1 = b[i], b[i + 1], diff[i], diff[i + 1]
+            roots.append(x0 if y1 == y0 else x0 - y0 * (x1 - x0) / (y1 - y0))
+        # include grid points that land exactly on the target
+        roots.extend(b[j] for j in np.where(diff == 0)[0])
+        roots = np.unique(np.round(roots, 9))
+
+        if len(roots) == 0:
             raise ValueError(
-                f"Splitting never equals {target_freq_mhz:.4f} MHz in "
-                f"[0, {B_max:.1f}] G.  Try a larger B_max."
+                f"Splitting never equals {target_MHz:.6f} MHz within "
+                f"B_bounds_G {B_bounds_G} G.  Widen the bounds and re-run."
             )
-        k = sign_changes[0]
-        x0, x1 = B_arr[k], B_arr[k + 1]
-        y0, y1 = diff[k], diff[k + 1]
-        return float(x0 - y0 * (x1 - x0) / (y1 - y0))
+        if len(roots) == 1:
+            return float(roots[0])
+        if B_guess is None:
+            branch_str = ", ".join(f"{r:.3f}" for r in roots)
+            raise ValueError(
+                f"Splitting equals {target_MHz:.6f} MHz at multiple fields "
+                f"(non-monotonic curve): branches at [{branch_str}] G.  Pass "
+                "B_guess (Gauss) to select the branch nearest a known field."
+            )
+        return float(roots[np.argmin(np.abs(roots - B_guess))])
 
     def get_ground_state_transition_frequency(self,f1,m_f1,f2,m_f2,B=0):
         '''
-        Returns the amount of shift in MHz of a given ground state transition
-        under external magnetic field B (in Gauss). 
+        Returns the ground-state transition frequency |E2 − E1| (MHz) between
+        (f1,m_f1) and (f2,m_f2) under external magnetic field B (in Gauss).
+        B may be a scalar or 1-D array.  Both states are read from a single
+        magnetic sweep.
         '''
-        n = 4
-        l = 0
-        j = 1/2
-        transition_frequency = abs(self.get_zeeman_shift(n,l,j,f2,m_f2,B) - self.get_zeeman_shift(n,l,j,f1,m_f1,B))
-
-        return transition_frequency
+        return self._splitting_mhz(
+            (4, 0, 0.5, int(f1), int(m_f1)),
+            (4, 0, 0.5, int(f2), int(m_f2)), B)
 
     def get_transition_shift(
         self, n1, l1, j1, m_j1, m_i1, n2, l2, j2, m_j2, m_i2, B=0
