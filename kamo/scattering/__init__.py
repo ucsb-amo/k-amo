@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from .thresholds import K39Thresholds
     from .channels import PairChannel, enumerate_channels
     from .loss import k2_from_scattering_length
+    from .coupled_channels import CoupledChannels
 
 _lazy = {
     "ScatteringModel":          ".scattering",
@@ -34,6 +35,7 @@ _lazy = {
     "PairChannel":              ".channels",
     "enumerate_channels":       ".channels",
     "k2_from_scattering_length": ".loss",
+    "CoupledChannels":          ".coupled_channels",
 }
 
 

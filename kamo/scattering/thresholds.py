@@ -61,6 +61,21 @@ class K39Thresholds:
         Fb, mFb = state_b
         return self.energy(Fa, mFa, B_gauss) + self.energy(Fb, mFb, B_gauss)
 
+    def state_composition(self, F: int, mF: int, B_gauss: float) -> np.ndarray:
+        """Field-dependent composition of |F,mF> over the |m_s=m_j, m_i> basis.
+
+        Returns the 8-vector of amplitudes of the Zeeman eigenstate that
+        adiabatically connects to |F,mF>, at field ``B_gauss``, in the kamo
+        (m_j, m_i) basis of the 4S1/2 manifold (m_j = m_s since l=0).  This is
+        the field-dependent single-atom spin state needed to build the
+        singlet/triplet frame transformation at finite field.
+        """
+        n, l, j = GROUND
+        idx = self._sweep._tracked_index_F_mF(n, l, j, int(F), int(mF), step=0)
+        step = self._sweep.nearest_step(float(B_gauss))
+        v = self._sweep.vectors[step][:, idx]
+        return np.real_if_close(v, tol=1000).astype(float)
+
     def hyperfine_splitting_hz(self) -> float:
         """Zero-field F=2 <-> F=1 splitting (Hz) — a self-consistency probe.
 

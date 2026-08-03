@@ -11,4 +11,11 @@
 
 from .empirical import EmpiricalBackend
 
-__all__ = ["EmpiricalBackend"]
+__all__ = ["EmpiricalBackend", "CoupledChannelsBackend"]
+
+
+def __getattr__(name):
+    if name == "CoupledChannelsBackend":
+        from .coupled_channels import CoupledChannelsBackend
+        return CoupledChannelsBackend
+    raise AttributeError(name)

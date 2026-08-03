@@ -47,7 +47,11 @@ class ScatteringModel:
             if backend == "mqdt":
                 from .backends.mqdt import MQDTBackend
                 return MQDTBackend()
-            raise ValueError(f"Unknown backend {backend!r}; use 'empirical' or 'mqdt'.")
+            if backend in ("cc", "coupled_channels"):
+                from .backends.coupled_channels import CoupledChannelsBackend
+                return CoupledChannelsBackend(B_max=self.thresholds.B_max)
+            raise ValueError(
+                f"Unknown backend {backend!r}; use 'empirical', 'cc', or 'mqdt'.")
         return backend
 
     # -- scattering length --------------------------------------------------
