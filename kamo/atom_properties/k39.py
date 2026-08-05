@@ -6,11 +6,6 @@ import csv
 
 dv = -1000.
 
-# States with n below this threshold use kamo.hamiltonian exact diagonalization,
-# which includes nuclear spin (m_j, m_i basis).  States at or above use
-# pairinteraction, which has no nuclear spin and works in the m_j basis only.
-_HAMILTONIAN_N_THRESHOLD = 10
-
 class Potassium39(arc.Potassium39):
     def __init__(self):
         super().__init__()
@@ -20,39 +15,58 @@ class Potassium39(arc.Potassium39):
     #     if pi.Database.get_global_database() is None:
     #         pi.Database.initialize_global_database(download_missing=True)
 
+    @staticmethod
+    def _spin_label(a, b):
+        """Normalize a ``(a, b)`` spin-label pair to kamo's dispatch types.
+
+        The two spin quantum numbers of a state may be given as coupled-basis
+        ``(F, mF)`` **integers** or uncoupled-basis ``(m_j, m_i)``
+        **half-integers**.  Downstream (``get_energy`` / ``_splitting_mhz``) the
+        convention is selected by *type*: Python ``int`` -> ``(F, mF)``, Python
+        ``float`` -> ``(m_j, m_i)``.  This returns the pair with those types, so
+        e.g. ``(1, -1)`` stays ``(F, mF)`` while ``(-0.5, -0.5)`` (or any
+        half-integer) is passed through as ``(m_j, m_i)``.
+        """
+        half = (float(a) % 1 != 0) or (float(b) % 1 != 0)
+        return (float(a), float(b)) if half else (int(round(a)), int(round(b)))
+
     def get_magnetic_field_from_ground_state_transition_frequency(self,
                                                                 f1, mf1, f2, mf2, transition_frequency_Hz,
                                                                 B_bounds_G=(0., 600.),
-                                                                N_interp=10000,
-                                                                B_guess=None):
+                                                                N_interp=10000):
         """Returns the magnetic field(s) (in G) at which the transition from
         (f1,mf1) to (f2,mf2) would occur at frequency 'transition_frequency_Hz'.
 
+        Each state may be labelled by coupled-basis ``(F, mF)`` **integers** or
+        uncoupled-basis ``(m_j, m_i)`` **half-integers** (e.g. ``(-0.5, -0.5)``);
+        the convention is detected per pair from whether the values are whole or
+        half-integer.
+
         Args:
-            f1 (int): State 1 quantum number F.
-            mf1 (int): State 1 quantum number mF.
-            f2 (int): State 2 quantum number F.
-            mf2 (int): State 2 quantum number mF.
+            f1 (int or float): State 1 quantum number F (int) or m_j (half-int).
+            mf1 (int or float): State 1 quantum number mF (int) or m_i (half-int).
+            f2 (int or float): State 2 quantum number F (int) or m_j (half-int).
+            mf2 (int or float): State 2 quantum number mF (int) or m_i (half-int).
             transition_frequency_Hz (float or array-like): Measured transition frequency
-                between (f1,mF1) and (f2,mF2).
+                between the two states.
             B_bounds_G (tuple, optional): Bounds used for field finding. Only
                 limited to save time computing all the possible transition frequencies. Defaults to (0.,600.).
             N_interp (int, optional): Number of points used for interpolation. Defaults to 10000.
-            B_guess (float, optional): Field (G) used to pick a branch when the
-                splitting is non-monotonic and a target has several solutions.
 
         Raises:
-            ValueError: If a target is never reached within the bounds, or if it
-                has multiple branches and no ``B_guess`` was given.
+            ValueError: If any returned value is one of the bounds of the
+                magnetic field specified, raises an error.
 
         Returns:
             float or np.ndarray: the magnetic field(s) in G.
         """
         # Ground-state (4S_1/2) special case of the general splitting inverter;
         # both states share a manifold, so a single sweep serves all targets.
+        a1, b1 = self._spin_label(f1, mf1)
+        a2, b2 = self._spin_label(f2, mf2)
         return self.get_magnetic_field_from_splitting(
-            (4, 0, 0.5, int(f1), int(mf1)),
-            (4, 0, 0.5, int(f2), int(mf2)),
+            (4, 0, 0.5, a1, b1),
+            (4, 0, 0.5, a2, b2),
             transition_frequency_Hz,
             B_bounds_G=B_bounds_G,
             n_points=N_interp,
@@ -75,76 +89,15 @@ class Potassium39(arc.Potassium39):
         """        
         dB = B * 0.001
         # Both fields come from a single sweep (array B) instead of two calls.
+        a1, b1 = self._spin_label(f1, mf1)
+        a2, b2 = self._spin_label(f2, mf2)
         f_B, f_B_plus_dB = self._splitting_mhz(
-            (4, 0, 0.5, int(f1), int(mf1)),
-            (4, 0, 0.5, int(f2), int(mf2)),
+            (4, 0, 0.5, a1, b1),
+            (4, 0, 0.5, a2, b2),
             np.array([B, B + dB]),
         )
         return (f_B_plus_dB - f_B) / dB
     
-    def _zeeman_hamiltonian_multi(self, states, B_gauss, B_sweep_steps=500):
-        """Run one kamo.hamiltonian sweep covering all requested states.
-
-        Parameters
-        ----------
-        states : list of ``(n, l, j, m_j, m_i)`` tuples
-        B_gauss : scalar or 1-D array
-
-        Returns
-        -------
-        energies : list of ndarray (MHz), one per entry in *states*
-        sweep : MagneticSweepResult
-        """
-        from kamo.hamiltonian import AtomicStructure
-        B_arr = np.atleast_1d(np.asarray(B_gauss, dtype=float))
-        B_max = max(float(np.max(B_arr)), 0.01)
-        dB = min(B_max / B_sweep_steps, 0.01)
-        if dB > 0.1:
-            print(f"Sweep steps are large ({dB:1.2e} G per step). Consider increasing sampling if adiabatic state detection suffers.")
-
-        # Collect unique (n, l, j) fine-structure levels spanning all requests
-        njl_levels = list(dict.fromkeys((s[0], s[1], s[2]) for s in states))
-        model = AtomicStructure(njl_levels)
-        res = model.magnetic_sweep(B_max=B_max, dB=dB, diamagnetic=True, include_quadrupole=True)
-
-        energies = [res.get_energy(n, l, j, m_j, m_i, at=B_arr) / 1e6
-                    for n, l, j, m_j, m_i in states]
-        return energies, res
-
-    def _zeeman_hamiltonian(self, n, l, j, m_j, m_i, B_gauss):
-        """Energy track (MHz) via kamo.hamiltonian exact diagonalization.
-
-        Uses the adiabatic (Paschen-Back) connection: ``m_j`` and ``m_i`` are
-        the high-field limiting quantum numbers, resolved to a tracked state by
-        :meth:`~kamo.hamiltonian.SweepResult.get_energy`.
-
-        ``B_gauss`` may be a scalar or 1-D array; returns ``(energies_MHz, sweep_result)``.
-        """
-        (energy,), res = self._zeeman_hamiltonian_multi([(n, l, j, m_j, m_i)], B_gauss)
-        return energy, res
-
-    def _zeeman_pairinteraction(self, n, l, j, m_j, B_gauss):
-        """Zeeman *shift* from zero field (MHz) via pairinteraction.
-
-        Only uses ``m_j`` (pairinteraction has no nuclear spin).
-        ``B_gauss`` may be a scalar or 1-D array; returns matching ndarray.
-        """
-        import pairinteraction as pi
-        B_arr = np.atleast_1d(np.asarray(B_gauss, dtype=float))
-        shifts = np.zeros(len(B_arr))
-        ket = pi.KetAtom("K", n=n, l=l, j=j, m=m_j)
-        zero_field_energy = ket.get_energy()
-        l_max = min(l + 2, n - 1)
-        basis = pi.BasisAtom("K", n=(n - 3, n + 3), l=(l, l_max))
-        for idx, b_val in enumerate(B_arr):
-            system = pi.SystemAtom(basis)
-            system.set_diamagnetism_enabled(True)
-            system.set_magnetic_field([0.0, 0.0, float(b_val)], unit="gauss")
-            pi.diagonalize([system])
-            shifted = system.get_corresponding_energy(ket)
-            shifts[idx] = (shifted - zero_field_energy).to("J").magnitude / c.h / 1e6
-        return shifts
-
     def get_semiclassical_polarizability(self,n1,l1,j1,n2,l2,j2,detuning_Hz):
         """See Grimm 1999 equation 8.
         """        
@@ -219,431 +172,98 @@ class Potassium39(arc.Potassium39):
         scattering_cross_section = g_ratio * np.pi**2 * c.c**2 / omega0**2 * A21 * lineshape
         return scattering_cross_section
     
-    def get_zeeman_shift(self, n, l, j, m_j, m_i=None,
-                         B=0, return_sweep=False):
-        """Return the Zeeman energy (MHz) for state |n l j; m_j [m_i]> at B (Gauss).
+    def get_zeeman_shift(self,n,l,j,f,m_f,B):
+        '''
+        Returns the zeeman energy in units of MHz as a function of B field (in
+        Gauss) for a given F, m_f (will also accept mj mi basis) sublevel in the
+        specified fine structure manifold.
+        '''
+        B = np.atleast_1d(B)
 
-        Routing:
-        - ``n < 10``: kamo.hamiltonian exact diagonalization.  ``m_i`` required.
-          Quantum numbers use the **adiabatic (Paschen-Back) convention**: ``m_j``
-          and ``m_i`` are the high-field limiting values.
-        - ``n >= 10``: pairinteraction.  Only ``m_j`` is used; ``m_i`` is ignored.
+        # nuclear spin
+        n_s = 1.5
+        # convert B field in gauss to Tesla
+        B = B / 1.e4
 
-        ``B`` may be a scalar or array; returns matching shape.
+        # lookup the input state and reassign quantum numbers if input is given in mj mi basis
+        state = self.state_lookup(n,l,j,f,m_f)
+        (f,m_f) = state['lf']
+        (F1_arc,mf1_arc) = state['lf_arc']
 
-        Parameters
-        ----------
-        return_sweep : bool, optional
-            If True, return a ``(energy, sweep)`` tuple where ``sweep`` is the
-            :class:`~kamo.hamiltonian.MagneticSweepResult` (n < 10 only; ``None``
-            for the pairinteraction path).
-        """
-        B_arr = np.atleast_1d(np.asarray(B, dtype=float))
-        scalar_in = np.ndim(B) == 0
-
-        if n < _HAMILTONIAN_N_THRESHOLD:
-            if m_i is None:
-                raise ValueError(
-                    f"m_i must be provided for n < {_HAMILTONIAN_N_THRESHOLD} "
-                    "(kamo.hamiltonian includes nuclear Zeeman)."
-                )
-            result, sweep = self._zeeman_hamiltonian(n, l, j, m_j, m_i, B_arr)
+        #for some reason ARCs breit-rabi function doesn't work for K39 ground state, use this instead:
+        if n == 4 and l==0:
+            if f==1:
+                return (((-c.get_hyperfine_constant(0,.5) / 4) 
+                        + c.g_I * c.mu_b * m_f * B
+                        - (c.get_hyperfine_constant(0,.5)*(n_s+.5) / 2)
+                        * np.sqrt(1 + (4 * m_f * (c.get_total_electronic_g_factor(0,.5) - c.g_I) * c.mu_b * B) / (((2 * n_s) + 1) * c.get_hyperfine_constant(0,.5) * (n_s + .5)) 
+                                   + (((c.get_total_electronic_g_factor(0,.5) - c.g_I) * c.mu_b * B) / (c.get_hyperfine_constant(0,.5) * (n_s + .5)))**2))
+                                   / (c.h * 1.e6))
+            if f==2:
+                if m_f != -2:
+                    return (((-c.get_hyperfine_constant(0,.5) / 4) 
+                            + c.g_I * c.mu_b * m_f * B
+                            + (c.get_hyperfine_constant(0,.5)*(n_s+.5) / 2)
+                            * np.sqrt(1 + (4 * m_f * (c.get_total_electronic_g_factor(0,.5) - c.g_I) * c.mu_b * B) / (((2 * n_s) + 1) * c.get_hyperfine_constant(0,.5) * (n_s + .5)) 
+                                    + (((c.get_total_electronic_g_factor(0,.5) - c.g_I) * c.mu_b * B) / (c.get_hyperfine_constant(0,.5) * (n_s + .5)))**2))
+                                    / (c.h * 1.e6))
+                elif m_f == -2:
+                    return (((-c.get_hyperfine_constant(0,.5) / 4) 
+                            + c.g_I * c.mu_b * m_f * B
+                            + (c.get_hyperfine_constant(0,.5)*(n_s+.5) / 2)
+                            * (1 - ((c.get_total_electronic_g_factor(0,.5) - c.g_I) * c.mu_b * B) / (c.get_hyperfine_constant(0,.5) * (n_s + .5))))
+                                    / (c.h * 1.e6))
+        #for all others use ARC breit rabi function:
         else:
-            result = self._zeeman_pairinteraction(n, l, j, m_j, B_arr)
-            sweep = None
-
-        energy = float(result[0]) if scalar_in else result
-        return (energy, sweep) if return_sweep else energy
-
-    def _splitting_mhz(self, state1, state2, B=0):
-        """Return |E2 − E1| (MHz) versus field, vectorized over ``B`` (Gauss).
-
-        ``state1``/``state2`` are ``(n, l, j, m_j, m_i)`` tuples.  ``B`` may be a
-        scalar or 1-D array (the return matches its shape).  When both states are
-        low-n (below :data:`_HAMILTONIAN_N_THRESHOLD`) a single magnetic sweep
-        covers both manifolds and the states are followed adiabatically; high-n
-        states fall back to per-state :meth:`get_zeeman_shift`.
-
-        This is the vectorized splitting engine used by
-        :meth:`get_microwave_transition_frequency` and
-        :meth:`get_magnetic_field_from_splitting`, which need array-valued ``B``
-        and MHz units that the scalar, Hz-valued
-        :meth:`get_transition_frequency` state-tuple API does not provide.
-        """
-        n1, l1, j1, m_j1, m_i1 = state1
-        n2, l2, j2, m_j2, m_i2 = state2
-        B_arr = np.atleast_1d(np.asarray(B, dtype=float))
-        scalar_in = np.ndim(B) == 0
-
-        if n1 < _HAMILTONIAN_N_THRESHOLD and n2 < _HAMILTONIAN_N_THRESHOLD:
-            # One magnetic sweep up to the largest requested field covers both
-            # manifolds; each requested field is read back by interpolation
-            # (no per-B re-diagonalization).
-            [e1_arr, e2_arr], _ = self._zeeman_hamiltonian_multi(
-                [tuple(state1), tuple(state2)], B_arr
-            )
-            result = np.abs(e2_arr - e1_arr)
-        else:
-            e1 = self.get_zeeman_shift(n1, l1, j1, m_j1, m_i1, B)
-            e2 = self.get_zeeman_shift(n2, l2, j2, m_j2, m_i2, B)
-            result = np.atleast_1d(np.abs(e2 - e1))
-
-        return float(result[0]) if scalar_in else result
-
-    def get_microwave_transition_frequency(self, n, l, j, m_j1, m_i1, m_j2, m_i2, B=0):
-        """|E2 − E1| (MHz) for the ``(m_j1,m_i1) → (m_j2,m_i2)`` transition in
-        manifold ``(n, l, j)`` at field ``B`` (Gauss).
-
-        ``B`` is normally a scalar.  Passing a 1-D array is **deprecated**: it
-        still works — a single magnetic sweep is run up to ``max(B)`` and each
-        requested field is interpolated from that sweep — but prefer a scalar
-        ``B``, or drive a :meth:`~kamo.hamiltonian.model.AtomicStructure.magnetic_sweep`
-        result directly (e.g. ``SweepResult.field_energy`` / ``get_energy``) for
-        full control over the field grid.
-        """
-        if np.ndim(B) > 0:
-            import warnings
-            warnings.warn(
-                "Supplying a vector B to get_microwave_transition_frequency is "
-                "deprecated: one magnetic sweep is run up to max(B) and each "
-                "requested field is interpolated from that sweep. Pass a "
-                "scalar B, or use a magnetic_sweep result "
-                "(SweepResult.field_energy / get_energy) for full control.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-        return self._splitting_mhz(
-            (n, l, j, m_j1, m_i1), (n, l, j, m_j2, m_i2), B)
-
-    def get_magnetic_field_from_splitting(
-        self,
-        state1,
-        state2,
-        transition_frequency_Hz,
-        B_bounds_G=(0.0, 600.0),
-        n_points=10000,
-        B_guess=None,
-    ):
-        """Return the field(s) (Gauss) at which |E2 − E1| equals ``transition_frequency_Hz``.
-
-        A **single** magnetic sweep of the two states' manifold(s) is run over
-        ``B_bounds_G`` (``n_points`` samples) and inverted, so the cost is
-        independent of how many target frequencies are requested.
-
-        Monotonic vs non-monotonic
-        --------------------------
-        When the splitting increases (or decreases) monotonically over
-        ``B_bounds_G`` the inversion is a single interpolation.  If the splitting
-        curve turns over, a given target can be reached at **several** fields
-        (branches).  In that case:
-
-        * pass ``B_guess`` (Gauss) and the branch nearest to it is returned;
-        * omit ``B_guess`` and a :class:`ValueError` lists the branch fields so
-          you can pick one via ``B_guess``.
-
-        Parameters
-        ----------
-        state1, state2 : (n, l, j, a, b) 5-tuples
-            The two states, with ``(a, b)`` either ``(F, mF)`` ints or
-            ``(m_j, m_i)`` half-integer floats (standard ``kamo`` convention).
-        transition_frequency_Hz : float or array-like
-            Target splitting |E2 − E1| in Hz.  Array-like returns an array of
-            fields (one per target).
-        B_bounds_G : (float, float)
-            Field-search bounds in Gauss (default ``(0, 600)``).  Only the range
-            searched; widen it if the target lies outside.
-        n_points : int
-            Sweep / interpolation samples across ``B_bounds_G`` (default 10000).
-        B_guess : float, optional
-            Field (Gauss) used to disambiguate multiple branches: the crossing
-            nearest ``B_guess`` is returned.  Required only when the splitting is
-            non-monotonic and a target has more than one solution.
-
-        Returns
-        -------
-        float or np.ndarray
-            The field(s) in Gauss.
-
-        Raises
-        ------
-        ValueError
-            If a target is never reached within ``B_bounds_G`` (widen the
-            bounds), or if it has multiple branches and no ``B_guess`` was given
-            (the error lists the branch fields).
-        """
-        target_hz = np.atleast_1d(np.asarray(transition_frequency_Hz, dtype=float))
-        b = np.linspace(B_bounds_G[0], B_bounds_G[1], n_points)
-        freq_MHz = self._splitting_mhz(state1, state2, b)   # one sweep
-
-        diffs = np.diff(freq_MHz)
-        monotonic = np.all(diffs >= 0) or np.all(diffs <= 0)
-
-        if monotonic and B_guess is None:
-            # single branch → one fast, vectorized interpolation over all targets
-            b_grid, f_grid = b, freq_MHz
-            if f_grid[0] > f_grid[-1]:                 # np.interp needs ascending x
-                f_grid, b_grid = f_grid[::-1], b_grid[::-1]
-            B_G = np.interp(target_hz / 1e6, f_grid, b_grid)
-            if np.any((B_G == B_bounds_G[0]) | (B_G == B_bounds_G[1])):
-                raise ValueError(
-                    "One or more target frequencies fall on a bound of "
-                    f"B_bounds_G {B_bounds_G} G.  Widen the bounds and re-run."
-                )
-        else:
-            # non-monotonic (or an explicit B_guess): resolve each target from
-            # its actual crossing(s) of the splitting curve.
-            B_G = np.array([
-                self._select_branch(b, freq_MHz, t / 1e6, B_guess, B_bounds_G)
-                for t in target_hz
-            ])
-
-        return float(B_G[0]) if B_G.size == 1 else B_G
-
-    @staticmethod
-    def _select_branch(b, freq_MHz, target_MHz, B_guess, B_bounds_G):
-        """Return the field where ``freq_MHz(b) == target_MHz``.
-
-        Finds every crossing (linear root of ``freq_MHz − target_MHz``) in the
-        swept range.  With one crossing it is returned directly; with several,
-        the branch nearest ``B_guess`` is chosen, or a :class:`ValueError`
-        listing the branch fields is raised when ``B_guess`` is ``None``.
-        """
-        diff = freq_MHz - target_MHz
-        sign = np.sign(diff)
-        k = np.where(np.diff(sign) != 0)[0]
-        roots = []
-        for i in k:
-            x0, x1, y0, y1 = b[i], b[i + 1], diff[i], diff[i + 1]
-            roots.append(x0 if y1 == y0 else x0 - y0 * (x1 - x0) / (y1 - y0))
-        # include grid points that land exactly on the target
-        roots.extend(b[j] for j in np.where(diff == 0)[0])
-        roots = np.unique(np.round(roots, 9))
-
-        if len(roots) == 0:
-            raise ValueError(
-                f"Splitting never equals {target_MHz:.6f} MHz within "
-                f"B_bounds_G {B_bounds_G} G.  Widen the bounds and re-run."
-            )
-        if len(roots) == 1:
-            return float(roots[0])
-        if B_guess is None:
-            branch_str = ", ".join(f"{r:.3f}" for r in roots)
-            raise ValueError(
-                f"Splitting equals {target_MHz:.6f} MHz at multiple fields "
-                f"(non-monotonic curve): branches at [{branch_str}] G.  Pass "
-                "B_guess (Gauss) to select the branch nearest a known field."
-            )
-        return float(roots[np.argmin(np.abs(roots - B_guess))])
+            zeeman_Evs = self.breitRabi(n, l, j, B)
+            zeeman_Es = np.transpose(zeeman_Evs[0])
+            for idx in range(len(zeeman_Evs[1])):
+                # loop through all the F, mF until you have the right one
+                f=zeeman_Evs[1][idx]
+                mf=zeeman_Evs[2][idx]
+                # bugfix -- ARC returns f=0.5 and mf=0 for 5p3/2 f=0 mf=0, so
+                # fix it explicitly here
+                if f == 0.5 and mf == 0:
+                    f = 0
+                # find the index for the state that matches the one we want
+                if f == F1_arc:
+                    if mf == mf1_arc:
+                        return zeeman_Es[idx] / 1.e6
 
     def get_ground_state_transition_frequency(self,f1,m_f1,f2,m_f2,B=0):
         '''
         Returns the ground-state transition frequency |E2 − E1| (MHz) between
         (f1,m_f1) and (f2,m_f2) under external magnetic field B (in Gauss).
+        States accept (F, mF) integer or (m_j, m_i) half-integer labels.
         B may be a scalar or 1-D array.  Both states are read from a single
         magnetic sweep.
         '''
+        a1, b1 = self._spin_label(f1, m_f1)
+        a2, b2 = self._spin_label(f2, m_f2)
         return self._splitting_mhz(
-            (4, 0, 0.5, int(f1), int(m_f1)),
-            (4, 0, 0.5, int(f2), int(m_f2)), B)
+            (4, 0, 0.5, a1, b1),
+            (4, 0, 0.5, a2, b2), B)
 
-    def get_transition_shift(
-        self, n1, l1, j1, m_j1, m_i1, n2, l2, j2, m_j2, m_i2, B=0
-    ):
-        """Differential Zeeman shift of a transition at field B (MHz).
+        return transition_frequency
 
-        Returns ``f(B) − f(0)`` for the transition ``state1 -> state2``, i.e.
-        ``ΔE(state2, B) − ΔE(state1, B)`` with ``ΔE(state, B) = E(state, B) −
-        E(state, 0)``.  Computed via :meth:`get_transition_frequency` in
-        ``relative_mode="magnetic"`` (Hz), converted to MHz.
-        """
-        shift_hz = self.get_transition_frequency(
-            (n1, l1, j1, m_j1, m_i1), (n2, l2, j2, m_j2, m_i2),
-            B=B, relative_mode="magnetic",
-        )
-        return shift_hz / 1e6
+    def get_transition_shift(self,n1,l1,j1,f1,m_f1,n2,l2,j2,f2,m_f2,B=0):
+        '''
+        Subtracts the calculated Zeeman shift of the excited state (n2,l2,j2,f2,m2) from that of the ground state (n1,l1,j1,f1,m1)
+        Returns the amount of shift in MHz of a given optical transition under external magnetic field B (in Gauss). 
+        '''
+        state1 = self.state_lookup(n1,l1,j1,f1,m_f1)
+        state2 = self.state_lookup(n2,l2,j2,f2,m_f2)
+
+        (F1_arc,mf1_arc) = state1['lf_arc']
+        (F2_arc,mf2_arc) = state2['lf_arc']
+
+        state1_shift = self.get_zeeman_shift(n1,l1,j1,F1_arc,mf1_arc,B) - self.get_zeeman_shift(n1,l1,j1,F1_arc,mf1_arc,0)
+        state2_shift = self.get_zeeman_shift(n2,l2,j2,F2_arc,mf2_arc,B) - self.get_zeeman_shift(n2,l2,j2,F2_arc,mf2_arc,0)
+
+        transition_frequency_shift = state2_shift - state1_shift
+
+        return transition_frequency_shift
     
-    def get_transition_frequency(
-        self,
-        state1,
-        state2,
-        B=0.0,
-        beam=None,
-        frequency_Hz=None,
-        intensity=None,
-        polarization="pi",
-        laser_model="rwa",
-        basis=None,
-        n_points=200,
-        dB=0.1,
-        diamagnetic=True,
-        relative_mode=None,
-        return_sweep=False,
-    ):
-        """Transition frequency (Hz) between two states at field ``B``, with an
-        optional laser light shift.
-
-        Each state is a 5-tuple ``(n, l, j, a, b)`` whose last two numbers use
-        the standard ``kamo`` convention:
-
-        * both **int**   -> coupled-basis ``(F, mF)`` low-field labels;
-        * both **float** (half-integer) -> uncoupled adiabatic ``(m_j, m_i)``
-          (Paschen-Back) labels.
-
-        The calculation uses ``kamo.hamiltonian`` exact diagonalization with
-        eigenshuffle state tracking, so states are followed adiabatically (the
-        same magnetic-sweep connection used everywhere else) through avoided
-        crossings.
-
-        How the two fields combine
-        --------------------------
-        * **Magnetic only** (no laser): a magnetic sweep 0 -> ``B`` gives the
-          bare transition frequency at ``B``.
-        * **Magnetic + laser**: the bare transition at ``B`` is computed from
-          the magnetic sweep first; then a laser-intensity sweep *at the same
-          field* ``B`` provides the light shift of the transition.  The light
-          shift is taken as an intensity *difference* (``f(I) - f(0)``), so it
-          is a true lab-frame shift regardless of the rotating frame used
-          internally by the RWA model.
-
-        Reference (``relative_mode``)
-        -----------------------------
-        Let ``f(B, I)`` be the absolute transition frequency ``E2 - E1``.
-
-        * ``"absolute"`` -- return ``f(B, I)`` (the full transition frequency).
-        * ``"magnetic"`` -- return ``f(B, I) - f(0, 0)``, i.e. relative to the
-          zero-magnetic-field, zero-intensity transition frequency (the Zeeman
-          shift of the transition when no laser is present).
-        * ``"optical"`` -- return ``f(B, I) - f(B, 0)``, i.e. relative to zero
-          intensity at the given (high) magnetic field (the pure light shift).
-        * ``None`` (default) -- ``"optical"`` when a laser is supplied,
-          otherwise ``"magnetic"``.
-
-        Parameters
-        ----------
-        state1, state2 : (n, l, j, a, b) tuples
-            Lower/upper states of the transition (result is ``E2 - E1``, signed).
-        B : float, optional
-            Static magnetic field in Gauss (default 0).
-        beam : kamo.GaussianBeam, optional
-            Laser beam producing the light shift.  Supplies the laser frequency
-            and, unless ``intensity`` is given, the peak intensity ``beam.I0``.
-            Provide *either* ``beam`` *or* (``frequency_Hz`` + ``intensity``),
-            not both.
-        frequency_Hz : float, optional
-            Laser frequency (Hz).  Requires ``intensity``.
-        intensity : float, optional
-            Laser intensity in W/m^2.  Required with ``frequency_Hz``; overrides
-            ``beam.I0`` when supplied alongside ``beam``.
-        polarization : str, optional
-            Laser polarization: "pi", "sigma+", or "sigma-" (default "pi").
-        laser_model : {"rwa", "stark"}, optional
-            Light-shift model (default "rwa").
-        basis : AtomicStructure, optional
-            Override the atomic-structure basis.  When omitted, a basis is built
-            automatically: just the two states' own manifolds for a pure
-            magnetic calculation (e.g. only ``(4, 0, 1/2)`` for a ground-state
-            transition), or those manifolds plus their dipole-coupled
-            neighbours when a light shift is requested.
-        n_points : int, optional
-            Intensity steps for the laser sweep (default 200).
-        dB : float, optional
-            Magnetic-sweep step in Gauss (default 0.1).
-        diamagnetic : bool, optional
-            Include the diamagnetic term in the magnetic sweep (default True).
-        relative_mode : {None, "absolute", "magnetic", "optical"}, optional
-            Reference for the returned frequency (see above).  Default None.
-        return_sweep : bool, optional
-            If True, also return the underlying sweep result (the laser sweep
-            when a laser is supplied, otherwise the magnetic sweep).
-
-        Returns
-        -------
-        float, or (float, SweepResult) when ``return_sweep`` is True.
-        """
-        from kamo import GaussianBeam
-        from kamo.hamiltonian import AtomicStructure, make_nlj_basis
-
-        s1 = tuple(state1)
-        s2 = tuple(state2)
-        if len(s1) != 5 or len(s2) != 5:
-            raise ValueError(
-                "Each state must be a 5-tuple (n, l, j, a, b) where (a, b) are "
-                "either (F, mF) ints or (m_j, m_i) half-integer floats.")
-
-        # ---- validate the laser specification ----
-        has_beam = beam is not None
-        has_freq = frequency_Hz is not None
-        if has_beam and has_freq:
-            raise ValueError("Provide either `beam` or `frequency_Hz`, not both.")
-        if has_freq and intensity is None:
-            raise ValueError("`frequency_Hz` requires `intensity` (W/m^2).")
-        use_light = has_beam or has_freq
-
-        # ---- resolve the reference mode ----
-        if relative_mode is None:
-            relative_mode = "optical" if use_light else "magnetic"
-        if relative_mode not in ("absolute", "magnetic", "optical"):
-            raise ValueError(
-                "relative_mode must be None, 'absolute', 'magnetic', or "
-                f"'optical'; got {relative_mode!r}.")
-
-        # ---- build / accept the basis ----
-        if basis is not None:
-            model = basis
-        elif use_light:
-            # light shift needs the dipole-coupled (Δl = ±1) manifolds present
-            manifolds = []
-            for st in (s1, s2):
-                for m in make_nlj_basis(int(st[0]), int(st[1]),
-                                        n_range=0, l_range=1):
-                    if m not in manifolds:
-                        manifolds.append(m)
-            model = AtomicStructure(manifolds, atom=self)
-        else:
-            # pure magnetic: only the states' own manifolds are needed
-            manifolds = list(dict.fromkeys(
-                (int(st[0]), int(st[1]), float(st[2])) for st in (s1, s2)))
-            model = AtomicStructure(manifolds, atom=self)
-
-        # ---- bare transition frequency at B (magnetic sweep, lab frame) ----
-        B = float(B)
-        B_max = max(B + dB, dB)
-        resB = model.magnetic_sweep(B_max=B_max, dB=dB, diamagnetic=diamagnetic)
-        f_B0 = resB.get_transition_frequency(s1, s2, at=B)      # f(B, 0)
-
-        # ---- add the laser light shift at the same field ----
-        df_light = 0.0
-        resL = None
-        if use_light:
-            if has_beam:
-                I_max = (float(intensity) if intensity is not None
-                         else float(beam.I0))
-            else:
-                beam = GaussianBeam(waist=1e-6, frequency=float(frequency_Hz),
-                                    power=0.0)
-                I_max = float(intensity)
-            resL = model.laser_sweep(
-                beam, I_max=I_max, n_points=n_points,
-                model=laser_model, polarization=polarization, B_gauss=B,
-            )
-            # intensity difference cancels the RWA rotating-frame offset,
-            # leaving the true lab-frame light shift of the transition.
-            df_light = resL.transition_frequency_shift(s1, s2, at=I_max)
-
-        f_BI = f_B0 + df_light                                  # f(B, I)
-
-        # ---- apply the requested reference ----
-        if relative_mode == "absolute":
-            result = f_BI
-        elif relative_mode == "optical":
-            result = f_BI - f_B0                                # pure light shift
-        else:  # "magnetic"
-            f_00 = resB.get_transition_frequency(s1, s2, at=0.0)  # f(0, 0)
-            result = f_BI - f_00
-
-        sweep = resL if use_light else resB
-        return (result, sweep) if return_sweep else result
-
     def state_dicts(self,n,l,j,hf=True) -> dict:
         '''
         n: principle quantum number (unused for now, but kept for consistency)
