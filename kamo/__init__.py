@@ -10,6 +10,8 @@ if TYPE_CHECKING:
     from .light_shift import ComputeLightShift, ComputePolarizabilities
     from .BEC_properties import bec
     from .hamiltonian import AtomicStructure
+    from .dipole_dipole import (BECCloud, CoupledDipole, CyclingTransition,
+                                PairPotential, QuasiStaticLZModel)
 
 _lazy = {
     'Potassium39':             '.atom_properties.k39',
@@ -18,6 +20,11 @@ _lazy = {
     'ComputePolarizabilities': '.light_shift',
     'bec':                     '.BEC_properties',
     'AtomicStructure':         '.hamiltonian',
+    'CyclingTransition':       '.dipole_dipole',
+    'PairPotential':           '.dipole_dipole',
+    'BECCloud':                '.dipole_dipole',
+    'QuasiStaticLZModel':      '.dipole_dipole',
+    'CoupledDipole':           '.dipole_dipole',
 }
 
 def __getattr__(name):
