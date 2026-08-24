@@ -5,6 +5,10 @@ class GaussianBeam():
     ''''
     A gaussian beam object.
 
+    The beam strength may be specified either by the power or by the peak
+    intensity, but not both (providing both raises a ValueError). If neither is
+    given, the power defaults to 0 W.
+
     Parameters
     ----------
     waist (m)
@@ -12,6 +16,7 @@ class GaussianBeam():
     power (W)
     n_medium
     include_trap_properties (defaults to False)
+    peak_intensity (W/m^2)
 
     Attributes
     ----------
@@ -36,11 +41,14 @@ class GaussianBeam():
     beam_radius
     intensity
     '''
-    def __init__(self,waist,wavelength=None,power=0.,n_medium=1.,include_trap_properties=False,frequency=None):
+    def __init__(self,waist,wavelength=None,power=None,n_medium=1.,include_trap_properties=False,frequency=None,
+                 peak_intensity=None):
         if wavelength is None and frequency is None:
             raise ValueError("Must provide either wavelength or frequency.")
         if wavelength is not None and frequency is not None:
             raise ValueError("Provide either wavelength or frequency, not both.")
+        if power is not None and peak_intensity is not None:
+            raise ValueError("Provide either power or peak_intensity, not both.")
         if frequency is not None:
             wavelength = c.c / frequency
         self.waist = waist
@@ -48,7 +56,10 @@ class GaussianBeam():
         self.n_medium = n_medium
         self.rayleigh_range = np.pi * self.waist**2 * self.n_medium / self.wavelength
         self.divergence_angle = self.wavelength / np.pi / self.n_medium / self.waist
-        self.power = power
+        if peak_intensity is not None:
+            self.power = self.power_from_peak_intensity(peak_intensity)
+        else:
+            self.power = 0. if power is None else power
         self.peak_intensity = self.intensity()
 
         # aliases for commonly used parameters
@@ -129,7 +140,23 @@ class GaussianBeam():
         convert_W_per_m2_to_mW_per_cm2 = 0.1
         intensity_W_per_m2 = intensity_mW_per_cm2 / convert_W_per_m2_to_mW_per_cm2
         return intensity_W_per_m2 / self.intensity(1,r,z)
-    
+
+    def power_from_peak_intensity(self,peak_intensity):
+        '''
+        Returns the power of the gaussian beam whose peak intensity (at the
+        waist, on axis) is peak_intensity.
+
+        Parameters
+        ----------
+        peak_intensity: float
+            The peak intensity in W/m^2
+
+        Returns
+        -------
+        float
+        '''
+        return peak_intensity * np.pi * self.waist**2 / 2
+
     def trap_frequency(self,power,trap_length,polarizability):
         '''
         Returns the trap frequency (rad/s) for a potassium atom's ground state

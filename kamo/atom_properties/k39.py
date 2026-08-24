@@ -185,6 +185,70 @@ class Potassium39(arc.Potassium39):
         else:
             Gamma = 1/self.getStateLifetime(n1,l1,j1)
         return Gamma
+
+    def get_saturation_intensity(self,
+                                 n1,l1,j1,
+                                 n2,l2,j2,
+                                 detuning_Hz=0.,
+                                 convert_to_mW_per_cm2=False):
+        '''
+        Returns the off-resonant (effective) saturation intensity in W/m^2 for
+        the transition between the two given states.
+
+        The on-resonance two-level value is
+
+            I_sat = pi h c Gamma / (3 lambda^3),
+
+        with Gamma the spontaneous decay rate of the upper state (from
+        `get_decay_rate`) and lambda the transition wavelength.  A laser detuned
+        by Delta saturates the transition more slowly, so the intensity at which
+        the excited-state population reaches 1/4 grows as
+
+            I_sat(Delta) = I_sat * ( 1 + (2 Delta / Gamma)^2 ).
+
+        This is the quantity that makes the scattering rate
+
+            R = (Gamma/2) * (I / I_sat(Delta)) / (1 + I / I_sat(Delta))
+
+        equal to the usual detuned two-level result.
+
+        Parameters
+        ----------
+        n1,l1,j1 : lower/upper state quantum numbers (order does not matter;
+            the higher-lying state supplies the linewidth)
+        n2,l2,j2 : the other state of the pair
+        detuning_Hz: float
+            The laser detuning from resonance, as an ordinary frequency in Hz
+            (not angular).  Default 0., which gives the resonant I_sat.  Only
+            the magnitude matters.
+        convert_to_mW_per_cm2: bool
+            If True, converts the output to mW/cm^2 before returning.
+
+        Returns
+        -------
+        float
+
+        Notes
+        -----
+        This is the two-level (cycling-transition) saturation intensity: it
+        carries no Clebsch-Gordan factor for a particular m_F -> m_F' pair, and
+        no polarization dependence.  The states are used only to fix Gamma and
+        the transition wavelength.
+        '''
+        Gamma = self.get_decay_rate(n1,l1,j1,n2,l2,j2)
+        f0 = np.abs(self.getTransitionFrequency(n1,l1,j1,n2,l2,j2))
+        wavelength = c.c / f0
+
+        saturation_intensity = np.pi * c.h * c.c * Gamma / (3 * wavelength**3)
+        detuning_factor = 1 + (2 * 2 * np.pi * np.asarray(detuning_Hz) / Gamma)**2
+
+        convert_W_per_m2_to_mW_per_cm2 = 0.1
+        if convert_to_mW_per_cm2:
+            convert = convert_W_per_m2_to_mW_per_cm2
+        else:
+            convert = 1
+
+        return saturation_intensity * detuning_factor * convert
         
     def lineshape(self,n1=4,l1=0,j1=1/2,n2=4,l2=1,j2=3/2,detuning_Hz=0):
         '''
@@ -400,6 +464,26 @@ class Potassium39(arc.Potassium39):
         return float(B_G[0]) if B_G.size == 1 else B_G
 
     @staticmethod
+    def _crossings(x, y, target):
+        """Return every ``x`` where the sampled curve ``y(x)`` equals ``target``.
+
+        Roots are linear interpolations across each sign change of
+        ``y - target``; grid points landing exactly on the target are included
+        too.  Returns a sorted, de-duplicated ndarray (empty when the target is
+        never reached).
+        """
+        x = np.asarray(x, dtype=float)
+        diff = np.asarray(y, dtype=float) - float(target)
+        k = np.where(np.diff(np.sign(diff)) != 0)[0]
+        roots = []
+        for i in k:
+            x0, x1, y0, y1 = x[i], x[i + 1], diff[i], diff[i + 1]
+            roots.append(x0 if y1 == y0 else x0 - y0 * (x1 - x0) / (y1 - y0))
+        # include grid points that land exactly on the target
+        roots.extend(x[j] for j in np.where(diff == 0)[0])
+        return np.unique(np.round(roots, 9))
+
+    @staticmethod
     def _select_branch(b, freq_MHz, target_MHz, B_guess, B_bounds_G):
         """Return the field where ``freq_MHz(b) == target_MHz``.
 
@@ -408,16 +492,7 @@ class Potassium39(arc.Potassium39):
         the branch nearest ``B_guess`` is chosen, or a :class:`ValueError`
         listing the branch fields is raised when ``B_guess`` is ``None``.
         """
-        diff = freq_MHz - target_MHz
-        sign = np.sign(diff)
-        k = np.where(np.diff(sign) != 0)[0]
-        roots = []
-        for i in k:
-            x0, x1, y0, y1 = b[i], b[i + 1], diff[i], diff[i + 1]
-            roots.append(x0 if y1 == y0 else x0 - y0 * (x1 - x0) / (y1 - y0))
-        # include grid points that land exactly on the target
-        roots.extend(b[j] for j in np.where(diff == 0)[0])
-        roots = np.unique(np.round(roots, 9))
+        roots = Potassium39._crossings(b, freq_MHz, target_MHz)
 
         if len(roots) == 0:
             raise ValueError(
@@ -643,6 +718,355 @@ class Potassium39(arc.Potassium39):
 
         sweep = resL if use_light else resB
         return (result, sweep) if return_sweep else result
+
+    def get_intensity_from_light_shift(
+        self,
+        state1,
+        state2,
+        light_shift_Hz,
+        B=0.0,
+        beam=None,
+        frequency_Hz=None,
+        wavelength_m=None,
+        polarization="pi",
+        laser_model="rwa",
+        basis=None,
+        n_points=200,
+        I_max=None,
+        I_guess=None,
+        max_expansions=8,
+        relative_mode=True,
+        dB=0.1,
+        diamagnetic=True,
+        return_sweep=False,
+    ):
+        """Return the intensity (W/m^2) at which the ``state1 -> state2``
+        transition reaches ``light_shift_Hz`` at field ``B``.
+
+        A **single** laser-intensity sweep is run at the fixed magnetic field
+        ``B`` and inverted for the requested target(s), so the cost is
+        independent of how many targets are requested.
+
+        Reference (``relative_mode``)
+        -----------------------------
+        ``relative_mode`` selects what ``light_shift_Hz`` means, mirroring the
+        ``True``/``False`` behaviour of ``SweepResult.plot``'s
+        ``plot_differential``:
+
+        * ``True`` (default) — differential.  Each state's energy at the
+          *start* of the intensity sweep is subtracted first, so the target is
+          the light **shift** of the transition,
+
+              ``df(I) = f(B, I) - f(B, 0)``     with    ``f = E2 - E1``.
+
+          Taking the shift as an intensity difference cancels the RWA
+          rotating-frame offset, so ``df`` is a true lab-frame shift.  This
+          inverts :meth:`get_transition_frequency` with
+          ``relative_mode="optical"``.
+        * ``False`` — absolute.  The target is the full transition frequency
+          ``f(B, I)`` itself.  The bare transition frequency ``f(B, 0)`` is
+          obtained from a magnetic sweep at the same field (as in
+          :meth:`get_transition_frequency`) and added to the light shift, so
+          the inverted curve is a genuine lab-frame absolute frequency rather
+          than an RWA rotating-frame value.  This inverts
+          :meth:`get_transition_frequency` with ``relative_mode="absolute"``.
+
+        The strings ``"optical"`` and ``"absolute"`` are accepted as aliases
+        for ``True`` and ``False``, matching
+        :meth:`get_transition_frequency`'s vocabulary.
+
+        Sign convention
+        ---------------
+        ``light_shift_Hz`` is **signed** and refers to ``E2 - E1``.  In
+        differential mode a positive value means the laser pushes the two
+        levels apart, a negative value that it pulls them together; swapping
+        ``state1``/``state2`` flips the sign.
+
+        Unreachable targets
+        -------------------
+        A target the sweep never reaches is returned as ``NaN`` (rather than
+        raising) and a :class:`RuntimeWarning` reports how many were dropped,
+        their values, and the span actually covered — usually a sign or
+        detuning mistake, or a target beyond ``I_max``.  Because every target
+        is inverted from the same sweep, one unreachable entry never discards
+        the rest of the vector.
+
+        Intensity range
+        ---------------
+        The sweep runs over ``I in [0, I_max]``.  When ``I_max`` is omitted it
+        is taken from ``beam.I0`` (if the beam carries power), else estimated
+        from the low-intensity slope of ``df`` (which is linear in ``I`` for a
+        far-detuned laser).  The range is then doubled — up to
+        ``max_expansions`` times — while at least one missing target still lies
+        beyond the end of the shift curve, since that is the only case the
+        doubling can fix.
+
+        Monotonic vs non-monotonic
+        --------------------------
+        Far from resonance ``df(I)`` is monotonic and the inversion is a single
+        interpolation.  Close to resonance the RWA dressed-state curve can turn
+        over, so one target can be produced at **several** intensities
+        (branches).  In that case:
+
+        * pass ``I_guess`` (W/m^2) and the branch nearest to it is returned;
+        * omit ``I_guess`` and a :class:`ValueError` lists the branch
+          intensities so you can pick one via ``I_guess``.
+
+        Parameters
+        ----------
+        state1, state2 : (n, l, j, a, b) 5-tuples
+            Lower/upper states of the transition, with ``(a, b)`` either
+            ``(F, mF)`` ints or ``(m_j, m_i)`` half-integer floats (standard
+            ``kamo`` convention).  The target is referenced to ``E2 - E1``.
+        light_shift_Hz : float or array-like
+            Target(s) in Hz: a signed light shift when ``relative_mode`` is
+            ``True``, or an absolute transition frequency when it is ``False``.
+            Array-like returns an array of intensities (one per target), all
+            read from the same sweep; unreachable targets come back as ``NaN``
+            (see *Unreachable targets*).
+        B : float, optional
+            Static magnetic field in Gauss (default 0).  The sweep is run at
+            this field, so the returned intensity accounts for the Zeeman
+            structure of the two states.
+        beam : kamo.GaussianBeam, optional
+            Laser beam; supplies the laser frequency and, unless ``I_max`` is
+            given, the sweep's upper intensity ``beam.I0``.
+        frequency_Hz : float, optional
+            Laser frequency (Hz), as an alternative to ``beam``.
+        wavelength_m : float, optional
+            Laser wavelength (m), as an alternative to ``beam``.  Exactly one
+            of ``beam``, ``frequency_Hz``, ``wavelength_m`` must be given.
+        polarization : str, optional
+            Laser polarization: "pi", "sigma+", or "sigma-" (default "pi").
+        laser_model : {"rwa", "stark"}, optional
+            Light-shift model (default "rwa").
+        basis : AtomicStructure, optional
+            Override the atomic-structure basis.  When omitted, the two states'
+            manifolds plus their dipole-coupled (Delta l = +-1) neighbours are
+            used, as required for a light shift.
+        n_points : int, optional
+            Intensity steps in the sweep (default 200).  More points give a
+            finer inversion grid.
+        I_max : float, optional
+            Upper intensity of the sweep in W/m^2 (see *Intensity range*).
+        I_guess : float, optional
+            Intensity (W/m^2) used to disambiguate multiple branches: the
+            crossing nearest ``I_guess`` is returned.
+        max_expansions : int, optional
+            Maximum number of ``I_max`` doublings (default 8).
+        relative_mode : bool or {"optical", "absolute"}, optional
+            Reference for ``light_shift_Hz`` (see above).  Default ``True``
+            (differential / light shift).
+        dB : float, optional
+            Magnetic-sweep step in Gauss (default 0.1).  Only used when
+            ``relative_mode`` is ``False``, where a magnetic sweep supplies the
+            bare transition frequency ``f(B, 0)``.
+        diamagnetic : bool, optional
+            Include the diamagnetic term in that magnetic sweep (default True).
+            Only used when ``relative_mode`` is ``False``.
+        return_sweep : bool, optional
+            If True, also return the underlying
+            :class:`~kamo.hamiltonian.LaserSweepResult`.
+
+        Returns
+        -------
+        float or np.ndarray
+            The intensity/intensities in W/m^2, ``NaN`` where a target was not
+            reachable, or ``(intensity, sweep)`` when ``return_sweep`` is True.
+
+        Warns
+        -----
+        RuntimeWarning
+            When one or more targets were unreachable and returned as ``NaN``.
+
+        Raises
+        ------
+        ValueError
+            If a target has multiple branches and no ``I_guess`` was given (the
+            error lists the branch intensities).
+
+        Examples
+        --------
+        >>> atom = Potassium39()
+        >>> # 30 kHz measured shift of the |1,-1> -> |1,0> clock transition
+        >>> # from a 780 nm beam at 100 G:
+        >>> atom.get_intensity_from_light_shift(
+        ...     (4, 0, 0.5, 1, -1), (4, 0, 0.5, 1, 0),
+        ...     light_shift_Hz=30e3, B=100.0, wavelength_m=780e-9)
+        >>> # a whole vector of shifts, inverted from one sweep:
+        >>> atom.get_intensity_from_light_shift(
+        ...     (4, 0, 0.5, 1, -1), (4, 0, 0.5, 1, 0),
+        ...     light_shift_Hz=np.linspace(10e3, 50e3, 9),
+        ...     B=100.0, wavelength_m=780e-9)
+        >>> # the same, but targeting an absolute transition frequency:
+        >>> atom.get_intensity_from_light_shift(
+        ...     (4, 0, 0.5, 1, -1), (4, 0, 0.5, 1, 0),
+        ...     light_shift_Hz=461.75e6, B=100.0, wavelength_m=780e-9,
+        ...     relative_mode=False)
+
+        See Also
+        --------
+        get_transition_frequency : forward direction (intensity -> frequency),
+            whose ``relative_mode="optical"`` / ``"absolute"`` this inverts.
+        kamo.hamiltonian.LaserSweepResult.intensity_from_splitting_shift :
+            same inversion on an existing sweep, using ``|df|``.
+        """
+        from kamo import GaussianBeam
+        from kamo.hamiltonian import AtomicStructure, make_nlj_basis
+
+        s1 = tuple(state1)
+        s2 = tuple(state2)
+        if len(s1) != 5 or len(s2) != 5:
+            raise ValueError(
+                "Each state must be a 5-tuple (n, l, j, a, b) where (a, b) are "
+                "either (F, mF) ints or (m_j, m_i) half-integer floats.")
+
+        # ---- validate / build the laser ----
+        n_spec = sum(x is not None for x in (beam, frequency_Hz, wavelength_m))
+        if n_spec != 1:
+            raise ValueError(
+                "Provide exactly one of `beam`, `frequency_Hz`, or "
+                f"`wavelength_m`; got {n_spec}.")
+        if beam is None:
+            f_laser = (float(frequency_Hz) if frequency_Hz is not None
+                       else c.c / float(wavelength_m))
+            # power=0 -> I0=0; the sweep's intensity range is set below.
+            beam = GaussianBeam(waist=1e-6, frequency=f_laser, power=0.0)
+
+        # ---- resolve the reference mode ----
+        if relative_mode is True or relative_mode == "optical":
+            differential = True
+        elif relative_mode is False or relative_mode == "absolute":
+            differential = False
+        else:
+            raise ValueError(
+                "relative_mode must be True/'optical' (target is a light "
+                "shift) or False/'absolute' (target is a full transition "
+                f"frequency); got {relative_mode!r}.")
+
+        B = float(B)
+        targets = np.atleast_1d(np.asarray(light_shift_Hz, dtype=float))
+        scalar_in = np.ndim(light_shift_Hz) == 0
+
+        # ---- build / accept the basis (needs the dipole-coupled manifolds) ----
+        if basis is not None:
+            model = basis
+        else:
+            manifolds = []
+            for st in (s1, s2):
+                for m in make_nlj_basis(int(st[0]), int(st[1]),
+                                        n_range=0, l_range=1):
+                    if m not in manifolds:
+                        manifolds.append(m)
+            model = AtomicStructure(manifolds, atom=self)
+
+        def _sweep(i_max, npts):
+            return model.laser_sweep(
+                beam, I_max=i_max, n_points=npts, model=laser_model,
+                polarization=polarization, B_gauss=B,
+            )
+
+        # ---- reduce the targets to light shifts ----
+        # The laser sweep only ever yields the *shift* df(I) = f(B, I) - f(B, 0)
+        # as a true lab-frame quantity (the intensity difference cancels the RWA
+        # rotating-frame offset).  In absolute mode the bare transition
+        # frequency f(B, 0) comes from a magnetic sweep at the same field, and
+        # subtracting it turns the absolute targets into shift targets, so the
+        # inversion below is identical in both modes.
+        f_B0 = 0.0
+        if not differential:
+            resB = model.magnetic_sweep(
+                B_max=max(B + dB, dB), dB=dB, diamagnetic=diamagnetic)
+            f_B0 = float(resB.get_transition_frequency(s1, s2, at=B))
+        targets_shift = targets - f_B0
+        quantity = "Light shift" if differential else "Transition frequency"
+
+        # ---- choose the initial intensity range ----
+        I_max = float(I_max) if I_max is not None else float(getattr(beam, "I0", 0.0))
+        if I_max <= 0.0:
+            # No intensity scale supplied: estimate one from the low-intensity
+            # slope of df (linear in I for a far-detuned laser).
+            I_probe = 1.0e2                     # 10 mW/cm^2 — safely perturbative
+            slope = (_sweep(I_probe, 2)
+                     .transition_frequency_shift(s1, s2)[-1] / I_probe)
+            scale = float(np.max(np.abs(targets_shift)))
+            I_max = 2.0 * scale / abs(slope) if (slope and scale) else I_probe
+
+        # ---- sweep and invert, expanding the range until every target is hit ----
+        # All targets share one sweep; the range is doubled only while at least
+        # one still-missing target lies beyond the end of the (same-signed)
+        # shift curve, since that is the only case doubling can fix.  Anything
+        # still missing at the end is unreachable and comes back as NaN.
+        resL = None
+        roots = []
+        n_doublings = max(0, int(max_expansions))
+        for attempt in range(n_doublings + 1):
+            resL = _sweep(I_max, n_points)
+            shift = resL.transition_frequency_shift(s1, s2)      # signed, Hz
+            roots = [self._crossings(resL.param, shift, t) for t in targets_shift]
+            missing = [k for k, r in enumerate(roots) if len(r) == 0]
+            if not missing:
+                break
+            df_end = float(shift[-1])
+            expandable = [k for k in missing
+                          if targets_shift[k] * df_end > 0
+                          and abs(targets_shift[k]) > abs(df_end)]
+            if not expandable or attempt == n_doublings:
+                break
+            I_max *= 2.0
+
+        # ---- pick a branch per target (NaN where none was found) ----
+        out = np.full(len(targets_shift), np.nan)
+        unreachable = []
+        for k, (t, r) in enumerate(zip(targets, roots)):
+            if len(r) == 0:
+                unreachable.append(t)
+            elif len(r) == 1:
+                out[k] = float(r[0])
+            elif I_guess is not None:
+                out[k] = float(r[np.argmin(np.abs(r - float(I_guess)))])
+            else:
+                shown = ", ".join(f"{v:.4e}" for v in r[:8])
+                if len(r) > 8:
+                    shown += f", ... ({len(r)} total)"
+                hint = ""
+                if len(r) > 4:
+                    hint = (
+                        f"  So many branches usually means {t:.4e} Hz is below "
+                        "the numerical resolution of the sweep (the two states "
+                        "shift almost identically), in which case no intensity "
+                        "is well determined."
+                    )
+                raise ValueError(
+                    f"{quantity} of {t:.4e} Hz occurs at multiple "
+                    f"intensities (non-monotonic curve): branches at "
+                    f"[{shown}] W/m^2.  Pass I_guess (W/m^2) to select the "
+                    f"branch nearest a known intensity.{hint}"
+                )
+
+        if unreachable:
+            import warnings
+            miss_str = ", ".join(f"{t:.4e}" for t in unreachable[:8])
+            if len(unreachable) > 8:
+                miss_str += f", ... ({len(unreachable)} total)"
+            warnings.warn(
+                f"{len(unreachable)} of {len(targets)} target(s) returned as "
+                f"NaN: {quantity.lower()}(s) [{miss_str}] Hz never occur for I "
+                f"in [0, {I_max:.4e}] W/m^2, where the reachable range is "
+                f"[{np.min(shift) + f_B0:.4e}, {np.max(shift) + f_B0:.4e}] Hz "
+                f"after {attempt} doubling(s).  Check the sign of "
+                "light_shift_Hz (it is "
+                + ("f(B, I) - f(B, 0)" if differential else "f(B, I)")
+                + " with f = E2 - E1) and the laser detuning; if the target "
+                "is simply beyond the swept range, pass a larger I_max or "
+                "raise max_expansions.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
+        I_out = out
+        result = float(I_out[0]) if scalar_in else I_out
+        return (result, resL) if return_sweep else result
 
     def state_dicts(self,n,l,j,hf=True) -> dict:
         '''

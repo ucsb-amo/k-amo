@@ -217,6 +217,34 @@ class SweepResult(StateLabelMixin):
                     f"(F={F}, mF={mF:+d})")
         return f"|{s.n},{s.l},{s.j}; m_j={s.m_j:+.1f}, m_i={s.m_i:+.1f}>"
 
+    def tex_label(self, i: int, step: int = 0, coupled: bool = False) -> str:
+        r"""Return a TeX-formatted label for tracked state ``i`` at ``step``.
+
+        Same state identification as :meth:`label` — the dominant uncoupled
+        component in the **Paschen-Back (adiabatic) convention** — but rendered
+        with :func:`~.state_labels.rs_state_label` as a Russell-Saunders term
+        symbol plus a ket, ready for a matplotlib legend.
+
+        Parameters
+        ----------
+        step : int
+            Sweep step at which the dominant component is evaluated (default 0).
+        coupled : bool
+            If False (default) the ket carries the uncoupled ``(m_J, m_I)``
+            quantum numbers, e.g. ``$4S_{1/2}|m_J=-0.5, m_I=+0.5\rangle$``.
+            If True it carries the zero-field ``(F, m_F)`` numbers that
+            adiabatically connect to them, e.g. ``$4S_{1/2}|F=1, m_F=+0\rangle$``.
+        """
+        s = self.dominant_state(i, step)
+        if coupled:
+            man = next((m for m in self.basis.manifolds
+                        if m.n == s.n and m.l == s.l and abs(m.j - s.j) < 1e-9),
+                       None)
+            if man is not None:
+                F, mF = man.label_for(s.m_j, s.m_i)
+                return self.rs_state_label(s.n, s.l, s.j, int(F), int(mF))
+        return self.rs_state_label(s.n, s.l, s.j, float(s.m_j), float(s.m_i))
+
     def convert_label(self, state: tuple) -> tuple:
         """Convert a state 5-tuple between uncoupled and coupled-basis labels.
 
@@ -715,7 +743,8 @@ class SweepResult(StateLabelMixin):
         return x, self.param_name
 
     def plot(self, ax=None, energy_unit: str = "MHz", x_unit: Optional[str] = None,
-             states=None, label_states: bool = False, label_step: int = 0,
+             states=None, label_states: bool = True, label_step: int = 0,
+             coupled_labels: bool = False,
              energy_offset: float = 0.0, legend: bool = False,
              plot_differential=False, xlim=None, **plot_kwargs):
         """Plot tracked eigen-energies versus the swept parameter.
@@ -739,15 +768,24 @@ class SweepResult(StateLabelMixin):
             - list of Manifolds and/or 3-, 4-, or 5-tuples: union, concatenated.
             - sequence of int: explicit tracked-state indices.
         label_states : bool
-            Annotate each line with its dominant-basis-state label.
+            Label each line with its dominant-basis state and show the legend
+            (default True).  Labels are the TeX term-symbol form built by
+            :meth:`tex_label` / :func:`~.state_labels.rs_state_label`, e.g.
+            ``$4S_{1/2}|m_J=-0.5, m_I=+0.5\rangle$``.  Pass ``False`` to
+            suppress them, e.g. when plotting a large basis where every line
+            would appear in the legend.
         label_step : int
             Sweep step at which dominant-state labels are evaluated (default 0,
             i.e. the start of the sweep).
+        coupled_labels : bool
+            Label states by their zero-field ``(F, m_F)`` numbers instead of
+            the uncoupled ``(m_J, m_I)`` ones (default False).
         energy_offset : float
             Value (in Hz) subtracted from every energy before scaling; handy for
             referencing to a particular state or manifold.
         legend : bool
-            Show a legend built from the state labels.
+            Force the legend on even when ``label_states`` is False.  With the
+            default ``label_states=True`` the legend is already shown.
         plot_differential : bool, (n, l, j) 3-tuple, or (n, l, j, m_j, m_i) 5-tuple, default False
             Subtract a reference energy from every plotted state:
 
@@ -801,6 +839,7 @@ class SweepResult(StateLabelMixin):
 
         x, xlabel = self.x_axis(x_unit)
         idxs = self._resolve_states(states, label_step)
+        show_legend = bool(label_states or legend)
 
         # --- build reference track (shape: (n_steps,) or None) ---
         ref_track: np.ndarray | None = None
@@ -840,18 +879,15 @@ class SweepResult(StateLabelMixin):
                 yi = yi - ref_track[0] / scale
             y_plotted.append(yi)
 
-            lbl = self.label(i, label_step) if (label_states or legend) else None
+            lbl = self.tex_label(i, label_step, coupled=coupled_labels) \
+                if show_legend else None
             (line,) = ax.plot(x, yi, label=lbl, **plot_kwargs)
-            if label_states:
-                ax.annotate(lbl, (x[-1], yi[-1]), fontsize=6,
-                            va="center", ha="left",
-                            xytext=(3, 0), textcoords="offset points")
 
         ax.set_xlabel(xlabel)
         diff_suffix = " (differential)" if plot_differential is not False else ""
         ax.set_ylabel(f"Energy ({energy_unit}){diff_suffix}")
-        if legend:
-            ax.legend(fontsize=6, loc="best")
+        if show_legend:
+            ax.legend(fontsize=8, loc="best")
 
         if xlim is not None:
             ax.set_xlim(xlim)
