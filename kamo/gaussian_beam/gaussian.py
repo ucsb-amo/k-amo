@@ -157,18 +157,36 @@ class GaussianBeam():
         '''
         return peak_intensity * np.pi * self.waist**2 / 2
 
-    def trap_frequency(self,power,trap_length,polarizability):
+    def trap_frequency(self,power,trap_length,polarizability,curvature_factor=4.):
         '''
         Returns the trap frequency (rad/s) for a potassium atom's ground state
         in the gaussian beam.
 
-        trap_length refers to either the trap waist or the Rayleigh range of the
-        beam, depending on if the user wants the radial or the axial trap
-        frequency.
+        The trap frequency is omega = sqrt(curvature_factor * U0 / (m L^2)),
+        where U0 = polarizability * I0 / (2 c epsilon_0) is the trap depth and
+        L is trap_length.  The curvature factor is *not* the same along the two
+        axes, because the beam profile is not:
+
+          radial:  U(r) = -U0 exp(-2 r^2 / w0^2)  ~  -U0 (1 - 2 r^2 / w0^2)
+                   => omega_r = sqrt(4 U0 / (m w0^2)),   L = w0,  factor 4
+          axial:   U(z) = -U0 / (1 + (z/zR)^2)    ~  -U0 (1 -   z^2 / zR^2)
+                   => omega_z = sqrt(2 U0 / (m zR^2)),   L = zR,  factor 2
+
+        Parameters
+        ----------
+        power: float
+            The power (in Watts) in the beam.
+        trap_length: float
+            Either the waist (radial) or the Rayleigh range (axial), in m.
+        polarizability: float
+            The ground-state polarizability in SI units (C m^2 / V).
+        curvature_factor: float
+            4 for the radial direction (default), 2 for the axial direction.
+            See above.
         '''
         intensity = self.intensity(power)
-        omega = np.sqrt( 2 * intensity * self.polarizability_ground_state ) \
-            / np.sqrt( c.c * c.m_K * c.epsilon_0 ) / trap_length
+        trap_depth = polarizability * intensity / (2 * c.c * c.epsilon_0)
+        omega = np.sqrt( curvature_factor * trap_depth / c.m_K ) / trap_length
         return omega
 
     def trap_frequency_radial(self,power=-0.1,polarizability=0.):
@@ -177,15 +195,21 @@ class GaussianBeam():
         state in the given gaussian beam.
         '''
         power, polarizability = self._handle_trap_args(power,polarizability)
-        return self.trap_frequency(power,self.waist,polarizability)
-    
+        return self.trap_frequency(power,self.waist,polarizability,
+                                   curvature_factor=4.)
+
     def trap_frequency_axial(self,power=-0.1,polarizability=0.):
         '''
         Returns the axial trap frequency (rad/s) for a potassium atom's ground
         state in the given gaussian beam.
+
+        This is smaller than trap_frequency_radial by w0 / (sqrt(2) zR)
+        = lambda / (sqrt(2) pi w0), matching the convention used in
+        kamo.BEC_properties.
         '''
         power, polarizability = self._handle_trap_args(power,polarizability)
-        return self.trap_frequency(power,self.zR,polarizability)
+        return self.trap_frequency(power,self.zR,polarizability,
+                                   curvature_factor=2.)
     
     def trap_depth(self,power=-0.1,r=0.,z=0.,polarizability=0.):
         '''
