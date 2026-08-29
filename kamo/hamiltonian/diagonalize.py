@@ -1098,10 +1098,26 @@ class LaserSweepResult(SweepResult):
         basis, using the **Zeeman-dressed** (I=0) basis for transition
         frequencies and coupling elements::
 
-            Γ_scatter = Σ_e  Γ_e · Ω_ge² / (2 · (Δ_ge² + Γ_e²/4))
+            Γ_scatter = Σ_e  γ_e · Ω_ge² / (4 · (Δ_ge² + (γ_e/2π)²/4))
 
-        where ``Ω_ge = 2 |C_ge| E₀``, ``E₀ = sqrt(2I/(ε₀c))``, and
+        i.e. ``Γ_e · ρ_ee`` summed over excited states, where
+        ``Ω_ge = 2 |C_ge| E₀``, ``E₀ = sqrt(2I/(ε₀c))``, and
         ``Δ_ge = f_laser − (E_e − E_g)``.
+
+        Units: the returned rate is in s⁻¹ — photons per second, not an
+        angular frequency.  ``γ_e = 1/τ`` plays two distinct roles:
+
+        * as the **population decay constant** it multiplies ρ_ee, and is
+          already a per-second rate (dₙ_e/dt = −γ_e n_e).  It is *not*
+          divided by 2π.  Sanity check: on resonance at full saturation
+          ρ_ee → 1/2, so the rate → γ_e/2 = 1.89×10⁷ s⁻¹ for K39 D2.
+        * as the **Lorentzian half-width** inside ρ_ee it sits next to
+          Δ_ge, so it must share Δ's frequency convention.  ``Ω_ge`` and
+          ``Δ_ge`` here are ordinary frequencies (Hz), so that occurrence
+          is ``γ_e/2π`` (= 6.005 MHz on D2, where γ_e = 2π × 6.005 MHz).
+
+        Same number, two jobs — hence the asymmetry between the prefactor
+        and the denominator.
 
         Parameters
         ----------
@@ -1178,12 +1194,19 @@ class LaserSweepResult(SweepResult):
 
         rates = np.zeros(len(I_arr))
         for gamma_e, c_abs, Delta in transitions:
-            Omega = 2.0 * c_abs * E0_arr          # shape (n_I,)
+            Omega = 2.0 * c_abs * E0_arr          # Hz, shape (n_I,)
+            # gamma_e = 1/tau is a population decay CONSTANT in s^-1, so the
+            # leading factor needs no 2pi: it turns rho_ee into photons/s.
+            # Inside rho_ee, gamma_e instead plays the role of a Lorentzian
+            # half-width sitting next to Delta, so there it must match Delta's
+            # convention (Hz) and becomes gamma_e/2pi.  Same number, two jobs.
+            gamma_hz = gamma_e / (2.0 * np.pi)    # Hz
             if weak_probe:
-                denom = 2.0 * (Delta ** 2 + gamma_e ** 2 / 4.0)
+                denom = 4.0 * (Delta ** 2 + gamma_hz ** 2 / 4.0)
                 rates += gamma_e * Omega ** 2 / denom
             else:
-                denom = 2.0 * (Delta ** 2 + gamma_e ** 2 / 4.0 + Omega ** 2 / 2.0)
+                denom = 4.0 * (Delta ** 2 + gamma_hz ** 2 / 4.0
+                               + Omega ** 2 / 2.0)
                 rates += gamma_e * Omega ** 2 / denom
 
         return float(rates[0]) if scalar_in else rates

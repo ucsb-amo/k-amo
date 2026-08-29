@@ -12,6 +12,9 @@ if TYPE_CHECKING:
     from .hamiltonian import AtomicStructure
     from .dipole_dipole import (BECCloud, CoupledDipole, CyclingTransition,
                                 PairPotential, QuasiStaticLZModel)
+    from .BEC_properties.variational import GaussianVariationalCloud
+    from .imaging import ProbeBeam, Propagator, TwoLevelResponse, UniformMixture
+    from .spin import SpinField, SpinGeometry, Sequence
 
 _lazy = {
     'Potassium39':             '.atom_properties.k39',
@@ -25,6 +28,14 @@ _lazy = {
     'BECCloud':                '.dipole_dipole',
     'QuasiStaticLZModel':      '.dipole_dipole',
     'CoupledDipole':           '.dipole_dipole',
+    'GaussianVariationalCloud': '.BEC_properties.variational',
+    'ProbeBeam':               '.imaging',
+    'Propagator':              '.imaging',
+    'TwoLevelResponse':        '.imaging',
+    'UniformMixture':          '.imaging',
+    'SpinField':               '.spin',
+    'SpinGeometry':            '.spin',
+    'Sequence':                '.spin',
 }
 
 def __getattr__(name):

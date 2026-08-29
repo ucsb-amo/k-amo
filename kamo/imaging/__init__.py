@@ -20,8 +20,8 @@ Quick start
 ...     f_radial_Hz=1.0e3, waist=3.0e-6)
 >>> probe = ProbeBeam.from_midpoint(
 ...     atom, B_gauss=B,
-...     ground_up=(4, 0, 1/2, -1/2, +1/2), excited_up=(4, 1, 3/2, -3/2, +1/2),
-...     ground_dn=(4, 0, 1/2, -1/2, -1/2), excited_dn=(4, 1, 3/2, -3/2, -1/2),
+...     ground_up=(4, 0, 1/2, -1/2, -1/2), excited_up=(4, 1, 3/2, -3/2, -1/2),
+...     ground_dn=(4, 0, 1/2, -1/2, +1/2), excited_dn=(4, 1, 3/2, -3/2, +1/2),
 ...     s0_incident=0.335)
 >>> prop = Propagator.for_cloud(probe.response, cloud)
 >>> res = prop.propagate(UniformMixture(cloud, probe.response, probe.species(xi=1.)),

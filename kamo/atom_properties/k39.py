@@ -160,10 +160,20 @@ class Potassium39(arc.Potassium39):
                             n2,l2,j2,
                             intensity,
                             detuning_Hz=100.e6):
-        """See Grimm 1999 equation 9.
-        """        
+        """Photon scattering rate in s^-1.  See Grimm 1999 equation 9::
+
+            Gamma_sc = Im(alpha) * I / (hbar * eps0 * c)
+
+        The result is a genuine rate (photons per second), not an angular
+        frequency: `get_decay_rate` supplies Gamma = 1/tau as a population
+        decay constant in s^-1, and eq. 9 carries that through unchanged.
+        There is no 1/(2 pi) in Grimm's expression -- dividing by 2 pi here
+        would under-report the rate by a factor of 2 pi (it would, for
+        example, cap the resonant saturated rate at Gamma/(4 pi) instead of
+        the correct Gamma/2).
+        """
         alpha = self.get_semiclassical_polarizability(n1,l1,j1,n2,l2,j2,detuning_Hz)
-        return 1/(c.hbar * c.epsilon0 * c.c) * np.imag(alpha) * intensity / (2 * np.pi)
+        return 1/(c.hbar * c.epsilon0 * c.c) * np.imag(alpha) * intensity
 
     # def get_off_resonant_scattering_rate(self,
     #                         n1,l1,j1,

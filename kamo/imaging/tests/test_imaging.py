@@ -32,8 +32,19 @@ A_UPUP_A0 = 11.333713034704147      # kamo Potassium39.get_scattering_length(1,-
 A_DNDN_A0 = -73.69949836325802      # ...(1, 0, B)
 NA = 0.42
 
-G_UP, E_UP = (4, 0, 1 / 2, -1 / 2, +1 / 2), (4, 1, 3 / 2, -3 / 2, +1 / 2)
-G_DN, E_DN = (4, 0, 1 / 2, -1 / 2, -1 / 2), (4, 1, 3 / 2, -3 / 2, -1 / 2)
+#: Spin imbalance of the POLARIZED, LENSING cloud.  Re alpha ~ -delta, so the
+#: RED-detuned state focuses; |up> is the lower-frequency transition and is
+#: therefore BLUE-detuned and defocusing.  The cloud that lenses is |dn>, xi = -1.
+#: Named rather than written inline so these physics tests say what they mean.
+XI_LENS = -1.0
+
+# |up> is the state whose transition to the excited state is LOWER in frequency,
+# so a probe at the midpoint is BLUE of |up> (delta_up > 0) and RED of |dn>.
+# kamo gives f(m_i=-1/2) < f(m_i=+1/2) by 110.22 MHz at this field, so |up> is
+# m_i = -1/2.  Corrected 2026-08-28; these were previously swapped, which mirrors
+# the lensing (Re alpha ~ -delta, so the RED-detuned state focuses).
+G_UP, E_UP = (4, 0, 1 / 2, -1 / 2, -1 / 2), (4, 1, 3 / 2, -3 / 2, -1 / 2)
+G_DN, E_DN = (4, 0, 1 / 2, -1 / 2, +1 / 2), (4, 1, 3 / 2, -3 / 2, +1 / 2)
 
 
 # ---------------------------------------------------------------- fixtures
@@ -307,12 +318,12 @@ class TestPropagation:
         the thin-screen phase.  A coding error would leave the ratio pinned near
         0.5 regardless of cloud length; a real depth-of-field effect climbs to 1."""
         _, phi_thin = response.thin_screen(cloud.peak_column_density,
-                                           probe.species(1.0))
+                                           probe.species(XI_LENS))
         ratios = []
         for f in (1.0, 0.3, 0.1):
             p = Propagator.for_cloud(response, cloud, n_grid=384, n_slices=120,
                                      wx_scale=f)
-            r = p.propagate(UniformMixture(cloud, response, probe.species(1.0),
+            r = p.propagate(UniformMixture(cloud, response, probe.species(XI_LENS),
                                            wx_scale=f), saturate=False)
             ratios.append(readout.recovered_phase(readout.refocus(r), r.grid)
                           / phi_thin)
@@ -397,13 +408,13 @@ class TestPropagation:
         """
         weak = []
         for sc in (0.001, 0.002, 0.005, 0.01):
-            r = prop.propagate(UniformMixture(cloud, response, probe.species(1.0),
+            r = prop.propagate(UniformMixture(cloud, response, probe.species(XI_LENS),
                                               density_scale=sc), saturate=False)
             weak.append(float(readout.far_field(r).sum()) / sc**2)
         assert max(weak) / min(weak) < 1.02          # quadratic to better than 2%
 
-        strong = prop.propagate(UniformMixture(cloud, response, probe.species(1.0)),
-                                saturate=False)
+        strong = prop.propagate(
+            UniformMixture(cloud, response, probe.species(XI_LENS)), saturate=False)
         departure = float(readout.far_field(strong).sum()) / np.mean(weak)
         assert departure > 1.1                       # and it departs upward
 
@@ -414,7 +425,7 @@ class TestPropagation:
 
     def test_lensing_raises_local_saturation(self, response, cloud, prop, probe):
         """A converging cloud concentrates the probe above the incident intensity."""
-        res = prop.propagate(UniformMixture(cloud, response, probe.species(1.0)),
+        res = prop.propagate(UniformMixture(cloud, response, probe.species(XI_LENS)),
                              s0_incident=probe.s0_incident)
         assert res.s_peak > 3 * probe.s0_incident
         assert res.mean_intensity > 1.0
@@ -517,7 +528,7 @@ class TestMidpointSymmetry:
         p = Propagator.for_cloud(response, cloud, n_grid=256, n_slices=80)
         bal = p.propagate(UniformMixture(cloud, response, probe.species(0.0)),
                           s0_incident=probe.s0_incident)
-        pol = p.propagate(UniformMixture(cloud, response, probe.species(1.0)),
+        pol = p.propagate(UniformMixture(cloud, response, probe.species(XI_LENS)),
                           s0_incident=probe.s0_incident)
         # A balanced cloud is a pure ABSORBER, so it cannot concentrate the probe.
         # It is not perfectly flat either: a Gaussian absorbing mask diffracts, and
@@ -557,11 +568,18 @@ class TestOperatingPoint:
 
     def test_probe_geometry(self, probe):
         assert probe.splitting_Hz / 1e6 == pytest.approx(110.2, abs=0.5)
-        assert probe.delta_up == pytest.approx(-18.36, abs=0.05)
         assert probe.response.sigma0 == pytest.approx(2.8066e-13, rel=1e-3)
+        # |up> is the LOWER-frequency transition, so a probe at the midpoint is
+        # BLUE of |up> and RED of |dn>.  This is the sign that fixes which state
+        # lenses, so assert the convention itself, not just its magnitude.
+        assert probe.delta_up == pytest.approx(+18.36, abs=0.05)
+        assert probe.delta_dn == pytest.approx(-18.36, abs=0.05)
+        assert probe.f_up < probe.f_dn
+        # ... and therefore the differential shift nu_dn - nu_up is NEGATIVE
+        assert probe.with_saturation(0.3).differential_light_shift_Hz() < 0
 
     def test_cloud_is_a_strong_phase_object(self, response, cloud, probe):
-        D, phi = response.thin_screen(cloud.peak_column_density, probe.species(1.0))
+        D, phi = response.thin_screen(cloud.peak_column_density, probe.species(XI_LENS))
         assert D == pytest.approx(0.486, abs=0.01)      # optically THIN
         assert phi == pytest.approx(4.46, abs=0.05)     # but a strong phase object
         assert abs(phi) > 4                              # far outside weak-phase
@@ -569,24 +587,24 @@ class TestOperatingPoint:
     def test_depth_of_field_costs_about_forty_percent(self, response, cloud, probe):
         """A focused, aberration-free system recovers ~58% of the projected phase."""
         p = Propagator.for_cloud(response, cloud, n_grid=384, n_slices=120)
-        res = p.propagate(UniformMixture(cloud, response, probe.species(1.0)),
+        res = p.propagate(UniformMixture(cloud, response, probe.species(XI_LENS)),
                           s0_incident=probe.s0_incident)
         _, phi_thin = response.thin_screen(cloud.peak_column_density,
-                                           probe.species(1.0))
+                                           probe.species(XI_LENS))
         recovered = readout.recovered_phase(readout.refocus(res), res.grid)
         assert recovered / phi_thin == pytest.approx(0.58, abs=0.03)
 
     def test_collection_efficiency_survives_the_lensing(self, response, cloud, probe):
         """Born gets the collected fraction right even though it gets phi wrong."""
         p = Propagator.for_cloud(response, cloud, n_grid=384, n_slices=120)
-        res = p.propagate(UniformMixture(cloud, response, probe.species(1.0)),
+        res = p.propagate(UniformMixture(cloud, response, probe.species(XI_LENS)),
                           s0_incident=probe.s0_incident)
         eta = readout.into_NA(readout.far_field(res), res.grid, NA)
         assert eta == pytest.approx(0.979, abs=0.005)
 
     def test_probe_is_concentrated_inside_the_cloud(self, response, cloud, probe):
         p = Propagator.for_cloud(response, cloud, n_grid=384, n_slices=120)
-        res = p.propagate(UniformMixture(cloud, response, probe.species(1.0)),
+        res = p.propagate(UniformMixture(cloud, response, probe.species(XI_LENS)),
                           s0_incident=probe.s0_incident)
         assert res.s_peak / probe.s0_incident == pytest.approx(5.75, rel=0.1)
         assert res.s_peak == pytest.approx(1.94, rel=0.1)

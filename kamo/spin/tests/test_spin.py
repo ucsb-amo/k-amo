@@ -23,8 +23,13 @@ B_GAUSS = 520.5830387285664
 A_UPUP_A0 = 11.333713034704147
 N_ATOMS = 500.0
 
-G_UP, E_UP = (4, 0, 1 / 2, -1 / 2, +1 / 2), (4, 1, 3 / 2, -3 / 2, +1 / 2)
-G_DN, E_DN = (4, 0, 1 / 2, -1 / 2, -1 / 2), (4, 1, 3 / 2, -3 / 2, -1 / 2)
+# |up> is the state whose transition to the excited state is LOWER in frequency,
+# so a probe at the midpoint is BLUE of |up> (delta_up > 0) and RED of |dn>.
+# kamo gives f(m_i=-1/2) < f(m_i=+1/2) by 110.22 MHz at this field, so |up> is
+# m_i = -1/2.  Corrected 2026-08-28; these were previously swapped, which mirrors
+# the lensing (Re alpha ~ -delta, so the RED-detuned state focuses).
+G_UP, E_UP = (4, 0, 1 / 2, -1 / 2, -1 / 2), (4, 1, 3 / 2, -3 / 2, -1 / 2)
+G_DN, E_DN = (4, 0, 1 / 2, -1 / 2, +1 / 2), (4, 1, 3 / 2, -3 / 2, +1 / 2)
 
 
 @pytest.fixture(scope="module")

@@ -29,8 +29,8 @@ Quick start
 >>> atom = Potassium39()
 >>> probe = ProbeBeam.from_midpoint(
 ...     atom, B_gauss=520.58,
-...     ground_up=(4, 0, 1/2, -1/2, +1/2), excited_up=(4, 1, 3/2, -3/2, +1/2),
-...     ground_dn=(4, 0, 1/2, -1/2, -1/2), excited_dn=(4, 1, 3/2, -3/2, -1/2),
+...     ground_up=(4, 0, 1/2, -1/2, -1/2), excited_up=(4, 1, 3/2, -3/2, -1/2),
+...     ground_dn=(4, 0, 1/2, -1/2, +1/2), excited_dn=(4, 1, 3/2, -3/2, +1/2),
 ...     s0_incident=0.335)
 >>> probe.delta_up, probe.delta_dn
 """
@@ -185,12 +185,17 @@ class ProbeBeam:
     def differential_light_shift_Hz(self, s_local=None):
         """``nu_dn - nu_up``, the differential AC Stark shift in Hz.
 
-        POSITIVE throughout the band between the two transitions.  There the probe
-        is red-detuned from ``|up>`` (``delta_up < 0``, so ``|up>`` is pushed down)
-        and blue-detuned from ``|dn>`` (``delta_dn > 0``, pushed up), so ``|dn>``
-        sits above ``|up>`` and this difference is positive at every offset with
-        ``|x| < S/2``.  At the midpoint it reduces to
+        Its SIGN is set by the caller's labelling, not by this class: whichever
+        state the probe is blue of is pushed up.  Throughout the band between the
+        two transitions the probe is blue of the LOWER-frequency transition and
+        red of the higher one, so the shift keeps one sign at every offset with
+        ``|x| < S/2``, and its magnitude at the midpoint is
         ``(Gamma_Hz/2) s |delta_up| / (1 + delta_up^2 + s)``.
+
+        For the K-39 operating point ``|up>`` is the lower-frequency transition
+        (``delta_up > 0``, ``|up>`` pushed UP; ``delta_dn < 0``, ``|dn>`` pushed
+        DOWN), so this difference is NEGATIVE there.  Take ``abs`` if you want the
+        splitting rather than the signed shift.
 
         It is linear in the local intensity, so a spatially varying ``s_local``
         maps directly onto a spatially varying splitting.
