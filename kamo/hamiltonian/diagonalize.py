@@ -1322,7 +1322,9 @@ def sweep_intensity(builder, beam, I_max: float, n_points: int = 200,
         "rwa"   -> rotating-wave dipole coupling (couples manifolds; primary).
         "stark" -> effective AC-Stark shift operator (diagonal).
     polarization : str or {q: amplitude}
-        Laser polarization for the RWA model.
+        Laser polarization relative to the quantization (B) axis.  Used by BOTH
+        models: it sets the driven dipole matrix elements under "rwa", and the
+        vector/tensor geometry factors (beta, gamma) under "stark".
     B_gauss : float
         Optional static magnetic field added via the Zeeman operator.
     """
@@ -1341,7 +1343,8 @@ def sweep_intensity(builder, beam, I_max: float, n_points: int = 200,
         E0 = np.sqrt(2.0 * I / (c.c * c.epsilon0))
         mats = [base + coupling * e0 for e0 in E0]
     elif model == "stark":
-        Sop = builder.laser_stark_operator(beam, polarizabilities=polarizabilities)
+        Sop = builder.laser_stark_operator(beam, polarizabilities=polarizabilities,
+                                           polarization=polarization)
         mats = [H0 + Sop * inten for inten in I]
     else:
         raise ValueError("model must be 'rwa' or 'stark'.")
