@@ -177,6 +177,68 @@ class TwoLevelResponse:
         chi = self.susceptibility(density, delta, s)
         return np.exp(1j * self.k * self.index_minus_one(chi) * dx)
 
+    def mixture_slice_exponent(self, density, species, dx, s=0.0, backend=None):
+        """``i k (n_ref - 1) dx`` for a MIXTURE: the slice operator's exponent.
+
+        This is :meth:`slice_operator` for several species at once, and written so
+        that it is ARRAY-MODULE GENERIC -- every operation is elementwise
+        arithmetic between the arrays handed in and Python scalars, and nothing
+        calls ``np.asarray`` on a field.  It therefore runs unchanged on numpy
+        arrays or on torch tensors, on the CPU or on a GPU, which is what lets
+        :mod:`kamo.imaging.bpm` drive either device with ONE copy of the physics
+        instead of a CPU loop and a GPU loop that can drift apart.
+
+        ``species`` is a sequence of ``(fraction, delta)`` pairs sharing one
+        spatial profile.  Susceptibilities add, so the sum runs over the Lorentzian
+        factors alone and the density multiplies once:
+
+            chi = -(sigma0 / k) n sum_j f_j (delta_j - i) / (1 + delta_j^2 + s)
+
+        which is ``sum_j f_j`` :meth:`susceptibility` ``(n, delta_j, s)`` written
+        out -- pinned by an equivalence test, since the whole point of having one
+        closed form is that the two can never disagree.
+
+        Parameters
+        ----------
+        density : array
+            Atomic density (m^-3) on the transverse grid.
+        species : sequence of (fraction, delta)
+        dx : float
+            Slice thickness (m).
+        s : array or float
+            LOCAL on-resonance saturation parameter.
+        backend : ArrayBackend, optional
+            Only consulted for :attr:`local_field`, which needs a square root.
+        """
+        if not self.local_field:
+            # Dilute: fold every constant into ONE complex scalar per species and
+            # keep the per-species array work REAL.  Since n_ref - 1 = chi/2,
+            #
+            #     i k (chi/2) dx = -sum_j (1 + i delta_j) sigma0 n dx f_j
+            #                       / (2 (1 + delta_j^2 + s))
+            #
+            # so the density, the saturation and the population fraction are all
+            # real, and complex arithmetic enters once, at the last multiply.  A
+            # complex elementwise op costs about twice a real one, so promoting
+            # early roughly doubles the cost of the whole slice operator.
+            base = density * (self.sigma0 * dx * 0.5)
+            expo = 0.0
+            for frac, d in species:
+                d = float(d)
+                q = (base * float(frac)) / (1.0 + d * d + s)
+                expo = expo + (-(1.0 + 1j * d)) * q
+            return expo
+
+        # Local field: the Clausius-Mossotti index is not linear in chi, so chi has
+        # to be formed explicitly and the saving above is not available.
+        acc = 0.0
+        for frac, d in species:
+            d = float(d)
+            acc = acc + float(frac) * (d - 1j) / (1.0 + d * d + s)
+        chi = -(self.sigma0 / self.k) * density * acc
+        sqrt = np.sqrt if backend is None else backend.sqrt
+        return 1j * self.k * (sqrt((1 + 2 * chi / 3) / (1 - chi / 3)) - 1.0) * dx
+
     # -------------------------------------------------------------- observables
 
     def cross_section(self, delta, s=0.0):

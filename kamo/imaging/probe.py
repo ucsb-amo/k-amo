@@ -4,9 +4,11 @@ A dispersive spin readout drives BOTH ground states with a single beam.  The two
 transitions are split by the magnetic field, so their detunings are not
 independent -- parking the laser a distance ``x`` from their midpoint gives
 
-    Delta_up = x - S/2,    Delta_dn = x + S/2,    S = splitting,
+    Delta_up = x + S/2,    Delta_dn = x - S/2,    S = splitting,
 
-leaving one knob.  :class:`ProbeBeam` carries that geometry so nothing downstream
+for the K-39 operating point, where ``|up>`` is the LOWER-frequency transition of the
+pair (so the midpoint probe is BLUE of it and RED of ``|dn>``); swap the two if the
+caller labels them the other way round.  Either way it leaves one knob.  :class:`ProbeBeam` carries that geometry so nothing downstream
 has to recompute it or get the sign wrong.
 
 Why the midpoint matters
@@ -78,8 +80,9 @@ class ProbeBeam:
                       local_field: bool = False, sigma0: Optional[float] = None):
         """Build from an atom and the four state tuples, parked near the midpoint.
 
-        ``offset_Hz`` displaces the laser from the midpoint (positive = towards
-        ``|up>``).  The response's cross section is taken from the ACTUAL
+        ``offset_Hz`` displaces the laser from the midpoint (positive = higher laser
+        frequency, i.e. towards whichever transition is the upper one -- ``|dn>`` at
+        the K-39 operating point).  The response's cross section is taken from the ACTUAL
         field-shifted ``|dn>`` transition, so ``sigma0 = 3 (c/f_dn)^2 / (2 pi)``.
 
         State tuples follow kamo's convention: ``(n, l, j, F, mF)`` with integer
@@ -134,7 +137,7 @@ class ProbeBeam:
 
     @property
     def offset_Hz(self) -> float:
-        """Laser offset from the midpoint (Hz); positive is towards ``|up>``."""
+        """Laser offset from the midpoint (Hz); positive is a HIGHER laser frequency."""
         return self.frequency_Hz - self.f_midpoint
 
     @property

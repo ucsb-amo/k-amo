@@ -608,3 +608,124 @@ class TestOperatingPoint:
                           s0_incident=probe.s0_incident)
         assert res.s_peak / probe.s0_incident == pytest.approx(5.75, rel=0.1)
         assert res.s_peak == pytest.approx(1.94, rel=0.1)
+
+
+# --------------------------------------------------------------- backends
+
+
+class _OpaqueChiSource(UniformMixture):
+    """A source that hands back a finished ``chi`` and hides its ``species``.
+
+    This is the pre-backend interface -- and the one third-party sources such as
+    ``probe_potential_dynamics.physics.DensitySource`` still present -- so it
+    exercises the propagator's fallback path.  The physics is identical to the
+    ``UniformMixture`` it derives from, which is exactly what makes it a control:
+    any difference between the two is the refactor, not the model.
+    """
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self._species = self.species
+        self.species = ()          # hide it, forcing the propagator onto chi()
+
+    def chi(self, x, Y, Z, s_local):
+        n = self.density(x, Y, Z)
+        return sum(f * self.response.susceptibility(n, d, s_local)
+                   for f, d in self._species)
+
+
+class TestSliceExponent:
+    """The one closed form both devices go through."""
+
+    @pytest.mark.parametrize("local_field", [False, True])
+    @pytest.mark.parametrize("s", [0.0, 0.37])
+    def test_matches_susceptibility_composition(self, response, local_field, s):
+        """INTERNAL: the factored exponent IS chi -> index_minus_one, written out.
+
+        ``mixture_slice_exponent`` hoists the density and the cross section out of
+        the species sum so the loop can stay real until one complex multiply.  That
+        is an algebraic rearrangement, and this is the test that keeps it one.
+        """
+        r = TwoLevelResponse(response.wavelength, response.linewidth_Hz,
+                             sigma0=response.sigma0, local_field=local_field)
+        rng = np.random.default_rng(0)
+        n = rng.uniform(0, 4e20, size=(8, 8))
+        s_arr = s * rng.uniform(0.5, 1.5, size=(8, 8))
+        species = ((0.7, 18.35), (0.3, -18.35))
+        dx = 4.0e-8
+
+        chi = sum(f * r.susceptibility(n, d, s_arr) for f, d in species)
+        expected = 1j * r.k * r.index_minus_one(chi) * dx
+        got = r.mixture_slice_exponent(n, species, dx, s_arr)
+        assert np.allclose(got, expected, rtol=1e-12, atol=0.0)
+
+    def test_single_species_matches_slice_operator(self, response):
+        """One species must reproduce the existing scalar ``slice_operator``."""
+        n = np.full((4, 4), 1.5e20)
+        dx, delta, s = 5e-8, -18.35, 0.2
+        got = np.exp(response.mixture_slice_exponent(n, ((1.0, delta),), dx, s))
+        assert np.allclose(got, response.slice_operator(n, delta, dx, s), rtol=1e-12)
+
+
+class TestBackend:
+    def test_as_backend_defaults_to_numpy(self):
+        from kamo.imaging._backend import ArrayBackend, as_backend
+        assert as_backend(None).on_gpu is False
+        assert as_backend(None).precision == "double"
+        bk = ArrayBackend("cpu")
+        assert as_backend(bk) is bk
+
+    def test_unknown_device_rejected(self):
+        from kamo.imaging._backend import ArrayBackend
+        with pytest.raises(ValueError):
+            ArrayBackend("tpu")
+
+    def test_fast_path_matches_opaque_chi(self, response, cloud, prop, probe):
+        """INTERNAL: the `species` fast path and the `chi` fallback must agree.
+
+        The propagator now assembles the slice operator itself when the source
+        exposes its species, instead of asking for a finished ``chi``.  Those are
+        two routes to the same number and this pins them together -- without it,
+        the GPU path could quietly diverge from what every existing result used.
+        """
+        kw = dict(s0_incident=0.21, record="3d", record_window=2.0e-6)
+        fast = prop.propagate(UniformMixture(cloud, response, probe.species(-1.0)), **kw)
+        slow = prop.propagate(_OpaqueChiSource(cloud, response, probe.species(-1.0)), **kw)
+        assert np.allclose(fast.psi_exit, slow.psi_exit, rtol=1e-12, atol=1e-14)
+        assert fast.mean_intensity == pytest.approx(slow.mean_intensity, rel=1e-12)
+        assert fast.s_peak == pytest.approx(slow.s_peak, rel=1e-12)
+        assert np.allclose(fast.intensity_3d, slow.intensity_3d, rtol=1e-6)
+
+    def test_opaque_source_refused_on_gpu(self, response, cloud, prop, probe):
+        """A source the GPU cannot evaluate must say so, not fall back silently."""
+        pytest.importorskip("torch")
+        from kamo.imaging._backend import ArrayBackend
+        if not ArrayBackend("auto").on_gpu:
+            pytest.skip("no CUDA device")
+        gpu = prop.with_backend(ArrayBackend("gpu"))
+        with pytest.raises(TypeError, match="opaque numpy chi"):
+            gpu.propagate(_OpaqueChiSource(cloud, response, probe.species(1.0)))
+
+    @pytest.mark.parametrize("precision,tol", [("double", 1e-11), ("single", 5e-5)])
+    def test_gpu_reproduces_cpu(self, response, cloud, prop, probe, precision, tol):
+        """GROUND-TRUTH: the GPU must compute what the CPU computes.
+
+        Double precision is held to round-off; single is held to the ~sqrt(n) eps
+        accumulation argued in :mod:`kamo.imaging._backend`, which is still three
+        orders below anything the forward model reports.
+        """
+        pytest.importorskip("torch")
+        from kamo.imaging._backend import ArrayBackend
+        if not ArrayBackend("auto").on_gpu:
+            pytest.skip("no CUDA device")
+        src = UniformMixture(cloud, response, probe.species(XI_LENS))
+        kw = dict(s0_incident=0.21, record="3d", record_window=2.0e-6)
+        ref = prop.propagate(src, **kw)
+        got = prop.with_backend(ArrayBackend("gpu", precision)).propagate(src, **kw)
+        scale = np.abs(ref.psi_exit).max()
+        assert np.max(np.abs(got.psi_exit - ref.psi_exit)) / scale < tol
+        assert got.mean_intensity == pytest.approx(ref.mean_intensity, rel=tol)
+        assert got.s_peak == pytest.approx(ref.s_peak, rel=tol)
+        assert got.intensity_3d.shape == ref.intensity_3d.shape
+        assert np.allclose(got.intensity_3d, ref.intensity_3d, rtol=100 * tol,
+                           atol=100 * tol)
