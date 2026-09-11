@@ -68,78 +68,60 @@ def __getattr__(name):
         return val
     raise AttributeError(f"module 'kamo.constants' has no attribute {name!r}")
 
-#K39 total nuclear g-factor
+#K39 total nuclear g-factor (atomic value, diamagnetic shielding included;
+# Arimondo 1977).  Deriving it from the bare nuclear moment instead
+# (-mu/I * m_e/m_p) comes out 0.14% larger in magnitude.
 g_I = -0.00014193489
 
 #hyperfine constants
 def get_hyperfine_constant(l, j, iso=39, n=None):
     """Return the magnetic-dipole hyperfine A constant in Joules (A * h).
 
+    Thin wrapper over :func:`kamo.atom_properties.hyperfine.hyperfine_constants`,
+    which also gives B, uncertainties and the source of each number. ARC's
+    hyperfine table (Arimondo 1977) is not used.
+
     Args:
         l (int): orbital angular momentum quantum number.
         j (float): total angular momentum quantum number.
         iso (int): isotope mass number; 39 (default), 40, or 41.
-        n (int, optional): principal quantum number.  The hardcoded S/P values
-            are the precise measured 4S/4P constants, so they are only used when
-            ``n`` is 4 or None (the latter being an n-independent request).  For
-            any other ``n``, and whenever no hardcoded value exists for the
-            requested (l, j) pair, the function falls back to
-            ``arc.Potassium39().getHFSCoefficients(n, l, j)`` (iso=39 only).
-            Pass n=None to suppress the ARC fallback.
+        n (int, optional): principal quantum number. Defaults to the lowest
+            valence state of that l (4s, 4p, 3d).
 
     Returns:
-        float | None: A constant in Joules, or None if no data is available.
+        float | None: A constant in Joules, or None if there is no value
+        (l >= 3, or a core orbital such as 3s).
     """
-    # ── hardcoded table ───────────────────────────────────────────────────
-    # The iso=39 S/P constants are precise measured 4S/4P values, so only use
-    # them for n=4 (or n=None, an explicitly n-independent request); other n
-    # fall through to the ARC per-n lookup below.
-    hardcoded_ok = n in (None, 4)
-    if iso == 39 and hardcoded_ok:
-        if l == 0:
-            return h * 230.8598601e6
-        if l == 1:
-            if j == 0.5:
-                return h * 27.775e6
-            elif j == 1.5:
-                return h * 6.093e6
-    elif iso == 40:
-        if l == 0:
-            return h * -285.7308e6
-        if l == 1:
-            if j == 0.5:
-                return h * -34.523e6
-            elif j == 1.5:
-                return h * -7.585e6
-    elif iso == 41:
-        if l == 0:
-            return h * 127.0069352e6
-        if l == 1:
-            if j == 0.5:
-                return h * 15.245e6
-            elif j == 1.5:
-                return h * 3.363e6
+    from kamo.atom_properties.hyperfine import hyperfine_constants, lowest_valence_n
+    hc = hyperfine_constants(lowest_valence_n(l) if n is None else n, l, j, iso=iso)
+    return h * hc.A_Hz if hc.has_A else None
 
-    # ── ARC fallback (requires n; iso=39 only) ────────────────────────────
-    if n is not None and iso == 39:
-        try:
-            A_hz, _ = _atom_K39().getHFSCoefficients(n, l, j)
-        except (ValueError, KeyError):
-            # ARC has no HFS data for this state; fall through to None.
-            return None
-        return h * A_hz
+# electron spin g-factor (CODATA; magnitude) and the K39 orbital g-factor
+# g_L = 1 - m_e/M (reduced-mass correction).
+g_S = abs(scon.physical_constants['electron g factor'][0])
+_M_K39 = 38.9637064864 * scon.atomic_mass    # AME2020
+g_L = 1.0 - m_e / _M_K39
 
-    return None
-            
+# measured 4S_1/2 g_J (Arimondo et al., RMP 49, 31 (1977)); smaller than g_S
+# by the relativistic and diamagnetic corrections.
+g_J_4S = 2.00229421
+
 #total electronic g-factors
-def get_total_electronic_g_factor(l, j, s=0.5):
-    # Hardcoded precise values for the principal K-39 manifolds
-    if l == 0:
-        return 2.00229421
-    if l == 1:
-        if j == 0.5:
-            return 2/3
-        if j == 1.5:
-            return 4/3
-    # Landé formula fallback for any other (l, j)
-    return 1.0 + (j*(j+1) + s*(s+1) - l*(l+1)) / (2*j*(j+1))
+def get_total_electronic_g_factor(l, j, s=0.5, n=None):
+    """Electronic g-factor g_J (positive; H_Z = mu_B B (g_J m_j + g_I m_i)).
+
+    4S_1/2 (``l = 0`` with ``n`` 4 or None) returns the measured value. Every
+    other state uses the Landé formula with g_S = 2.00231930 and g_L = 1 - m_e/M:
+
+        g_J = g_L [J(J+1) - S(S+1) + L(L+1)] / 2J(J+1)
+            + g_S [J(J+1) + S(S+1) - L(L+1)] / 2J(J+1)
+
+    That gives 0.665875 (4P_1/2) and 1.334097 (4P_3/2). Until 2026-09 these
+    were the g_S = 2 values 2/3 and 4/3, which put the 4P_3/2 m_J = -3/2 level
+    0.84 MHz off at 520 G. Relativistic and QED corrections for the excited
+    states are of order 1e-5 to 1e-4 and are left out.
+    """
+    if l == 0 and n in (None, 4):
+        return g_J_4S
+    jj, ss, ll = j * (j + 1), s * (s + 1), l * (l + 1)
+    return (g_L * (jj - ss + ll) + g_S * (jj + ss - ll)) / (2 * jj)

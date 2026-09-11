@@ -33,12 +33,6 @@ _EV_TO_HZ = c.e / c.h                       # eV -> Hz
 _HARTREE_EV = 27.211386245988               # Hartree -> eV
 _GAUSS_TO_TESLA = 1.0e-4
 
-# K39 hyperfine electric-quadrupole B constants (Hz).  Only a few are known;
-# extend as needed.  Missing entries default to 0 (pure magnetic-dipole).
-_HYPERFINE_B_HZ: Dict[Tuple[int, int, float], float] = {
-    (4, 1, 1.5): 2.786e6,   # 4P_3/2
-}
-
 # polarization helpers: spherical amplitudes {q: amplitude} about the
 # quantization (B) axis.  e_0 = z_hat, e_{+-1} = -+(x_hat +- i y_hat)/sqrt(2),
 # so "linear-perp" is x_hat = (e_{-1} - e_{+1})/sqrt(2).
@@ -132,25 +126,33 @@ class HamiltonianBuilder:
     def h0(self, include_quadrupole: bool = True) -> np.ndarray:
         """Field-free Hamiltonian (Hz): fine structure + hyperfine ``A (I.J)``.
 
+        A and B come from :func:`kamo.atom_properties.hyperfine.hyperfine_constants`
+        (39K): measured or theory, whichever is more precise, with n*^3
+        extrapolation beyond both. A manifold with no A at all (l >= 3, core
+        orbitals) gets none, with a warning.
+
         Parameters
         ----------
         include_quadrupole : bool
-            Add the electric-quadrupole term for manifolds with a known B
-            constant (currently 4P_3/2).
+            Add the electric-quadrupole ``B`` term (j > 1/2 manifolds).
         """
+        from kamo.atom_properties.hyperfine import hyperfine_constants
+
         dim = self.basis.dim
         H = np.zeros((dim, dim), dtype=float)
 
         for man, sl in self.basis.manifold_slices():
             e_fine = self.atom.getEnergy(man.n, man.l, man.j) * _EV_TO_HZ - self._e_ref_hz
-            _A = c.get_hyperfine_constant(man.l, man.j, n=man.n)
-            A_hz = (_A / c.h) if _A is not None else 0.0  # A carries h; None → no hf data for this state
+            hfs = hyperfine_constants(man.n, man.l, man.j)
+            if not hfs.has_A:
+                warnings.warn(f"No hyperfine A constant for manifold {man.nlj}; "
+                              "leaving its hyperfine structure out.")
             IJ = self._ij_operator(man.j, self.I)
-            block = e_fine * np.eye(man.dim) + A_hz * IJ
+            block = e_fine * np.eye(man.dim) + hfs.A_Hz * IJ
 
             if include_quadrupole:
-                B_hz = _HYPERFINE_B_HZ.get((man.n, man.l, man.j), 0.0)
-                if B_hz != 0.0 and man.j > 0.5:
+                B_hz = hfs.B_Hz
+                if B_hz != 0.0 and man.j > 0.5 and self.I > 0.5:
                     jj = man.j * (man.j + 1)
                     ii = self.I * (self.I + 1)
                     denom = 2 * self.I * (2 * self.I - 1) * man.j * (2 * man.j - 1)
@@ -197,7 +199,7 @@ class HamiltonianBuilder:
         dim = self.basis.dim
         diag = np.zeros(dim, dtype=float)
         for s in self.basis:
-            g_j = c.get_total_electronic_g_factor(s.l, s.j)
+            g_j = c.get_total_electronic_g_factor(s.l, s.j, n=s.n)
             val = c.mu_b * (g_j * s.m_j + c.g_I * s.m_i) / c.h  # Hz per Tesla
             diag[s.index] = val * _GAUSS_TO_TESLA               # Hz per Gauss
         return np.diag(diag)

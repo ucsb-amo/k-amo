@@ -18,6 +18,7 @@ from __future__ import annotations
 import pytest
 
 from kamo.hamiltonian import AtomicStructure
+from kamo.hamiltonian.state_labels import _frac
 
 MANIFOLDS = [(4, 0, 0.5), (4, 1, 0.5), (4, 1, 1.5)]
 B_PASCHEN_BACK = 1500.0     # well past the 4S1/2 and 4P3/2 crossovers
@@ -43,8 +44,8 @@ def test_mJ_filter_labels_span_all_mI(sweep):
 
     # and the rendered legend entries say the same thing
     for (m_j, m_i), i in zip(labels, idxs):
-        assert f"m_I={m_i:+.1f}" in sweep.tex_label(i)
-        assert f"m_j={m_j:+.1f}" in sweep.label(i)
+        assert f"m_I={_frac(m_i)}" in sweep.tex_label(i)
+        assert f"m_j={_frac(m_j)}" in sweep.label(i)
 
 
 # ================================================================== INTERNAL

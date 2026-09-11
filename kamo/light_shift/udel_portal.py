@@ -114,7 +114,14 @@ def _cached(key, fetch, refresh=False, source=GRAPHQL_URL, query=None):
     return data
 
 
-def _element(species, fields, key, refresh=False):
+def _element(species, fields, key, refresh=False, bundled=False):
+    """``element(title)`` fields, from cache/network, or with ``bundled=True``
+    straight from the snapshot shipped with kamo (no cache, no network)."""
+    if bundled:
+        path = _SNAPSHOT_DIR / f"{species}_{key}.json"
+        if not path.exists():
+            raise KeyError(f"No bundled snapshot {path.name}; see write_snapshot().")
+        return json.loads(path.read_text())["data"]
     query = f'query($t: String) {{ element(title: $t) {{ {fields} }} }}'
     data = _cached(f"{species}_{key}",
                    lambda: _graphql(query, {"t": species})["element"],
@@ -279,11 +286,83 @@ def lifetimes(species="K1", refresh=False):
     return up.reset_index(drop=True)
 
 
-def write_snapshot(species="K1", datasets=("matrix_elements", "transition_rates")):
+def hyperfine_constants(species="K1", refresh=False, bundled=False):
+    """Magnetic-dipole hyperfine A constants (MHz), one row per (isotope, state).
+
+    ``bundled=True`` reads the snapshot shipped with kamo, which gives the same
+    answer on every machine.
+
+    Columns: ``iso`` (mass number), ``state, config, J, n, l``,
+    ``A_theory_MHz, theory_ref``, ``A_exp_MHz, A_exp_unc_MHz, exp_ref``.
+
+    Gotchas in the raw rows, handled here:
+
+    - The isotope is filled in only on the first row of each isotope group,
+      and the groups are separated by blank rows. Both are fixed up here.
+    - There is no electric-quadrupole B constant.
+    - Theory values (for K: U. I. Safronova & M. S. Safronova, PRA 78, 052504
+      (2008)) exist only for the main isotope.
+    - The experimental column drops the sign of measurements that give only
+      |A|: the portal lists 39K 3d5/2 as +0.62 and 40K 3d3/2 as +1.07, but both
+      are negative. :mod:`kamo.atom_properties.hyperfine` therefore takes
+      measured values from its own survey table and uses this for theory.
+    """
+    rows = _element(species,
+                    "hyperfineConstants { isotopeMassNumber stateConfiguration "
+                    "stateTerm stateJ hyperfineTheory hyperfineTheoryRef "
+                    "hyperfineExperiment hyperfineExperimentUncertainty "
+                    "hyperfineExperimentRef }",
+                    "hyperfine_constants", refresh, bundled)["hyperfineConstants"]
+    if not rows:
+        raise KeyError(f"The UDel portal has no hyperfine constants for {species!r}.")
+    records, iso = [], None
+    for r in rows:
+        if r["isotopeMassNumber"]:
+            iso = int(r["isotopeMassNumber"])
+        if not r["stateConfiguration"]:          # separator row
+            continue
+        n, l = _valence_nl(r["stateConfiguration"])
+        unc = r["hyperfineExperimentUncertainty"]
+        records.append(dict(
+            iso=iso, state=state_label(r["stateConfiguration"], r["stateJ"]),
+            config=r["stateConfiguration"], J=_j_to_float(r["stateJ"]), n=n, l=l,
+            A_theory_MHz=r["hyperfineTheory"], theory_ref=r["hyperfineTheoryRef"] or "",
+            A_exp_MHz=r["hyperfineExperiment"],
+            A_exp_unc_MHz=float(unc) if unc else np.nan,
+            exp_ref=r["hyperfineExperimentRef"] or ""))
+    return pd.DataFrame(records)
+
+
+def nuclear_data(species="K1", refresh=False, bundled=False):
+    """Nuclear spin, magnetic dipole moment (nuclear magnetons) and electric
+    quadrupole moment for every isotope the portal lists.
+
+    Columns: ``iso, I, mu_N, mu_unc, Q, Q_unc, abundance, half_life``.
+    The moments are the portal's values. Use them for isotope ratios only: the
+    portal's Q unit is not stated, and ``mu`` has no diamagnetic-shielding
+    correction.
+    """
+    rows = _element(species,
+                    "nuclears { isotopeMassNumber nuclearSpin magneticMoment "
+                    "magneticMomentUncertainty quadrupoleMoment "
+                    "quadrupoleMomentUncertainty naturalAbundance halfLife }",
+                    "nuclears", refresh, bundled)["nuclears"]
+    if not rows:
+        raise KeyError(f"The UDel portal has no nuclear data for {species!r}.")
+    return pd.DataFrame([dict(
+        iso=int(r["isotopeMassNumber"]), I=_j_to_float(r["nuclearSpin"]),
+        mu_N=r["magneticMoment"], mu_unc=r["magneticMomentUncertainty"],
+        Q=r["quadrupoleMoment"], Q_unc=r["quadrupoleMomentUncertainty"],
+        abundance=r["naturalAbundance"], half_life=r["halfLife"]) for r in rows])
+
+
+def write_snapshot(species="K1", datasets=("matrix_elements", "transition_rates",
+                                           "hyperfine_constants", "nuclears")):
     """Re-fetch ``datasets`` for ``species`` and copy them into the bundled
     snapshot directory (the offline fallback shipped with kamo)."""
     fetchers = {"matrix_elements": matrix_elements, "transition_rates": transition_rates,
-                "energies": energies, "static_polarizabilities": static_polarizabilities}
+                "energies": energies, "static_polarizabilities": static_polarizabilities,
+                "hyperfine_constants": hyperfine_constants, "nuclears": nuclear_data}
     _SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
     written = []
     for name in datasets:

@@ -9,6 +9,7 @@ setup(
     description='K team AMO functions, modeling, and simulations',
     packages=find_packages(),
     package_data={'kamo.light_shift': ['data/udel_portal/*.json'],
+                  'kamo.atom_properties': ['data/*.csv'],
                   'kamo.scattering': ['data/*.npz']},
     install_requires=['arc','numpy','pandas'],
 )

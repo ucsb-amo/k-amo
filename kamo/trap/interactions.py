@@ -5,16 +5,15 @@ the package imports without it.  Scattering lengths are carried in **metres**
 (the convention of :class:`kamo.BEC_properties.variational.GaussianVariationalCloud`);
 :mod:`kamo.scattering` reports Bohr radii and this is the one conversion point.
 
-``Potassium39.get_scattering_length`` is never used: it reads a hard-coded
-network path.  :class:`kamo.scattering.ScatteringModel` tabulates only the
-intra-state channels ``(1,-1)``, ``(1,0)`` and ``(1,1)``; anything else needs an
-explicit ``a_scattering``.
+Lookups go through :func:`kamo.scattering.lookup.scattering_length` (the engine
+behind ``Potassium39.get_scattering_length``): the calibrated coupled-channels
+tables shipped with kamo, for any ``|F, mF>`` of the 4S1/2 ground state on
+1-1000 G.  Below the tables' 1 G floor the same model is computed directly.
 """
 
 from __future__ import annotations
 
 import warnings
-from functools import lru_cache
 from typing import Optional
 
 import numpy as np
@@ -22,19 +21,14 @@ import numpy as np
 import kamo.constants as kc
 
 
-@lru_cache(maxsize=4)
-def _model(B_max: float):
-    from kamo.scattering import ScatteringModel
-    return ScatteringModel(B_max=B_max)
-
-
-def scattering_length_m(state, B_gauss: float, a_scattering: Optional[float] = None,
-                        B_max: float = 1000.0) -> float:
+def scattering_length_m(state, B_gauss: float, a_scattering: Optional[float] = None) -> float:
     """s-wave scattering length (m) for two atoms in ``state`` at ``B_gauss``.
 
     ``a_scattering`` (m), when given, is returned as is.  Otherwise the ground
-    state ``(4, 0, 1/2, F, mF)`` is looked up in :class:`kamo.scattering.ScatteringModel`;
-    a lossy channel (complex ``a``) warns and uses ``Re(a)``.
+    state ``(4, 0, 1/2, F, mF)`` is looked up with
+    :func:`kamo.scattering.lookup.scattering_length`: ``method="table"`` on
+    1-1000 G, ``method="cc"`` (direct, ~1.5 s first call) below 1 G.  A lossy
+    channel (complex ``a``, e.g. F=2) warns and uses ``Re(a)``.
     """
     if a_scattering is not None:
         a = float(a_scattering)
@@ -51,12 +45,14 @@ def scattering_length_m(state, B_gauss: float, a_scattering: Optional[float] = N
     if (int(n), int(l), float(j)) != (4, 0, 0.5):
         raise ValueError("kamo.scattering covers the 4S1/2 ground state only; pass "
                          "a_scattering (m).")
+    from kamo.scattering.lookup import scattering_length
     B = float(B_gauss)
     try:
-        a_bohr = complex(_model(max(float(B_max), 1.2 * B)).intra((int(F), int(mF)), B))
-    except KeyError as err:
-        raise ValueError(f"kamo.scattering has no scattering length for |F={F}, mF={mF}> "
-                         f"pairs ({err}); pass a_scattering (m).") from None
+        a_bohr = complex(scattering_length((int(F), int(mF)), None, B, return_complex=True,
+                                           method="table" if B >= 1.0 else "cc"))
+    except ValueError as err:
+        raise ValueError(f"no scattering length for |F={F}, mF={mF}> pairs at {B} G "
+                         f"({err}); pass a_scattering (m).") from None
     if abs(a_bohr.imag) > 1e-6 * max(abs(a_bohr.real), 1.0):
         warnings.warn(f"|F={F}, mF={mF}> at {B} G is a lossy channel (a = {a_bohr:.4g} a0); "
                       "the solvers use Re(a).", UserWarning, stacklevel=2)

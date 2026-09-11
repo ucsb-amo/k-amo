@@ -76,6 +76,8 @@ class Manifold(StateLabelMixin):
         # Lazily built by _build_label_cache()
         self._label_cache: dict | None = None      # (mj, mi) -> (F, mF)
         self._label_cache_rev: dict | None = None  # (F, mF) -> (mj, mi)
+        self._F_order: List[float] | None = None
+        self._hyperfine_resolved: bool | None = None
 
     @property
     def nlj(self) -> Tuple[int, int, float]:
@@ -99,6 +101,26 @@ class Manifold(StateLabelMixin):
         f_max = self.j + self.i_nuclear
         n = int(round(f_max - f_min)) + 1
         return [f_min + k for k in range(n)]
+
+    def F_order(self) -> List[float]:
+        """Allowed F sorted by zero-field hyperfine energy, lowest first.
+
+        This is the order the Paschen-Back label rule pairs with m_j ascending.
+        States of equal m_F never cross, and g_J > 0 puts high-field energies in
+        m_j order, so the k-th lowest F level connects to the k-th lowest m_j.
+        That is F ascending when A > 0, but reversed for the inverted K d5/2
+        manifolds (A < 0). The quadrupole B term is included. The constants
+        are the 39K ones :meth:`~.builder.HamiltonianBuilder.h0` uses. With no
+        hyperfine data (all levels degenerate) it falls back to F ascending.
+        """
+        if self._F_order is None:
+            from kamo.atom_properties.hyperfine import (hyperfine_constants,
+                                                        hyperfine_energy)
+            hc = hyperfine_constants(self.n, self.l, self.j)
+            energy = {F: hyperfine_energy(F, self.i_nuclear, self.j,
+                                          hc.A_MHz, hc.B_MHz) for F in self.allowed_F()}
+            self._F_order = sorted(energy, key=lambda F: (round(energy[F], 12), F))
+        return self._F_order
 
     def states(self, *, F=None, mF=None, mJ=None, mI=None
                    ) -> List[Tuple[int, int, float, float, float]]:
@@ -180,33 +202,15 @@ class Manifold(StateLabelMixin):
             # redundant but harmless — drop mF and proceed via mJ+mI
             mF = None
 
-        # ---- build the set of (m_j, m_i) that satisfy the F [AND mF] filter ----
-        # Use the bijective Paschen-Back representative convention.
-        # AND logic: when mF is also specified we only build the representative
-        # for that specific mF, not for every mF in F's range.  When mF is not
-        # specified, we collect representatives for all mF values of F.
+        # ---- the (m_j, m_i) that satisfy the F [AND mF] filter ----
+        # Each |F, mF> is represented by the Paschen-Back state it connects to
+        # (label map).  With mF also given, only that one mF is kept.
         f_pairs: set | None = None
         if F is not None:
-            f_pairs = set()
-            F_float = float(F)
-            all_F = sorted(self.allowed_F())
-            mj_vals = sorted(-self.j + k for k in range(int(round(2 * self.j)) + 1))
-            mi_set = set(round(-self.i_nuclear + k, 9)
-                         for k in range(int(round(2 * self.i_nuclear)) + 1))
-            # AND: if mF is specified, restrict to just that mF value
-            mF_values = ([float(mF)] if mF is not None
-                         else list(_half_integer_range(F_float)))
-            for mF_v in mF_values:
-                valid_pairs = [(mj, mF_v - mj) for mj in mj_vals
-                               if round(mF_v - mj, 9) in mi_set]
-                valid_F_for_mF = [f for f in all_F if abs(mF_v) <= f + 1e-9]
-                # k-th F (ascending) <-> k-th (mj, mi) pair (mj ascending)
-                rep_map = {round(f, 9): pair
-                           for f, pair in zip(valid_F_for_mF, valid_pairs)}
-                key = round(F_float, 9)
-                if key in rep_map:
-                    mj_r, mi_r = rep_map[key]
-                    f_pairs.add((round(mj_r, 9), round(mi_r, 9)))
+            F_int = int(round(float(F)))
+            mF_values = ([int(round(float(mF)))] if mF is not None
+                         else range(-F_int, F_int + 1))
+            f_pairs = {self.reverse_label_map[(F_int, m)] for m in mF_values}
 
         # ---- filter all substates (all active conditions must pass = AND) ----
         result = []
@@ -229,15 +233,22 @@ class Manifold(StateLabelMixin):
         """Build the bijective Paschen-Back (mj, mi) <-> (F, mF) label map.
 
         For each total magnetic quantum number m_F, the valid (m_j, m_i)
-        pairs are sorted by m_j ascending and the valid F values are sorted
-        ascending, then paired bijectively.  This gives the adiabatic
-        connection between the high-field Paschen-Back states and the
-        zero-field hyperfine (F, m_F) states.
+        pairs are sorted by m_j ascending and the valid F values by zero-field
+        energy (:meth:`F_order`), then paired bijectively.  This gives the
+        adiabatic connection between the high-field Paschen-Back states and
+        the zero-field hyperfine (F, m_F) states.
+
+        Why it holds: m_F is conserved and states of equal m_F never cross, so
+        the k-th lowest state of an m_F block stays k-th lowest at every
+        field.  At high field energy rises with m_j (g_J > 0).  At B = 0 it
+        rises with F when A > 0, and falls with F for an inverted manifold
+        (A < 0, the K d5/2 levels).  ``tests/test_state_labels.py`` checks
+        this map against the zero- and high-field ends of real sweeps.
         """
         fwd: dict = {}   # (mj, mi) -> (F, mF)
         rev: dict = {}   # (F, mF) -> (mj, mi)
 
-        all_F = sorted(self.allowed_F())
+        all_F = self.F_order()
         mj_vals = sorted(-self.j + k for k in range(int(round(2 * self.j)) + 1))
         mi_set = {round(-self.i_nuclear + k, 9)
                   for k in range(int(round(2 * self.i_nuclear)) + 1)}
@@ -253,9 +264,9 @@ class Manifold(StateLabelMixin):
                 mi = round(mF_v - mj, 9)
                 if mi in mi_set:
                     valid_pairs.append((mj, mi))
-            # F values that can have this m_F, ordered ascending
+            # F values that can have this m_F, lowest zero-field energy first
             valid_F = [f for f in all_F if abs(mF_v) <= f + 1e-9]
-            # k-th F (ascending) <-> k-th (mj, mi) pair (mj ascending)
+            # k-th lowest-energy F <-> k-th (mj, mi) pair (mj ascending)
             for F_v, (mj_r, mi_r) in zip(valid_F, valid_pairs):
                 key_fwd = (round(mj_r, 9), mi_r)
                 key_rev = (int(round(F_v)), int(round(mF_v)))
@@ -264,6 +275,21 @@ class Manifold(StateLabelMixin):
 
         self._label_cache = fwd
         self._label_cache_rev = rev
+
+    @property
+    def hyperfine_resolved(self) -> bool:
+        """True if kamo has a nonzero hyperfine A constant for this manifold.
+
+        Without one (l >= 3, or a core orbital such as (3, 0, 0.5)) the
+        Hamiltonian has no I.J term, F is not a good quantum number at any
+        B > 0, and only the (m_j, m_i) labels are physical.  Same source as
+        :meth:`~.builder.HamiltonianBuilder.h0`.
+        """
+        if self._hyperfine_resolved is None:
+            from kamo import constants as c
+            A = c.get_hyperfine_constant(self.l, self.j, n=self.n)
+            self._hyperfine_resolved = bool(A)
+        return self._hyperfine_resolved
 
     @property
     def label_map(self) -> dict:

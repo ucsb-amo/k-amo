@@ -30,8 +30,10 @@ class Potassium39(arc.Potassium39):
     comes from ARC, which the portal does not provide. At zero temperature,
     ``getTransitionRate`` and ``getStateLifetime`` return the portal's rates
     and lifetimes (measured values where they exist, e.g. 4P). Transitions or
-    states the portal lacks fall back to ARC. ``use_portal=False`` gives
-    ARC's own E1 data.
+    states the portal lacks fall back to ARC. ``getHFSCoefficients`` returns
+    kamo's hyperfine constants (:mod:`kamo.atom_properties.hyperfine`) in
+    place of ARC's 1977 table. ``use_portal=False`` gives ARC's own E1 and
+    hyperfine data.
 
     Energies are ARC's tabulated NIST levels (``preferQuantumDefects=False``).
     ARC's default computes every K level from Rydberg quantum defects instead,
@@ -132,6 +134,53 @@ class Potassium39(arc.Potassium39):
                 return tau
         return super().getStateLifetime(n, l, j, temperature=temperature,
                                         includeLevelsUpTo=includeLevelsUpTo, s=s)
+
+    def getHFSCoefficients(self, n, l, j, s=None):
+        """Hyperfine ``(A, B)`` in Hz from :mod:`kamo.atom_properties.hyperfine`.
+
+        ARC's own table is Arimondo 1977: its 4P_1/2 A is 28.85 MHz, against
+        27.793(71) MHz recommended now. ARC's hyperfine helpers
+        (``getHFSEnergyShift`` users) call this method, so they pick up the new
+        values too. ``use_portal=False`` gives ARC's table back.
+        """
+        if not self.use_portal:
+            return super().getHFSCoefficients(n, l, j, s=s)
+        from kamo.atom_properties.hyperfine import hyperfine_constants
+        hc = hyperfine_constants(n, l, j)
+        if not hc.has_A:
+            raise ValueError(f"No hyperfine data for state ({n}, {l}, {j}).")
+        return hc.A_Hz, hc.B_Hz
+
+    def breitRabi(self, n, l, j, B):
+        """Zeeman + hyperfine energies (Hz) of manifold ``(n, l, j)`` at fields
+        ``B`` (tesla), in ARC's return format ``(energies, F, mF)``.
+
+        ARC's version halves the quadrupole term: its B denominator is
+        ``2I(2I-1) 2J(2J-1)`` instead of ``2I(2I-1) J(2J-1)``. That puts the
+        4P_3/2 F'=0 level 1.8 MHz off. This one is built from kamo.hamiltonian,
+        so it uses the same A, B, g_J and g_I as every other kamo Zeeman
+        calculation (no diamagnetic term, as in ARC). As in ARC, each row of
+        energies is sorted ascending (not tracked). F and mF label the columns
+        by their order at 1e-7 T. ARC labels at 1e-4 T, where 4P_3/2 is already
+        F-mixed and ARC returns half-integer F. ``use_portal=False`` gives
+        ARC's original.
+        """
+        if not self.use_portal:
+            return super().breitRabi(n, l, j, B)
+        from kamo.hamiltonian.basis import Basis
+        from kamo.hamiltonian.builder import HamiltonianBuilder
+        builder = HamiltonianBuilder(Basis([(n, l, j)]), atom=self)
+        h0 = builder.h0()
+        zeeman = builder.zeeman_operator() * 1e4          # Hz/G -> Hz/T
+        B = np.atleast_1d(np.asarray(B, dtype=float))
+        energies = np.array([np.linalg.eigvalsh(h0 + b * zeeman) for b in B])
+        _, vecs = np.linalg.eigh(h0 + 1e-7 * zeeman)
+        IJ = builder._ij_operator(j, builder.I)
+        F2 = (j * (j + 1) + builder.I * (builder.I + 1)) * np.eye(len(IJ)) + 2 * IJ
+        f2 = np.einsum("ik,ij,jk->k", vecs, F2, vecs)
+        F = np.round(-1 + np.sqrt(1 + 4 * f2)) / 2
+        mF = np.round(2 * (np.array([s.m_f for s in builder.basis]) @ vecs ** 2)) / 2
+        return energies, F, mF
 
     # def init_pairinteraction(self):
     #     if pi.Database.get_global_database() is None:
@@ -1195,538 +1244,44 @@ class Potassium39(arc.Potassium39):
         result = float(I_out[0]) if scalar_in else I_out
         return (result, resL) if return_sweep else result
 
-    def state_dicts(self,n,l,j,hf=True) -> dict:
-        '''
-        n: principle quantum number (unused for now, but kept for consistency)
-        l: angular momentum
-        j: total angular momentum
-        hf: specify high or low field. For hf=True, the method returns a dict to be keyed with mj, mi quantum numbers, otherwise, method returns a dict to be keyed with f, mf quantum numbers.
+    def state_lookup(self, n, l, j, m1, m2):
+        """Both label sets of one state (deprecated).
 
-        Contains state dicts for 4s.5, 4p.5 and 4p1.5.
-
-        the method returns the dictionary of states for the given manifold, to be keyed either by high or low field quantum numbers depending on hf
-        '''
-
-        state_4s1_lf = {
-            '2, -2': {
-                "hf_str": r'$m_j$ = -.5, $m_i$ = -1.5',
-                "lf_str": r'F = 2, $m_f$ = -2',
-                "hf": (-.5,-1.5),
-                "lf": (2,-2),
-                "lf_arc": (2,-2)
-                },
-            '1, -1': {
-                "hf_str": r'$m_j$ = -.5, $m_i$ = -.5',
-                "lf_str": r'F = 1, $m_f$ = -1',
-                "hf": (-.5,-.5),
-                "lf": (1,-1),
-                "lf_arc": (1,-1)
-                },
-            '1, 0': {
-                "hf_str": r'$m_j$ = -.5, $m_i$ = .5',
-                "lf_str": r'F = 1, $m_f$ = 0',
-                "hf": (-.5,.5),
-                "lf": (1,0),
-                "lf_arc": (1,0)
-                },
-            '1, 1': {
-                "hf_str": r'$m_j$ = -.5, $m_i$ = 1.5',
-                "lf_str": r'F = 1,$m_f$ = 1',
-                "hf": (-.5,1.5),
-                "lf": (1,1),
-                "lf_arc": (1,1)
-                },
-
-            '2, -1': {
-                "hf_str": r'$m_j$ = .5, $m_i$ = -1.5',
-                "lf_str": r'F = 2, $m_f$ = -1',
-                "hf": (.5,-1.5),
-                "lf": (2,-1),
-                "lf_arc": (2,-1)
-                },
-            '2, 0': {
-                "hf_str": r'$m_j$ = .5, $m_i$ = -.5',
-                "lf_str": r'F = 2, $m_f$ = 0',
-                "hf": (.5,-.5),
-                "lf": (2,0),
-                "lf_arc": (2,0)
-                },
-            '2, 1': {
-                "hf_str": r'$m_j$ = .5, $m_i$ = .5',
-                "lf_str": r'F = 2, $m_f$ = 1',
-                "hf": (.5,.5),
-                "lf": (2,1),
-                "lf_arc": (2,1)
-                },
-            '2, 2': {
-                "hf_str": r'$m_j$ = .5, $m_i$ = 1.5',
-                "lf_str": r'F = 2,$m_f$ = 2',
-                "hf": (.5,1.5),
-                "lf": (2,2),
-                "lf_arc": (2,2)
-                },
-        }
-
-        state_4p1_lf = {
-            '2, -2': {
-                "hf_str": r'$m_j$ = -.5, $m_i$ = -1.5',
-                "lf_str": r'F = 2, $m_f$ = -2',
-                "hf": (-.5,-1.5),
-                "lf": (2,-2),
-                "lf_arc": (2,-2)
-                },
-            '1, -1': {
-                "hf_str": r'$m_j$ = -.5, $m_i$ = -.5',
-                "lf_str": r'F = 1, $m_f$ = -1',
-                "hf": (-.5,-.5),
-                "lf": (1,-1),
-                "lf_arc": (1,-1)
-                },
-            '1, 0': {
-                "hf_str": r'$m_j$ = -.5, $m_i$ = .5',
-                "lf_str": r'F = 1, $m_f$ = 0',
-                "hf": (-.5,.5),
-                "lf": (1,0),
-                "lf_arc": (1,0)
-                },
-            '1, 1': {
-                "hf_str": r'$m_j$ = -.5, $m_i$ = 1.5',
-                "lf_str": r'F = 1,$m_f$ = 1',
-                "hf": (-.5,1.5),
-                "lf": (1,1),
-                "lf_arc": (1,1)
-                },
-
-            '2, -1': {
-                "hf_str": r'$m_j$ = .5, $m_i$ = -1.5',
-                "lf_str": r'F = 2, $m_f$ = -1',
-                "hf": (.5,-1.5),
-                "lf": (2,-1),
-                "lf_arc": (2,-1)
-                },
-            '2, 0': {
-                "hf_str": r'$m_j$ = .5, $m_i$ = -.5',
-                "lf_str": r'F = 2, $m_f$ = 0',
-                "hf": (.5,-.5),
-                "lf": (2,0),
-                "lf_arc": (2,0)
-                },
-            '2, 1': {
-                "hf_str": r'$m_j$ = .5, $m_i$ = .5',
-                "lf_str": r'F = 2, $m_f$ = 1',
-                "hf": (.5,.5),
-                "lf": (2,1),
-                "lf_arc": (2,1)
-                },
-            '2, 2': {
-                "hf_str": r'$m_j$ = .5, $m_i$ = 1.5',
-                "lf_str": r'F = 2,$m_f$ = 2',
-                "hf": (.5,1.5),
-                "lf": (2,2),
-                "lf_arc": (2,2)
-                },
-        }
-
-        state_4p3_lf = {
-            '3, -3': {
-                "hf_str": r'$m_j$ = -1.5, $m_i$ = -1.5',
-                "lf_str": r'F = 3, $m_f$ = -3',
-                "hf": (-1.5,-1.5),
-                "lf": (3,-3),
-                "lf_arc": (3,-3)
-                },
-            '2, -2': {
-                "hf_str": r'$m_j$ = -1.5, $m_i$ = -.5',
-                "lf_str": r'F = 2, $m_f$ = -2',
-                "hf": (-1.5,-.5),
-                "lf": (2,-2),
-                "lf_arc": (2,-2)
-                },
-            '1, -1': {
-                "hf_str": r'$m_j$ = -1.5, $m_i$ = .5',
-                "lf_str": r'F = 1, $m_f$ = -1',
-                "hf": (-1.5,.5),
-                "lf": (1,-1),
-                "lf_arc": (1,-1)
-                },
-            '0, 0': {
-                "hf_str": r'$m_j$ = -1.5, $m_i$ = 1.5',
-                "lf_str": r'F = 0,$m_f$ = 0',
-                "hf": (-1.5,1.5),
-                "lf": (0,0),
-                "lf_arc": (0,0)
-                },
-
-            '3, -2': {
-                "hf_str": r'$m_j$ = -.5, $m_i$ = -1.5',
-                "lf_str": r'F = 3, $m_f$ = -2',
-                "hf": (-.5,-1.5),
-                "lf": (3,-2),
-                "lf_arc": (3,-2)
-                },
-            '2, -1': {
-                "hf_str": r'$m_j$ = -.5, $m_i$ = -.5',
-                "lf_str": r'F = 2, $m_f$ = -1',
-                "hf": (-.5,-.5),
-                "lf": (2,-1),
-                "lf_arc": (2,-1)
-                },
-            '1, 0': {
-                "hf_str": r'$m_j$ = -.5, $m_i$ = .5',
-                "lf_str": r'F = 1, $m_f$ = 0',
-                "hf": (-.5,.5),
-                "lf": (1,0),
-                "lf_arc": (1,0)
-                },
-            '1, 1': {
-                "hf_str": r'$m_j$ = -.5, $m_i$ = 1.5',
-                "lf_str": r'F = 1,$m_f$ = 1',
-                "hf": (-.5,1.5),
-                "lf": (1,1),
-                "lf_arc": (1,1)
-                },
-
-            '3, -1': {
-                "hf_str": r'$m_j$ = .5, $m_i$ = -1.5',
-                "lf_str": r'F = 3, $m_f$ = -1',
-                "hf": (.5,-1.5),
-                "lf": (3,-1),
-                "lf_arc": (3,-1)
-                },
-            '2, 0': {
-                "hf_str": r'$m_j$ = .5, $m_i$ = -.5',
-                "lf_str": r'F = 2, $m_f$ = 0',
-                "hf": (.5,-.5),
-                "lf": (2,0),
-                "lf_arc": (2,0)
-                },
-            '2, 1': {
-                "hf_str": r'$m_j$ = .5, $m_i$ = .5',
-                "lf_str": r'F = 2, $m_f$ = 1',
-                "hf": (.5,.5),
-                "lf": (2,1),
-                "lf_arc": (2,1)
-                },
-            '2, 2': {
-                "hf_str": r'$m_j$ = .5, $m_i$ = 1.5',
-                "lf_str": r'F = 2,$m_f$ = 2',
-                "hf": (.5,1.5),
-                "lf": (2,2),
-                "lf_arc": (2,2)
-                },
-
-            '3, 0': {
-                "hf_str": r'$m_j$ = 1.5, $m_i$ = -1.5',
-                "lf_str": r'F = 3, $m_f$ = 0',
-                "hf": (-.5,-1.5),
-                "lf": (3,0),
-                "lf_arc": (3,0)
-                },
-            '3, 1': {
-                "hf_str": r'$m_j$ = 1.5, $m_i$ = -.5',
-                "lf_str": r'F = 3, $m_f$ = 1',
-                "hf": (-.5,-.5),
-                "lf": (3,1),
-                "lf_arc": (3,1)
-                },
-            '3, 2': {
-                "hf_str": r'$m_j$ = 1.5, $m_i$ = .5',
-                "lf_str": r'F = 3, $m_f$ = 2',
-                "hf": (-.5,.5),
-                "lf": (3,2),
-                "lf_arc": (3,2)
-                },
-            '3, 3': {
-                "hf_str": r'$m_j$ = 1.5, $m_i$ = 1.5',
-                "lf_str": r'F = 3,$m_f$ = 3',
-                "hf": (-.5,1.5),
-                "lf": (3,3),
-                "lf_arc": (3,3)
-                },
-        }
-
-        state_4s1_hf = {
-            '-0.5, -1.5': {
-                "hf_str": r'$m_j$ = -.5, $m_i$ = -1.5',
-                "lf_str": r'F = 2, $m_f$ = -2',
-                "hf": (-.5,-1.5),
-                "lf": (2,-2),
-                "lf_arc": (2,-2)
-                },
-            '-0.5, -0.5': {
-                "hf_str": r'$m_j$ = -.5, $m_i$ = -.5',
-                "lf_str": r'F = 1, $m_f$ = -1',
-                "hf": (-.5,-.5),
-                "lf": (1,-1),
-                "lf_arc": (1,-1)
-                },
-            '-0.5, 0.5': {
-                "hf_str": r'$m_j$ = -.5, $m_i$ = .5',
-                "lf_str": r'F = 1, $m_f$ = 0',
-                "hf": (-.5,.5),
-                "lf": (1,0),
-                "lf_arc": (1,0)
-                },
-            '-0.5, 1.5': {
-                "hf_str": r'$m_j$ = -.5, $m_i$ = 1.5',
-                "lf_str": r'F = 1,$m_f$ = 1',
-                "hf": (-.5,1.5),
-                "lf": (1,1),
-                "lf_arc": (1,1)
-                },
-
-            '0.5, -1.5': {
-                "hf_str": r'$m_j$ = .5, $m_i$ = -1.5',
-                "lf_str": r'F = 2, $m_f$ = -1',
-                "hf": (.5,-1.5),
-                "lf": (2,-1),
-                "lf_arc": (2,-2)
-                },
-            '0.5, -0.5': {
-                "hf_str": r'$m_j$ = .5, $m_i$ = -.5',
-                "lf_str": r'F = 2, $m_f$ = 0',
-                "hf": (.5,-.5),
-                "lf": (2,0),
-                "lf_arc": (2,0)
-                },
-            '0.5, 0.5': {
-                "hf_str": r'$m_j$ = .5, $m_i$ = .5',
-                "lf_str": r'F = 2, $m_f$ = 1',
-                "hf": (.5,.5),
-                "lf": (2,1),
-                "lf_arc": (2,1)
-                },
-            '0.5, 1.5': {
-                "hf_str": r'$m_j$ = .5, $m_i$ = 1.5',
-                "lf_str": r'F = 2,$m_f$ = 2',
-                "hf": (.5,1.5),
-                "lf": (2,2),
-                "lf_arc": (2,2)
-                },
-        }
-
-        state_4p1_hf = {
-            '-0.5, -1.5': {
-                "hf_str": r'$m_j$ = -.5, $m_i$ = -1.5',
-                "lf_str": r'F = 2, $m_f$ = -2',
-                "hf": (-.5,-1.5),
-                "lf": (2,-2),
-                "lf_arc": (2,-2)
-                },
-            '-0.5, -0.5': {
-                "hf_str": r'$m_j$ = -.5, $m_i$ = -.5',
-                "lf_str": r'F = 1, $m_f$ = -1',
-                "hf": (-.5,-.5),
-                "lf": (1,-1),
-                "lf_arc": (1,-1)
-                },
-            '-0.5, 0.5': {
-                "hf_str": r'$m_j$ = -.5, $m_i$ = .5',
-                "lf_str": r'F = 1, $m_f$ = 0',
-                "hf": (-.5,.5),
-                "lf": (1,0),
-                "lf_arc": (1,0)
-                },
-            '-0.5, 1.5': {
-                "hf_str": r'$m_j$ = -.5, $m_i$ = 1.5',
-                "lf_str": r'F = 1,$m_f$ = -1',
-                "hf": (-.5,1.5),
-                "lf": (1,1),
-                "lf_arc": (1,1)
-                },
-
-            '0.5, -1.5': {
-                "hf_str": r'$m_j$ = .5, $m_i$ = -1.5',
-                "lf_str": r'F = 2, $m_f$ = -1',
-                "hf": (.5,-1.5),
-                "lf": (2,-1),
-                "lf_arc": (2,-2)
-                },
-            '0.5, -0.5': {
-                "hf_str": r'$m_j$ = .5, $m_i$ = -.5',
-                "lf_str": r'F = 2, $m_f$ = 0',
-                "hf": (.5,-.5),
-                "lf": (2,0),
-                "lf_arc": (2,0)
-                },
-            '0.5, 0.5': {
-                "hf_str": r'$m_j$ = .5, $m_i$ = .5',
-                "lf_str": r'F = 2, $m_f$ = 1',
-                "hf": (.5,.5),
-                "lf": (2,1),
-                "lf_arc": (2,1)
-                },
-            '0.5, 1.5': {
-                "hf_str": r'$m_j$ = .5, $m_i$ = 1.5',
-                "lf_str": r'F = 2,$m_f$ = 2',
-                "hf": (.5,1.5),
-                "lf": (2,2),
-                "lf_arc": (2,2)
-                },
-        }
-
-        state_4p3_hf = {
-            '-1.5, -1.5': {
-                "hf_str": r'$m_j$ = -1.5, $m_i$ = -1.5',
-                "lf_str": r'F = 3, $m_f$ = -3',
-                "hf": (-1.5,-1.5),
-                "lf": (3,-3),
-                "lf_arc": (1,1)
-                },
-            '-1.5, -0.5': {
-                "hf_str": r'$m_j$ = -1.5, $m_i$ = -.5',
-                "lf_str": r'F = 2, $m_f$ = -2',
-                "hf": (-1.5,-.5),
-                "lf": (2,-2),
-                "lf_arc": (1,0)
-                },
-            '-1.5, 0.5': {
-                "hf_str": r'$m_j$ = -1.5, $m_i$ = .5',
-                "lf_str": r'F = 1, $m_f$ = -1',
-                "hf": (-1.5,.5),
-                "lf": (1,-1),
-                "lf_arc": (1,-1)
-                },
-            '-1.5, 1.5': {
-                "hf_str": r'$m_j$ = -1.5, $m_i$ = 1.5',
-                "lf_str": r'F = 0,$m_f$ = 0',
-                "hf": (-1.5,1.5),
-                "lf": (0,0),
-                "lf_arc": (0,0)
-                },
-
-            '-0.5, -1.5': {
-                "hf_str": r'$m_j$ = -.5, $m_i$ = -1.5',
-                "lf_str": r'F = 3, $m_f$ = -2',
-                "hf": (-.5,-1.5),
-                "lf": (3,-2),
-                "lf_arc": (2,1)
-                },
-            '-0.5, -0.5': {
-                "hf_str": r'$m_j$ = -.5, $m_i$ = -.5',
-                "lf_str": r'F = 2, $m_f$ = -1',
-                "hf": (-.5,-.5),
-                "lf": (2,-1),
-                "lf_arc": (2,0)
-                },
-            '-0.5, 0.5': {
-                "hf_str": r'$m_j$ = -.5, $m_i$ = .5',
-                "lf_str": r'F = 1, $m_f$ = 0',
-                "hf": (-.5,.5),
-                "lf": (1,0),
-                "lf_arc": (2,-1)
-                },
-            '-0.5, 1.5': {
-                "hf_str": r'$m_j$ = -.5, $m_i$ = 1.5',
-                "lf_str": r'F = 1,$m_f$ = 1',
-                "hf": (-.5,1.5),
-                "lf": (1,1),
-                "lf_arc": (2,-2)
-                },
-
-            '0.5, -1.5': {
-                "hf_str": r'$m_j$ = .5, $m_i$ = -1.5',
-                "lf_str": r'F = 3, $m_f$ = -1',
-                "hf": (.5,-1.5),
-                "lf": (3,-1),
-                "lf_arc": (2,2)
-                },
-            '0.5, -0.5': {
-                "hf_str": r'$m_j$ = .5, $m_i$ = -.5',
-                "lf_str": r'F = 2, $m_f$ = 0',
-                "hf": (.5,-.5),
-                "lf": (2,0),
-                "lf_arc": (3,-3)
-                },
-            '0.5, 0.5': {
-                "hf_str": r'$m_j$ = .5, $m_i$ = .5',
-                "lf_str": r'F = 2, $m_f$ = 1',
-                "hf": (.5,.5),
-                "lf": (2,1),
-                "lf_arc": (3,-2)
-                },
-            '0.5, 1.5': {
-                "hf_str": r'$m_j$ = .5, $m_i$ = 1.5',
-                "lf_str": r'F = 2,$m_f$ = 2',
-                "hf": (.5,1.5),
-                "lf": (2,2),
-                "lf_arc": (3,-1)
-                },
-
-            '1.5, -1.5': {
-                "hf_str": r'$m_j$ = 1.5, $m_i$ = -1.5',
-                "lf_str": r'F = 3, $m_f$ = 0',
-                "hf": (-.5,-1.5),
-                "lf": (3,0),
-                "lf_arc": (3,0)
-                },
-            '1.5, -0.5': {
-                "hf_str": r'$m_j$ = 1.5, $m_i$ = -.5',
-                "lf_str": r'F = 3, $m_f$ = 1',
-                "hf": (-.5,-.5),
-                "lf": (3,1),
-                "lf_arc": (3,1)
-                },
-            '1.5, 0.5': {
-                "hf_str": r'$m_j$ = 1.5, $m_i$ = .5',
-                "lf_str": r'F = 3, $m_f$ = 2',
-                "hf": (-.5,.5),
-                "lf": (3,2),
-                "lf_arc": (3,2)
-                },
-            '1.5, 1.5': {
-                "hf_str": r'$m_j$ = 1.5, $m_i$ = 1.5',
-                "lf_str": r'F = 3,$m_f$ = 3',
-                "hf": (-.5,1.5),
-                "lf": (3,3),
-                "lf_arc": (3,3)
-                },
-        }
-
-        if hf==True:
-            if l==0:
-                return state_4s1_hf
-            elif l==1:
-                if j==.5:
-                    return state_4p1_hf
-                elif j==1.5:
-                    return state_4p3_hf
-        else:
-            if l==0:
-                return state_4s1_lf
-            elif l==1:
-                if j==.5:
-                    return state_4p1_lf
-                elif j==1.5:
-                    return state_4p3_lf
-
-    def state_lookup(self,n,l,j,m1,m2):
-        """_summary_
+        Use :func:`kamo.hamiltonian.state_label` for labels, or
+        ``Manifold(n, l, j).state_for(F, mF)`` / ``.label_for(m_j, m_i)`` to
+        convert quantum numbers.
 
         Args:
-            n (int): The n quantum number for the state of interest.
-            l (int): The l quantum number for the state of interest.
-            j (float): The j quantum number for the state of interest.
-            m1 (int or float): The first quantum number to specify the state, either F or mJ (depending on regime).
-            m2 (int or float): The second quantum number to specify the state, either mF or mI (depending on regime).
+            n, l, j: fine-structure quantum numbers.
+            m1, m2: ``(F, mF)`` integers or ``(m_J, m_I)`` half-integers.
 
         Returns:
-            dict: a dict containing state information.
-        """        
-        is_m1_halfint = int(m1) != m1
-        is_m2_halfint = int(m2) != m2
-        if is_m1_halfint and is_m2_halfint:
-            dct = self.state_dicts(n,l,j)
-            f = '1.1f'
-        elif (is_m1_halfint and not is_m2_halfint) or (is_m2_halfint and not is_m1_halfint):
-            raise ValueError('both spin quantum numbers (F/mF or mJ/mI) must be integer or half-integer, but one of each was provided.')
-        else:
-            dct = self.state_dicts(n,l,j, hf=False)
-            f = '1.0f'
-        
-        key = f'{m1:{f}}, {m2:{f}}'
-        
-        return dct[key]
+            dict: ``"hf"`` ``(m_J, m_I)``, ``"lf"`` ``(F, mF)`` (the two ends
+            of the Paschen-Back adiabatic connection), and ``"hf_str"`` /
+            ``"lf_str"``, the matching TeX kets.
+        """
+        import warnings
+        from kamo.hamiltonian.state_labels import _manifold, state_label
+        warnings.warn(
+            "Potassium39.state_lookup is deprecated; use "
+            "kamo.hamiltonian.state_label or Manifold.state_for/label_for.",
+            DeprecationWarning, stacklevel=2)
+        man = _manifold(n, l, j)
+        try:
+            if int(m1) == m1 and int(m2) == m2:
+                F, mF = int(m1), int(m2)
+                m_j, m_i = man.state_for(F, mF)
+            else:
+                m_j, m_i = float(m1), float(m2)
+                F, mF = man.label_for(m_j, m_i)
+        except KeyError as err:
+            raise ValueError(err.args[0]) from None
+        return {
+            "hf": (float(m_j), float(m_i)),
+            "lf": (int(F), int(mF)),
+            "hf_str": state_label(n, l, j, float(m_j), float(m_i), term=False),
+            "lf_str": state_label(n, l, j, int(F), int(mF), term=False),
+        }
 
     def get_scattering_length(self, f, mf, b, f2=None, mf2=None,
                               interp=False, method='table', return_complex=False):
@@ -1773,102 +1328,34 @@ class Potassium39(arc.Potassium39):
                     m1=None,m2=None,
                     skip_njl = False,
                     force_hf_lf = None,
-                    force_skip_spin = False, 
+                    force_skip_spin = False,
                     tex_formatting=True):
-        """Generate atomic state label in spectroscopic notation.
-        Converts quantum numbers (n, l, j) into standard spectroscopic notation 
-        (e.g., 2P_3/2). Optionally formats output as LaTeX.
-            n (int): Principal quantum number.
-            l (int): Orbital angular momentum quantum number.
-            j (float): Total angular momentum quantum number.
-            tex_formatting (bool, optional): If True, returns LaTeX formatted string. 
-                If False, returns plain text. Defaults to True.
-            str: Atomic state label in spectroscopic notation. Format is either 
-                LaTeX (e.g., '$2\\text{P}_{3/2}$') or plain text (e.g., '2P_3/2').
-        Note:
-            l values: 0='S', 1='P', 2='D', 3='F', otherwise '(l={l})'.
-            j values should correspond to valid coupling: j = l ± 1/2.
-        """ 
+        r"""Spectroscopic label of a state, e.g. ``4S_{1/2}|F=1, m_F=-1\rangle``.
 
-        def orbital_label(l):
-            if l == 0:
-                return 'S'
-            elif l == 1:
-                return 'P'
-            elif l == 2:
-                return 'D'
-            elif l == 3:
-                return 'F'
-            else:
-                return f'(l={l})'
+        Thin wrapper around :func:`kamo.hamiltonian.state_label`, returned
+        *without* ``$`` delimiters so it can sit inside a larger math string.
 
-        def frac_str(s):
-            S = ''
-            if s < 0:
-                S = '-'
-            s = abs(s)
-            if s == 0.5:
-                S += '1/2'
-            elif s == 1.5:
-                S += '3/2'
-            elif s == 2.5:
-                S += '5/2'
-            elif s == 3.5:
-                S += '7/2'
-            return S
+        Args:
+            n, l, j: fine-structure quantum numbers.
+            m1, m2 (optional): ``(F, mF)`` integers or ``(m_J, m_I)``
+                half-integers.  Give only ``m1`` for a one-number ket
+                (``|F=2>`` or ``|m_J=+1/2>``).
+            skip_njl (bool): leave out the term symbol ``nL_J``.
+            force_hf_lf ({None, 'hf', 'lf'}): print the uncoupled ``(m_J, m_I)``
+                ('hf') or coupled ``(F, mF)`` ('lf') ket, converting through the
+                Paschen-Back adiabatic connection.  None keeps the input's basis.
+            force_skip_spin (bool): leave out the ket.
+            tex_formatting (bool): TeX (default) or plain text.
 
-        L = orbital_label(l)
-        J = frac_str(j)
-        if skip_njl:
-            rs_string = ''
-        else:
-            if tex_formatting:
-                rs_string = fr'{n:1.0f}\text{{{L}}}_{{{J}}}'
-            else:
-                rs_string = f'{n:1.0f}{L}_{J}{spinstr}'
-
-
-        if m1 != None and m2 != None and not force_skip_spin:
-            is_m1_halfint = int(m1) != m1
-            is_m2_halfint = int(m2) != m2
-
-            if is_m1_halfint and is_m2_halfint:
-                hf_label = True
-            elif not is_m1_halfint and not is_m2_halfint:
-                hf_label = False
-
-            if force_hf_lf == None:
-                pass
-            elif force_hf_lf == 'lf':
-                hf_label = False
-            elif force_hf_lf == 'hf':
-                hf_label = True
-            else:
-                print("Invalid option for `force_hf_lf`: choose from None, 'hf', or 'lf'")
-
-            dct = self.state_lookup(n,l,j,m1,m2)
-
-            if hf_label:
-                m1, m2 = dct['hf']
-                M1 = frac_str(m1)
-                M2 = frac_str(m2)
-                if tex_formatting:
-                    spinstr = fr"|m_J={M1}, m_I={M2}\rangle"
-                else:
-                    spinstr = fr"|mJ={M1},mI={M2}⟩"
-            else:
-                m1, m2 = dct['lf']
-                M1 = str(int(m1))
-                M2 = str(int(m2))
-                if tex_formatting:
-                    spinstr = fr"|F={M1},m_F={M2}\rangle"
-                else:
-                    spinstr = fr"|F={M1},mF={M2}⟩"
-
-        else:
-            spinstr = ""
-
-        if tex_formatting:
-            return fr'{rs_string}{spinstr}'
-        else:
-            return f'{rs_string}{spinstr}'
+        Returns:
+            str: e.g. ``4S_{1/2}|m_J=-1/2, m_I=+3/2\rangle``.
+        """
+        from kamo.hamiltonian import state_label
+        bases = {None: None, 'hf': 'uncoupled', 'lf': 'coupled'}
+        if force_hf_lf not in bases:
+            raise ValueError(
+                f"force_hf_lf must be None, 'hf', or 'lf'; got {force_hf_lf!r}.")
+        spins = () if force_skip_spin else tuple(m for m in (m1, m2) if m is not None)
+        return state_label(n, l, j, *spins,
+                           basis=bases[force_hf_lf] if len(spins) == 2 else None,
+                           math=False, term=not skip_njl, tex=tex_formatting)

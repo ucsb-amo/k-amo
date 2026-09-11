@@ -1,15 +1,24 @@
 """Utilities for formatting and labeling quantum states.
 
-Provides helper functions to generate human-readable labels for K39 states
-in both uncoupled (|n,l,j; m_j, m_i>) and coupled (|n,l,j; F, m_F>) bases.
+:func:`state_label` is the one formatter every K39 state label goes through
+(sweep legends, :class:`~kamo.atom_properties.k39.Potassium39`, ...).  It
+converts between the uncoupled ``(m_J, m_I)`` and coupled ``(F, m_F)`` labels
+with the manifold's Paschen-Back label map
+(:attr:`~.basis.Manifold.label_map`), then prints signed fractions, e.g.
+``$4S_{1/2}|m_J=-1/2, m_I=+3/2\\rangle$``.
 """
 
 from __future__ import annotations
 
-from typing import Tuple, Union
+import warnings
+from functools import lru_cache
+from typing import Optional, Tuple, Union
 
 # Spectroscopic (Russell-Saunders) orbital angular-momentum letters, l=0,1,2,...
 _L_LETTERS = "SPDFGHIKLMNOQRTUV"
+
+# Manifolds already warned about having no hyperfine structure.
+_WARNED_NO_HYPERFINE: set = set()
 
 
 def _is_integer_valued(x: float) -> bool:
@@ -17,83 +26,166 @@ def _is_integer_valued(x: float) -> bool:
     return float(x) == round(float(x))
 
 
-def rs_state_label(*state) -> str:
-    r"""Return a Russell-Saunders (LS-coupling) term-symbol label for a state.
+def _frac(x: float, signed: bool = True) -> str:
+    """``x`` as an integer or half-integer fraction: ``-1/2``, ``+3/2``, ``0``, ``+1``.
 
-    Builds a label of the form ``$n L_J$`` (e.g. ``$4P_{3/2}$``) using
-    spectroscopic notation for ``l`` (S, P, D, F, ...), and optionally
-    appends a ket for any magnetic/hyperfine quantum numbers supplied.
+    ``signed`` puts an explicit ``+`` on positive values (magnetic quantum
+    numbers); leave it off for ``j`` and ``F``.
+    """
+    k = int(round(2 * float(x)))
+    mag = f"{abs(k)}/2" if k % 2 else f"{abs(k) // 2}"
+    if k < 0:
+        return "-" + mag
+    if k > 0 and signed:
+        return "+" + mag
+    return mag
+
+
+@lru_cache(maxsize=None)
+def _manifold(n: int, l: int, j: float):
+    """Shared :class:`~.basis.Manifold` ``(n, l, j)`` (validates ``j`` against ``l``)."""
+    from .basis import Manifold          # basis imports this module
+    return Manifold(n, l, j)
+
+
+def _term(n: int, l: int, j: float, tex: bool) -> str:
+    """Russell-Saunders term symbol ``nL_J``."""
+    l_sym = _L_LETTERS[l] if l < len(_L_LETTERS) else f"(l={l})"
+    j_str = _frac(j, signed=False)
+    return rf"{n}{l_sym}_{{{j_str}}}" if tex else f"{n}{l_sym}_{j_str}"
+
+
+def _ket(names: Tuple[str, ...], values: Tuple[str, ...], tex: bool) -> str:
+    inner = ", ".join(f"{k}={v}" for k, v in zip(names, values))
+    return rf"|{inner}\rangle" if tex else f"|{inner}⟩"
+
+
+def state_label(*state, basis: Optional[str] = None, math: bool = True,
+                term: bool = True, tex: bool = True) -> str:
+    r"""Label a K39 state, converting between coupled and uncoupled numbers.
 
     Parameters
     ----------
     *state : (n, l, j) or (n, l, j, a) or (n, l, j, a, b)
-        Either three positional args ``n, l, j`` (or a single 3/4/5-tuple)
-        may be given:
+        Positional quantum numbers, or a single 3/4/5-tuple.  The basis of
+        ``a, b`` is read from their values: integers are the coupled
+        ``(F, m_F)``, half-integers the uncoupled ``(m_J, m_I)``.
 
-        * ``(n, l, j)`` -- bare term symbol, no ket appended.
-        * ``(n, l, j, F)`` -- appends ``|F=F>``.
-        * ``(n, l, j, m_J)`` -- appends ``|m_J=m_J>`` (``m_J`` is a
-          half-integer float, distinguishing it from the integer ``F``).
-        * ``(n, l, j, F, m_F)`` -- appends ``|F=F, m_F=m_F>``.
-        * ``(n, l, j, m_J, m_I)`` -- appends ``|m_J=m_J, m_I=m_I>``.
+        * ``(n, l, j)`` -- bare term symbol.
+        * ``(n, l, j, F)`` or ``(n, l, j, m_J)`` -- one-number ket.
+        * ``(n, l, j, F, m_F)`` or ``(n, l, j, m_J, m_I)`` -- full ket.
+    basis : {None, "coupled", "uncoupled"}
+        Basis of the printed ket (5-number states only).  ``None`` (default)
+        keeps the input's basis.  Conversion uses the Paschen-Back adiabatic
+        connection of :attr:`~.basis.Manifold.label_map`: ``(m_J, m_I)`` is
+        the high-field state that the zero-field ``|F, m_F>`` turns into.
+    math : bool
+        Wrap the TeX label in ``$...$`` (default True).  Pass False to embed
+        it in a larger math string.
+    term : bool
+        Include the term symbol ``nL_J`` (default True).
+    tex : bool
+        TeX output (default True); False gives plain text, e.g.
+        ``4S_1/2|m_J=-1/2, m_I=+3/2⟩``.
 
-        The coupled- vs. uncoupled-basis ket is auto-detected the same way
-        as :func:`format_state`: an integer-valued 4th element means
-        ``F``/``m_F``, a non-integer (half-integer) value means ``m_J``/``m_I``.
+    Coupled labels for a manifold with no hyperfine structure (no A constant:
+    l >= 3 or a core orbital) are not physical: F is not a good quantum
+    number at any B > 0.  Asking for one returns the uncoupled label instead, with a
+    warning once per manifold.
 
-    Returns
-    -------
-    str
-        LaTeX-formatted label, e.g. ``"$4P_{3/2}|F=2\\rangle$"``.
+    Raises
+    ------
+    ValueError
+        Mixed integer/half-integer ``a, b``, quantum numbers not in the
+        manifold, or ``basis`` given for a 3- or 4-number state.
 
     Examples
     --------
-    >>> rs_state_label(4, 0, 0.5)
+    >>> state_label(4, 0, 0.5)
     '$4S_{1/2}$'
-    >>> rs_state_label(4, 1, 1.5, 2)
-    '$4P_{3/2}|F=2\\rangle$'
-    >>> rs_state_label(4, 1, 1.5, 0.5)
-    '$4P_{3/2}|m_J=+0.5\\rangle$'
-    >>> rs_state_label(4, 1, 1.5, 2, -2)
-    '$4P_{3/2}|F=2, m_F=-2\\rangle$'
-    >>> rs_state_label(4, 1, 1.5, 0.5, -1.5)
-    '$4P_{3/2}|m_J=+0.5, m_I=-1.5\\rangle$'
-    >>> rs_state_label((4, 0, 0.5, 1, -1))    # tuple form also accepted
+    >>> state_label(4, 0, 0.5, 1, -1)
     '$4S_{1/2}|F=1, m_F=-1\\rangle$'
+    >>> state_label(4, 0, 0.5, 1, -1, basis="uncoupled")
+    '$4S_{1/2}|m_J=-1/2, m_I=-1/2\\rangle$'
+    >>> state_label(4, 1, 1.5, 0.5, -1.5, basis="coupled")
+    '$4P_{3/2}|F=3, m_F=-1\\rangle$'
+    >>> state_label(4, 1, 1.5, 2)
+    '$4P_{3/2}|F=2\\rangle$'
+    >>> state_label((4, 0, 0.5, -0.5, 1.5), term=False, math=False)
+    '|m_J=-1/2, m_I=+3/2\\rangle'
     """
     if len(state) == 1 and isinstance(state[0], (tuple, list)):
         state = tuple(state[0])
-
     if len(state) not in (3, 4, 5):
         raise ValueError(
-            "rs_state_label expects (n, l, j) plus 0, 1, or 2 additional "
-            f"quantum numbers (3, 4, or 5 total); got {len(state)}."
-        )
+            "state_label expects (n, l, j) plus 0, 1, or 2 additional "
+            f"quantum numbers (3, 4, or 5 total); got {len(state)}.")
+    if basis not in (None, "coupled", "uncoupled"):
+        raise ValueError(
+            f"basis must be None, 'coupled', or 'uncoupled'; got {basis!r}.")
 
     n, l, j = int(state[0]), int(state[1]), float(state[2])
-    l_sym = _L_LETTERS[l] if l < len(_L_LETTERS) else f"l={l}"
-    j2 = int(round(2 * j))
-    j_str = f"{j2}/2" if (j2 % 2) else f"{j2 // 2}"
-    term = rf'{n}{l_sym}_{{{j_str}}}'
-
-    if len(state) == 3:
-        return rf'${term}$'
-
+    ket = ""
     if len(state) == 4:
+        if basis is not None:
+            raise ValueError("basis conversion needs both magnetic quantum "
+                             "numbers (a 5-number state).")
         a = state[3]
         if _is_integer_valued(a):
-            ket = rf'|F={int(round(a))}\rangle'
+            ket = _ket(("F",), (_frac(a, signed=False),), tex)
         else:
-            ket = rf'|m_J={float(a):+.1f}\rangle'
-        return rf'${term}{ket}$'
+            ket = _ket(("m_J",), (_frac(a),), tex)
+    elif len(state) == 5:
+        a, b = state[3], state[4]
+        coupled_in = _is_integer_valued(a)
+        if coupled_in != _is_integer_valued(b):
+            raise ValueError(
+                "both magnetic quantum numbers must be integers (F, m_F) or "
+                f"half-integers (m_J, m_I); got {a!r}, {b!r}.")
+        man = _manifold(n, l, j)
+        try:
+            if coupled_in:
+                F, mF = int(round(a)), int(round(b))
+                m_j, m_i = man.state_for(F, mF)
+            else:
+                m_j, m_i = float(a), float(b)
+                F, mF = man.label_for(m_j, m_i)
+        except KeyError as err:
+            raise ValueError(err.args[0]) from None
 
-    # len(state) == 5
-    a, b = state[3], state[4]
-    if _is_integer_valued(a):
-        ket = rf'|F={int(round(a))}, m_F={int(round(b)):+d}\rangle'
-    else:
-        ket = rf'|m_J={float(a):+.1f}, m_I={float(b):+.1f}\rangle'
-    return rf'${term}{ket}$'
+        want_coupled = coupled_in if basis is None else basis == "coupled"
+        if want_coupled and not man.hyperfine_resolved:
+            if man.nlj not in _WARNED_NO_HYPERFINE:
+                _WARNED_NO_HYPERFINE.add(man.nlj)
+                warnings.warn(
+                    f"{_term(n, l, j, tex=False)} has no hyperfine structure "
+                    "in kamo (no A constant), so (F, m_F) is not a good "
+                    "quantum number; labelling it by (m_J, m_I) instead.",
+                    UserWarning, stacklevel=2)
+            want_coupled = False
+        if want_coupled:
+            ket = _ket(("F", "m_F"), (_frac(F, signed=False), _frac(mF)), tex)
+        else:
+            ket = _ket(("m_J", "m_I"), (_frac(m_j), _frac(m_i)), tex)
+
+    label = (_term(n, l, j, tex) if term else "") + ket
+    return f"${label}$" if (tex and math and label) else label
+
+
+def rs_state_label(*state) -> str:
+    r"""Russell-Saunders term symbol plus ket, in the input's own basis.
+
+    Same as :func:`state_label` with its defaults (no basis conversion, TeX,
+    ``$``-wrapped).
+
+    Examples
+    --------
+    >>> rs_state_label(4, 1, 1.5, 2, -2)
+    '$4P_{3/2}|F=2, m_F=-2\\rangle$'
+    >>> rs_state_label(4, 1, 1.5, 0.5, -1.5)
+    '$4P_{3/2}|m_J=+1/2, m_I=-3/2\\rangle$'
+    """
+    return state_label(*state)
 
 
 def uncoupled_label(n: int, l: int, j: float, m_j: float, m_i: float) -> str:
@@ -109,9 +201,9 @@ def uncoupled_label(n: int, l: int, j: float, m_j: float, m_i: float) -> str:
     Returns
     -------
     str
-        Human-readable label, e.g. ``"|4,0,0.5; m_j=-0.5, m_i=+1.5>"``.
+        Human-readable label, e.g. ``"|4,0,1/2; m_j=-1/2, m_i=+3/2>"``.
     """
-    return f"|{n},{l},{j}; m_j={m_j:+.1f}, m_i={m_i:+.1f}>"
+    return f"|{n},{l},{_frac(j, signed=False)}; m_j={_frac(m_j)}, m_i={_frac(m_i)}>"
 
 
 def coupled_label(n: int, l: int, j: float, F: int, m_F: int) -> str:
@@ -127,9 +219,9 @@ def coupled_label(n: int, l: int, j: float, F: int, m_F: int) -> str:
     Returns
     -------
     str
-        Human-readable label, e.g. ``"|4,0,0.5; F=1, m_F=-1>"``.
+        Human-readable label, e.g. ``"|4,0,1/2; F=1, m_F=-1>"``.
     """
-    return f"|{n},{l},{j}; F={F}, m_F={m_F:+d}>"
+    return f"|{n},{l},{_frac(j, signed=False)}; F={int(F)}, m_F={_frac(m_F)}>"
 
 
 def both_labels(n: int, l: int, j: float, m_j: float, m_i: float,
@@ -152,12 +244,11 @@ def both_labels(n: int, l: int, j: float, m_j: float, m_i: float,
     -------
     str
         Label combining both representations, e.g.
-        ``"|4,0,0.5; m_j=-0.5, m_i=+1.5> (F=1, m_F=-1)"``.
+        ``"|4,0,1/2; m_j=-1/2, m_i=+3/2> (F=1, m_F=+1)"``.
     """
     uncoup = uncoupled_label(n, l, j, m_j, m_i)
     if F is not None and m_F is not None:
-        coup = f"F={F}, m_F={m_F:+d}"
-        return f"{uncoup} ({coup})"
+        return f"{uncoup} (F={int(F)}, m_F={_frac(m_F)})"
     return uncoup
 
 
@@ -196,9 +287,9 @@ def format_state(
     Examples
     --------
     >>> format_state(4, 0, 0.5, -0.5, 1.5)  # uncoupled (floats)
-    '|4,0,0.5; m_j=-0.5, m_i=+1.5>'
+    '|4,0,1/2; m_j=-1/2, m_i=+3/2>'
     >>> format_state(4, 0, 0.5, 1, -1)      # coupled (ints)
-    '|4,0,0.5; F=1, m_F=-1>'
+    '|4,0,1/2; F=1, m_F=-1>'
     """
     # Auto-detect basis from types if not explicitly specified
     if basis_type == "auto":
@@ -232,13 +323,14 @@ class StateLabelMixin:
     so that formatting a label doesn't require a separate module import::
 
         model = AtomicStructure([(4, 0, 0.5), (4, 1, 0.5), (4, 1, 1.5)])
-        model.rs_state_label(4, 1, 1.5, 2)      # '$4P_{3/2}|F=2\\rangle$'
+        model.state_label(4, 1, 1.5, 2, -2, basis="uncoupled")
         model.format_state(4, 0, 0.5, -0.5, 1.5)
 
     Each method simply forwards to the corresponding module-level function
     in :mod:`kamo.hamiltonian.state_labels`; ``self`` is unused.
     """
 
+    state_label = staticmethod(state_label)
     rs_state_label = staticmethod(rs_state_label)
     uncoupled_label = staticmethod(uncoupled_label)
     coupled_label = staticmethod(coupled_label)
