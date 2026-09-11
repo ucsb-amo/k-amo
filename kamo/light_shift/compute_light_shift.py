@@ -51,7 +51,7 @@ class ComputeLightShift():
         """
         alpha_F = self.ComputePolarizabilities.compute_complete_polarizability(n,l,j,F,mF,wavelength_m,polarization,I)
         alpha_F_SI = alpha_F * c.convert_polarizability_au_to_SI
-        state_shift_J = -1/(2*c.c*c.epsilon0) * alpha_F_SI * intensity
+        state_shift_J = c.ac_stark_shift_J(alpha_F_SI, intensity)
         state_shift_Hz = state_shift_J.astype('float64') / c.h
         return state_shift_Hz
 

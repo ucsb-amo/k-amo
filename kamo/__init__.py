@@ -6,7 +6,8 @@
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .atom_properties.k39 import Potassium39
-    from .gaussian_beam import GaussianBeam
+    from .trap.gaussian import GaussianBeam
+    from .trap import Crossed, LightSheet, Trap, TrapCloud, Tweezer, solve
     from .light_shift import ComputeLightShift, ComputePolarizabilities
     from .BEC_properties import bec
     from .hamiltonian import AtomicStructure
@@ -18,7 +19,13 @@ if TYPE_CHECKING:
 
 _lazy = {
     'Potassium39':             '.atom_properties.k39',
-    'GaussianBeam':            '.gaussian_beam',
+    'GaussianBeam':            '.trap.gaussian',
+    'Tweezer':                 '.trap',
+    'LightSheet':              '.trap',
+    'Crossed':                 '.trap',
+    'Trap':                    '.trap',
+    'TrapCloud':               '.trap',
+    'solve':                   '.trap',
     'ComputeLightShift':       '.light_shift',
     'ComputePolarizabilities': '.light_shift',
     'bec':                     '.BEC_properties',
