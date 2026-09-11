@@ -453,7 +453,7 @@ class HamiltonianBuilder:
         dim = self.basis.dim
         diag = np.zeros(dim, dtype=float)
         # U = -1/(2 eps0 c) * alpha_SI * I ; convert alpha au->SI, energy->Hz
-        pre = -1.0 / (2 * c.epsilon0 * c.c) * c.convert_polarizability_au_to_SI / c.h
+        pre = c.ac_stark_shift_J(c.convert_polarizability_au_to_SI, 1.0) / c.h
 
         for man, sl in self.basis.manifold_slices():
             a_s, a_v, a_t = polarizabilities.compute_fine_structure_polarizability(

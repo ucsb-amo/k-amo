@@ -1,4 +1,4 @@
-"""Tests for kamo.gaussian_beam.GaussianBeam.
+"""Tests for kamo.trap.gaussian.GaussianBeam (moved from kamo.gaussian_beam).
 
 INTERNAL     self-checking algebra -- the radial/axial curvature factors, the
              intensity/power round trip, and depth <-> power inversion.  These
@@ -7,7 +7,7 @@ GROUND-TRUTH pinned against the 1064 nm tweezer operating point used in
              docs/light_shift_intensity_calibration.tex (w0 = 3 um,
              nu_r = 1 kHz).  Requires ARC.
 
-Run: pytest kamo/gaussian_beam/tests -q
+Run: pytest kamo/trap/tests -q
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 
 from kamo import constants as c
-from kamo.gaussian_beam.gaussian import GaussianBeam
+from kamo.trap.gaussian import GaussianBeam
 
 # alpha_s(4S_1/2) at 1064 nm, in SI (C m^2 / V): UDel-portal valence sum +
 # 5.457 a.u. ionic core.  Pinned so the INTERNAL tests do not need ARC.
@@ -54,7 +54,9 @@ def test_matches_bec_properties_axial_convention():
     b = _beam()
     omega_r = b.trap_frequency_radial(polarizability=ALPHA_1064_SI)
     omega_z = b.trap_frequency_axial(polarizability=ALPHA_1064_SI)
-    expected = BEC().get_axial_trap_frequency(omega_r, lmbda=LAMBDA, waist=WAIST)
+    expected = omega_r * LAMBDA / (np.sqrt(2) * np.pi * WAIST)     # the closed form
+    got = BEC().get_axial_trap_frequency(omega_r, lmbda=LAMBDA, waist=WAIST)   # via the Trap Hessian
+    assert got == pytest.approx(expected, rel=1e-11)
     assert omega_z == pytest.approx(expected, rel=1e-12)
 
 

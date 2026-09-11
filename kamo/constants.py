@@ -19,7 +19,24 @@ epsilon0 = scon.epsilon_0
 epsilon_0 = scon.epsilon_0
 
 convert_polarizability_au_to_SI = 4 * np.pi * epsilon0 * a0**3
-convert_joules_per_electronvolt = 1.6022e-19
+
+
+def ac_stark_shift_J(polarizability_SI, intensity, n_medium=1.0):
+    """AC Stark (dipole) potential ``U = -alpha I / (2 c eps0 n)``, in J.
+
+    The one copy of this formula: kamo.light_shift, kamo.hamiltonian,
+    GaussianBeam and kamo.trap all delegate here.  ``polarizability_SI`` is in
+    C m^2/V (convert atomic units with ``convert_polarizability_au_to_SI``) and
+    ``intensity`` in W/m^2.  A positive (red-detuned) polarizability gives an
+    attractive, negative U.  ``n_medium`` is the refractive index: with
+    ``I = c eps0 n |E|^2 / 2`` and ``U = -alpha |E|^2 / 4`` the shift carries
+    ``1/n``.  Plain arithmetic, so numpy arrays and torch tensors both work.
+    """
+    return -polarizability_SI * intensity / (2.0 * c * epsilon0 * n_medium)
+
+# CODATA.  Was the rounded 1.6022e-19 (14.6 ppm off), which shifted every ARC
+# transition energy -- about 0.01 nm on the D lines.
+convert_joules_per_electronvolt = e
 
 #bohr magneton in J / T
 mu_b = e * hbar / (2 * m_e)

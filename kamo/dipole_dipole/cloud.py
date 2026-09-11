@@ -9,8 +9,8 @@ The loss model needs three things from the cloud:
    quasi-static or the flux (Landau-Zener) regime.
 
 kamo.BEC_properties.bec.BEC computes the chemical potential and Thomas-Fermi radii
-too, but it derives the axial trap frequency from a hard-coded 1064 nm / 3.8 um
-beam.  BECCloud takes all three trap frequencies explicitly instead.
+too, but it derives the axial trap frequency from one tweezer's geometry (default
+1064 nm / 3.8 um).  BECCloud takes all three trap frequencies explicitly instead.
 """
 
 from __future__ import annotations
@@ -96,6 +96,20 @@ class BECCloud:
         """Thomas-Fermi radii (m) along each trap axis."""
         return np.sqrt(2.0 * self.chemical_potential_J
                        / (self.mass * self.omega ** 2))
+
+    @property
+    def widths(self) -> np.ndarray:
+        """rms 1/e widths ``sqrt(2 <x_i^2>) = sqrt(2/7) R_i`` (m) -- the ``widths`` of
+        kamo.imaging's cloud contract, which sizes the propagator's box."""
+        return np.sqrt(2.0 / 7.0) * self.tf_radii
+
+    def density(self, x, y, z):
+        """Thomas-Fermi density (m^-3) about the origin, axes in the order of
+        ``trap_frequencies_Hz`` -- kamo.imaging's cloud contract."""
+        R = self.tf_radii
+        s = ((np.asarray(x) / R[0]) ** 2 + (np.asarray(y) / R[1]) ** 2
+             + (np.asarray(z) / R[2]) ** 2)
+        return self.peak_density * np.clip(1.0 - s, 0.0, None)
 
     @property
     def tf_volume(self) -> float:
