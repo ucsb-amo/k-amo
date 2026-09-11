@@ -1,0 +1,58 @@
+# Measured hyperfine constants of 39K, 40K and 41K, transcribed from Table 3 of
+# M. Allegrini, E. Arimondo, L. A. Orozco, "Survey of hyperfine structure measurements
+# in alkali atoms", J. Phys. Chem. Ref. Data 51, 043102 (2022), doi:10.1063/5.0098061.
+# Where the table gives several measurements, the row it marks "Recommended" or "w.a."
+# (weighted average) is used; otherwise the single measurement.
+# Columns: A and B in MHz with 1-sigma uncertainties. Blank B: J = 1/2 (no quadrupole) or
+# B not determined. The table's "0" B entries without an uncertainty mean "not measured"
+# and are left blank here. A bound |B| < x is stored as B = 0 +- x.
+# basis: recommended | weighted_average | single.
+# sign_from: blank if the measurement fixes the sign; otherwise where the sign comes from.
+iso,n,l,j,A_MHz,A_unc_MHz,B_MHz,B_unc_MHz,basis,sign_from,ref,note
+39,3,2,1.5,0.96,0.04,0.37,0.08,recommended,theory (survey scaling law),Sieradzan et al. PRA 55 3475 (1997),only |A| and |B| measured
+39,3,2,2.5,-0.62,0.04,0,0.3,recommended,theory (survey scaling law),Sieradzan et al. PRA 55 3475 (1997),B: the recommended row lists 0; stored as Sieradzan's bound |B| < 0.3 MHz
+39,4,0,0.5,230.8598601,0.0000003,,,recommended,,Arimondo et al. RMP 49 31 (1977),MOT results (Arias 2019; Peper 2019) agree to ~10 Hz
+39,4,1,0.5,27.793,0.071,,,weighted_average,,survey w.a. excluding Banerjee 2004 and Das & Natarajan 2008,two clusters at 27.78 and 28.849 MHz; theory (27.662) sides with the lower; error scaled by sqrt(chi2_red) so larger than Falke's 0.042
+39,4,1,1.5,6.084,0.017,2.842,0.043,weighted_average,,Falke et al. PRA 74 032503 (2006); Das & Natarajan JPB 41 035001 (2008),
+39,5,0,0.5,55.50,0.60,,,single,,Gupta et al. PRA 8 2792 (1973),
+39,5,1,0.5,9.01,0.17,,,weighted_average,,Arimondo et al. (1977); Halloran et al. (2009),
+39,5,1,1.5,1.969,0.013,0.870,0.022,single,,Arimondo et al. RMP 49 31 (1977),
+39,5,2,1.5,0.44,0.10,,,single,theory (survey scaling law),Belin et al. Phys. Scr. 12 287 (1975b),B listed as 0 (not determined)
+39,5,2,2.5,-0.24,0.07,,,single,theory (survey scaling law),Belin et al. Phys. Scr. 12 287 (1975b),B listed as 0 (not determined)
+39,6,0,0.5,21.89,0.09,,,weighted_average,,Gupta 1973; Thompson 1983; Kiran Kumar & Suryanarayana 2011; Stalnaker et al. 2017,
+39,6,1,0.5,4.05,0.07,,,single,,Belin et al. Phys. Scr. 12 287 (1975b),
+39,6,1,1.5,0.886,0.008,0.370,0.015,single,,Arimondo et al. RMP 49 31 (1977),the UDel portal lists 0.866(8)
+39,6,2,1.5,0.25,0.01,0.05,0.02,single,,Glodz & Krainska-Miszczak (1985a),
+39,6,2,2.5,-0.12,0.04,,,single,,Glodz & Krainska-Miszczak (1985a),B listed as 0 (not determined)
+39,7,0,0.5,10.79,0.05,,,weighted_average,,Arimondo et al. (1977); Thompson et al. (1983); Otto et al. (2002),
+39,7,1,0.5,2.18,0.05,,,single,,Belin et al. Phys. Scr. 12 287 (1975b),
+39,7,1,1.5,0.49,0.04,,,single,,Belin et al. Phys. Scr. 12 287 (1975b),B listed as 0 (not determined)
+39,8,0,0.5,5.99,0.08,,,recommended,,Belin et al. (1975a) (inferred; the table row has no reference),
+39,9,0,0.5,4.0,1.1,,,single,,Otto et al. (2002),
+39,10,0,0.5,2.41,0.05,,,recommended,,Belin et al. (1975a),
+39,11,0,0.5,2.1,0.9,,,single,,Otto et al. (2002),
+39,12,0,0.5,1.5,1.2,,,single,,Otto et al. (2002),
+39,13,0,0.5,1.9,1.4,,,single,,Otto et al. (2002),
+39,14,0,0.5,1.0,1.6,,,single,,Otto et al. (2002),
+40,3,2,1.5,-1.07,0.02,-0.4,0.1,single,39K via mu/I and Q ratios,Sieradzan et al. PRA 55 3475 (1997),only |A| and |B| measured
+40,3,2,2.5,0.71,0.04,,,single,39K via mu/I ratio,Sieradzan et al. PRA 55 3475 (1997),only |A| measured; |B| = 0.8(8) with no sign
+40,4,0,0.5,-285.7308,0.0024,,,single,,Arimondo et al. RMP 49 31 (1977),
+40,4,1,0.5,-34.523,0.025,,,recommended,,Falke et al. PRA 74 032503 (2006),
+40,4,1,1.5,-7.585,0.010,-3.445,0.090,recommended,,Falke et al. PRA 74 032503 (2006),
+40,5,1,0.5,-12.0,0.9,,,single,,Behrle et al. (2011),
+40,5,1,1.5,-2.45,0.02,-1.16,0.22,single,,Arimondo et al. RMP 49 31 (1977),
+41,3,2,1.5,0.55,0.03,0.51,0.08,single,39K via mu/I and Q ratios,Sieradzan et al. PRA 55 3475 (1997),only |A| and |B| measured
+41,3,2,2.5,-0.40,0.02,0,0.2,single,39K via mu/I ratio,Sieradzan et al. PRA 55 3475 (1997),only |A| measured; |B| < 0.2 MHz
+41,4,0,0.5,127.0069352,0.0000006,,,recommended,,Arimondo et al. RMP 49 31 (1977),
+41,4,1,0.5,15.245,0.042,,,recommended,,Falke et al. PRA 74 032503 (2006),ARC's table has the sign wrong
+41,4,1,1.5,3.342,0.012,3.242,0.022,weighted_average,,Ney 1969; Krainska-Miszczak 1981; Sieradzan 1995; Falke 2006,B/B(39K) = 1.141(19) vs the Q ratio 1.217: 4 sigma off (dominated by Sieradzan 1995); Falke alone (3.351(71)) agrees
+41,5,0,0.5,30.75,0.75,,,single,,Gupta et al. PRA 8 2792 (1973),
+41,5,1,0.5,4.96,0.17,,,single,,Ney (1969),
+41,5,1,1.5,1.08,0.02,1.06,0.04,single,,Ney (1969),
+41,6,0,0.5,12.03,0.40,,,recommended,,Gupta et al. PRA 8 2792 (1973),
+41,6,2,1.5,0.14,0.02,0.05,0.02,single,39K via mu/I and Q ratios,Glodz & Krainska-Miszczak (1985b),only |A| and |B| measured
+41,7,0,0.5,6.5,1.0,,,recommended,,Otto et al. (2002),survey text 4.3.2 recommends Otto; the table's w.a. 7.9(12) includes Thompson 1983 which fails n*^3 scaling
+41,8,0,0.5,3.1,0.7,,,weighted_average,,Thompson et al. (1983); Otto et al. (2002),
+41,9,0,0.5,2.6,1.3,,,single,,Otto et al. (2002),
+41,10,0,0.5,2.0,2.4,,,single,,Otto et al. (2002),
+41,11,0,0.5,2.0,1.1,,,single,,Otto et al. (2002),

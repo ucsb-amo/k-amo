@@ -11,50 +11,53 @@ import time
 class PortalDataParser():
 
     def __init__(self,
-                atom=Potassium39(),
+                atom=None,
                 portal_data:pd.DataFrame = None,
                 force_arc=False,
                 n_max=16,
-                n_min=3):
+                n_min=3,
+                portal_species="K1",
+                portal_data_path=None):
         self.N_MAX = n_max
         self.N_MIN = n_min
 
         self.arc = force_arc
 
+        if atom is None:
+            atom = Potassium39()
         self.atom = atom
         self.state_energy_list = self._get_state_energy_list()
 
-        if not self.arc:
-            if not isinstance(portal_data,pd.DataFrame):
-                if portal_data == None:
-                    self.portal_data = self.load_portal_data()
-                else:
-                    raise ValueError("portal_data must be a pandas.DataFrame.")
-            else:
-                self.portal_data = portal_data
-        else:
+        if self.arc:
             self.portal_data = None
+        elif portal_data is None:
+            self.portal_data = self.load_portal_data(portal_species, portal_data_path)
+        elif isinstance(portal_data, pd.DataFrame):
+            self.portal_data = portal_data
+        else:
+            raise ValueError("portal_data must be a pandas.DataFrame.")
 
-    def load_portal_data(self, 
-                        portal_data_folder = r"B:\_K\Resources\udel_potassium_matrix_elements",
-                        portal_data_relpath = "K1MatrixElements_complete.csv"):
+    def load_portal_data(self, species="K1", path=None):
         """
-        Returns the data for all matrix elements in potassium from the UDel atomic physics portal.
+        Returns the matrix elements for all transitions of `species` from the
+        UDel atomic physics portal.
 
         Args:
-            portal_data_folder (str, optional): The folder where the complete matrix
-            elements csv file is stored. Defaults to
-            r"B:\\_K\\Resources\\udel_potassium_matrix_elements".
-            
-            portal_data_relpath (str, optional): The filename of the complete matrix
-            elements csv file. Defaults to "K1MatrixElements_complete.csv".
+            species (str, optional): Portal species title, e.g. "K1" for neutral
+            potassium. Defaults to "K1".
+
+            path (str, optional): A CSV with the columns `Initial, Final, Matrix
+            element (a.u.), Wavelength (nm)` to read instead of fetching from the
+            portal. Defaults to None (fetch, using the cache in
+            kamo.light_shift.udel_portal).
 
         Returns:
             DataFrame: the matrix element data for all transitions.
-        """    
-        data_fullpath = os.path.join(portal_data_folder,portal_data_relpath)
-        data = pd.read_csv(data_fullpath)
-        return data
+        """
+        if path is not None:
+            return pd.read_csv(path)
+        from kamo.light_shift import udel_portal
+        return udel_portal.to_legacy_table(udel_portal.matrix_elements(species))
 
     def quantum_numbers_to_state_label(self,n,l,j):
         """
@@ -230,8 +233,9 @@ class PortalDataParser():
         return matrix_element_au, transition_energy_J
     
     def matrix_element_arc(self,n0,l0,j0,nf,lf,jf):
-            elem_i_to_f = self.atom.getReducedMatrixElementJ(n0,l0,j0,nf,lf,jf)
-            matrix_element_au = elem_i_to_f * c.e * c.a0
+            '''Returns the reduced matrix element in atomic units (e a0) and the
+            signed transition energy E_f - E_i in Joules, both from ARC.'''
+            matrix_element_au = self.atom.getReducedMatrixElementJ(n0,l0,j0,nf,lf,jf)
 
             ei = self.atom.getEnergy(n0,l0,j0)
             ef = self.atom.getEnergy(nf,lf,jf)

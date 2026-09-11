@@ -8,5 +8,8 @@ setup(
     author_email='pagett.jared@gmail.com',
     description='K team AMO functions, modeling, and simulations',
     packages=find_packages(),
-    install_requires=['arc','numpy'],
+    package_data={'kamo.light_shift': ['data/udel_portal/*.json'],
+                  'kamo.atom_properties': ['data/*.csv'],
+                  'kamo.scattering': ['data/*.npz']},
+    install_requires=['arc','numpy','pandas'],
 )

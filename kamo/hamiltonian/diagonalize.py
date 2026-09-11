@@ -19,7 +19,7 @@ from typing import Any, List, Optional, Tuple, Union
 import numpy as np
 
 from .basis import Basis
-from .builder import _clebsch
+from .state_labels import StateLabelMixin
 
 
 def diagonalize(H: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -155,7 +155,7 @@ def _zeeman_eigensystem(builder, B_gauss: float):
 
 
 @dataclass
-class SweepResult:
+class SweepResult(StateLabelMixin):
     """Result of a magnetic-field or laser-intensity sweep.
 
     Attributes
@@ -191,30 +191,257 @@ class SweepResult:
         weights = np.abs(self.vectors[step][:, i]) ** 2
         return self.basis[int(np.argmax(weights))]
 
+    def _manifold(self, n: int, l: int, j: float):
+        """The :class:`~.basis.Manifold` ``(n, l, j)`` in the basis, or None."""
+        return next((m for m in self.basis.manifolds
+                     if m.n == n and m.l == l and abs(m.j - j) < 1e-9), None)
+
+    def _mF_of_basis_row(self) -> np.ndarray:
+        """``m_F = m_j + m_i`` of each uncoupled basis row (eigenvector row)."""
+        mF = np.zeros(self.basis.dim)
+        for s in self.basis.state_list:
+            mF[s.index] = s.m_j + s.m_i
+        return mF
+
+    def _tracked_mF(self, i: int) -> int:
+        """The conserved ``m_F`` of tracked state ``i``.
+
+        ``m_F`` commutes with H(B) so it is sharp at *every* step — but the
+        step-0 eigenvectors of a magnetic sweep are not: the (2F+1) states of
+        an F multiplet are exactly degenerate at B = 0, so ``eigh`` returns an
+        arbitrary rotation *across m_F* within the multiplet.  ``<m_F>`` is
+        therefore read at whichever candidate step has the smallest variance
+        (the last step for a magnetic sweep, step 0 for a laser sweep, whose
+        I = 0 states are sharp Zeeman eigenstates but whose sigma-driven
+        dressed states at high intensity are not).
+        """
+        mF_row = self._mF_of_basis_row()
+        best_var, best_mean = None, 0.0
+        for step in sorted({0, len(self.param) - 1}):
+            w = np.abs(self.vectors[step][:, i]) ** 2
+            mean = float(w @ mF_row)
+            var = max(float(w @ mF_row ** 2) - mean ** 2, 0.0)
+            if best_var is None or var < best_var:
+                best_var, best_mean = var, mean
+        return int(round(best_mean))
+
+    def _adiabatic_cache(self, n: int, l: int, j: float) -> dict:
+        """Cached adiabatic label maps for manifold ``(n, l, j)``.
+
+        Built lazily, one manifold at a time (see
+        :meth:`_build_adiabatic_labels`).
+        """
+        cache = getattr(self, "_adiab_cache", None)
+        if cache is None:
+            cache = {}
+            self._adiab_cache = cache
+        key = (n, l, round(float(j), 9))
+        if key not in cache:
+            building = getattr(self, "_adiab_building", None)
+            if building is None:
+                building = set()
+                self._adiab_building = building
+            if key in building:          # re-entrancy guard
+                raise RuntimeError("adiabatic label cache re-entered.")
+            building.add(key)
+            try:
+                cache[key] = self._build_adiabatic_labels(n, l, j)
+            finally:
+                building.discard(key)
+        return cache[key]
+
+    # Sweep step whose energies rank the states of each m_F block (the highest
+    # field of a magnetic sweep), and whether the rank order is checked over
+    # the whole sweep.  LaserSweepResult overrides both.
+    _check_rank_order = True
+
+    def _label_step(self) -> int:
+        return len(self.param) - 1
+
+    def _build_adiabatic_labels(self, n: int, l: int, j: float) -> dict:
+        """Assign every tracked state of manifold ``(n, l, j)`` its
+        **Paschen-Back (adiabatic)** label, bijectively.
+
+        ``m_F`` is exactly conserved (read by :meth:`_tracked_mF`), and states
+        of equal ``m_F`` never cross, so each state keeps its energy rank
+        inside its ``m_F`` block at every field.  At high field that rank
+        orders the block by ``m_j`` (``g_J > 0``); the k-th lowest state is
+        therefore labelled with the k-th ``(m_j, m_i)`` in ``m_j`` order.  The
+        rank is read at :meth:`_label_step`.
+
+        This does not use the zero-field eigenvectors.  Where the manifold has
+        no hyperfine A constant it is fully degenerate at B = 0 and those
+        eigenvectors are arbitrary, so an overlap with ``|F, m_F>`` there
+        mislabels most states.
+
+        Magnetic sweeps also check that the rank order holds at every step:
+        two tracks of one block crossing means eigenshuffle swapped them
+        (``dB`` too coarse), and a :class:`RuntimeWarning` says where.
+
+        Returns a dict with ``state_of`` ``{index: (n, l, j, m_j, m_i)}``,
+        ``by_mjmi`` ``{(m_j, m_i): index}`` and ``by_FmF`` ``{(F, mF): index}``.
+        """
+        from .basis import _half_integer_range
+
+        man = self._manifold(n, l, j)
+        if man is None:
+            raise KeyError(f"Manifold ({n}, {l}, {j}) not in basis.")
+
+        idxs = []
+        for i in range(self.energies.shape[1]):
+            s = self.dominant_state(i, 0)
+            if s.n == n and s.l == l and abs(s.j - j) < 1e-9:
+                idxs.append(i)
+
+        groups: dict = {}
+        for i in idxs:
+            groups.setdefault(self._tracked_mF(i), []).append(i)
+
+        step = self._label_step()
+        mj_vals = sorted(_half_integer_range(man.j))
+        state_of: dict = {}
+        for mF, members in sorted(groups.items()):
+            pairs = [(mj, mF - mj) for mj in mj_vals
+                     if (round(mj, 9), round(mF - mj, 9)) in man.label_map]
+            if len(pairs) != len(members):
+                state_of = self._labels_by_overlap(man, idxs, step)
+                break
+            members = sorted(members, key=lambda i: self.energies[step, i])
+            for i, (m_j, m_i) in zip(members, pairs):
+                state_of[i] = (n, l, j, float(m_j), float(m_i))
+            if self._check_rank_order:
+                self._warn_if_block_crosses(man, mF, members)
+
+        by_mjmi, by_FmF = {}, {}
+        for i, (_, _, _, m_j, m_i) in state_of.items():
+            by_mjmi[(round(m_j, 9), round(m_i, 9))] = i
+            by_FmF[man.label_for(m_j, m_i)] = i
+        return {"state_of": state_of, "by_mjmi": by_mjmi, "by_FmF": by_FmF}
+
+    def _labels_by_overlap(self, man, idxs, step: int) -> dict:
+        """Fallback labelling when the ``m_F`` blocks do not have the expected
+        sizes (``m_F`` not sharp, e.g. a strongly sigma-driven laser sweep):
+        match tracked states to ``|m_j, m_i>`` by overlap at ``step``,
+        bijectively.  Correct only where the states are nearly uncoupled."""
+        import warnings
+        from scipy.optimize import linear_sum_assignment
+
+        warnings.warn(
+            f"m_F blocks of manifold {man.nlj} have unexpected sizes; labelling "
+            "its states by overlap with |m_j, m_i> instead of by energy rank.",
+            RuntimeWarning, stacklevel=4)
+        subs = man.substates()
+        rows = [self.basis.index_of(man.n, man.l, man.j, m_j, m_i)
+                for m_j, m_i in subs]
+        w = np.abs(self.vectors[step][np.ix_(rows, idxs)]) ** 2
+        r, c = linear_sum_assignment(-w)
+        return {idxs[ci]: (man.n, man.l, man.j, float(subs[ri][0]),
+                           float(subs[ri][1]))
+                for ri, ci in zip(r, c)}
+
+    def _warn_if_block_crosses(self, man, mF: int, members: list) -> None:
+        """Warn if the energy tracks of one ``m_F`` block ever change order.
+
+        ``members`` is sorted by energy at the label step.  States of equal
+        ``m_F`` cannot cross, so a step where that order is violated by more
+        than numerical noise marks an eigenshuffle mistrack.
+        """
+        import warnings
+
+        if len(members) < 2:
+            return
+        E = self.energies[:, members]
+        tol = max(1e3, 1e-11 * float(np.max(np.abs(E))))     # Hz
+        bad = np.nonzero((np.diff(E, axis=1) < -tol).any(axis=1))[0]
+        if bad.size:
+            k = int(bad[0])
+            warnings.warn(
+                f"Tracked states of manifold {man.nlj}, m_F={mF:+d} change "
+                f"energy order at {self.param_name} = {self.param[k]:.4g}: "
+                "eigenshuffle swapped states it should have followed, so "
+                "their energy tracks and labels are unreliable.  Re-run the "
+                "sweep with a smaller step (magnetic_sweep dB).",
+                RuntimeWarning, stacklevel=4)
+
+    def adiabatic_state(self, i: int, step: int = 0) -> tuple:
+        """Return the **Paschen-Back (adiabatic)** quantum numbers of tracked
+        state ``i`` as a 5-tuple ``(n, l, j, m_j, m_i)``.
+
+        This is the *inverse* of :meth:`_tracked_index`: the returned
+        ``(m_j, m_i)`` are the high-field limiting quantum numbers the tracked
+        state connects to, so ``_resolve_states(adiabatic_state(i))`` returns
+        ``[i]``.
+
+        :meth:`dominant_state` must **not** be used for this on its own.  At
+        step 0 of a magnetic sweep the eigenstates are the zero-field
+        ``|F, mF>`` states, whose CG-largest uncoupled component is in general
+        *not* the state's high-field character — e.g. the four ``m_J = -3/2``
+        states of 4P_3/2 have four *different* dominant components at B = 0.
+        See :meth:`_build_adiabatic_labels` for how the label is obtained
+        instead.
+
+        Parameters
+        ----------
+        step : int
+            Accepted for signature compatibility and ignored: eigenshuffle
+            tracks each state continuously, so a tracked state's adiabatic
+            label is a property of the whole sweep, not of one step.
+        """
+        s = self.dominant_state(i, 0)
+        man = self._manifold(s.n, s.l, s.j)
+        fallback = (s.n, s.l, s.j, float(s.m_j), float(s.m_i))
+        if man is None:
+            return fallback
+        return self._adiabatic_cache(
+            man.n, man.l, man.j)["state_of"].get(i, fallback)
+
     def label(self, i: int, step: int = 0) -> str:
         """Return a human-readable label for tracked state ``i`` at ``step``.
 
         The label uses the **Paschen-Back (adiabatic) convention**:
 
-        * ``(m_j, m_i)`` are the high-field limiting quantum numbers of the
-          dominant uncoupled component of the eigenstate.
+        * ``(m_j, m_i)`` are the high-field limiting quantum numbers the
+          eigenstate adiabatically connects to (see :meth:`adiabatic_state`) —
+          *not* the dominant uncoupled component at ``step``, which at zero
+          field is a different state altogether.
         * ``(F, m_F)`` are the zero-field hyperfine quantum numbers that
-          adiabatically connect to those high-field numbers.
+          adiabatically connect to those high-field numbers, looked up from
+          the manifold's cached :attr:`~.basis.Manifold.label_map`.
 
-        The label is looked up from the manifold's cached
-        :attr:`~.basis.Manifold.label_map`, so this method is O(1) after the
-        first call and is correct for both magnetic-field and laser-intensity
-        sweeps (the dressed states of a laser sweep are labelled by their
-        dominant bare-state character).
+        This is the same convention used by :meth:`indices_for`,
+        :meth:`_resolve_states` and :meth:`convert_label`, so the legend of a
+        plot always agrees with the ``states=`` filter that produced it.
+        The ``(F, m_F)`` part is left off for a manifold with no hyperfine
+        structure, where F is not a good quantum number.
         """
-        s = self.dominant_state(i, step)
-        man = next((m for m in self.basis.manifolds
-                    if m.n == s.n and m.l == s.l and abs(m.j - s.j) < 1e-9), None)
-        if man is not None:
-            F, mF = man.label_for(s.m_j, s.m_i)
-            return (f"|{s.n},{s.l},{s.j}; m_j={s.m_j:+.1f}, m_i={s.m_i:+.1f}> "
-                    f"(F={F}, mF={mF:+d})")
-        return f"|{s.n},{s.l},{s.j}; m_j={s.m_j:+.1f}, m_i={s.m_i:+.1f}>"
+        n, l, j, m_j, m_i = self.adiabatic_state(i, step)
+        man = self._manifold(n, l, j)
+        if man is not None and man.hyperfine_resolved:
+            return self.both_labels(n, l, j, m_j, m_i, *man.label_for(m_j, m_i))
+        return self.uncoupled_label(n, l, j, m_j, m_i)
+
+    def tex_label(self, i: int, step: int = 0, coupled: bool = False) -> str:
+        r"""Return a TeX-formatted label for tracked state ``i`` at ``step``.
+
+        Same state identification as :meth:`label` — the **Paschen-Back
+        (adiabatic)** quantum numbers from :meth:`adiabatic_state` — but
+        rendered with :func:`~.state_labels.state_label` as a
+        Russell-Saunders term symbol plus a ket, ready for a matplotlib legend.
+
+        Parameters
+        ----------
+        step : int
+            Sweep step at which the state is identified (default 0).
+        coupled : bool
+            If False (default) the ket carries the uncoupled ``(m_J, m_I)``
+            quantum numbers, e.g. ``$4S_{1/2}|m_J=-1/2, m_I=+1/2\rangle$``.
+            If True it carries the zero-field ``(F, m_F)`` numbers that
+            adiabatically connect to them, e.g. ``$4S_{1/2}|F=1, m_F=0\rangle$``
+            (uncoupled, with a warning, for a manifold with no hyperfine A).
+        """
+        n, l, j, m_j, m_i = self.adiabatic_state(i, step)
+        return self.state_label(n, l, j, float(m_j), float(m_i),
+                                basis="coupled" if coupled else "uncoupled")
 
     def convert_label(self, state: tuple) -> tuple:
         """Convert a state 5-tuple between uncoupled and coupled-basis labels.
@@ -225,15 +452,13 @@ class SweepResult:
         * ``(n, l, j, m_j: float, m_i: float)`` → ``(n, l, j, F: int, mF: int)``
         * ``(n, l, j, F: int, mF: int)`` → ``(n, l, j, m_j: float, m_i: float)``
 
-        The mapping is **bijective**: F values are processed in ascending order
-        and each claims the available ``(m_j, m_i)`` component with the largest
-        CG magnitude (ties broken by most-negative ``m_j``).  This ensures that
-        equal-weight cases such as ``|F=1, mF=0>`` and ``|F=2, mF=0>`` (both
-        50/50 superpositions of the same two uncoupled states) get distinct
-        representatives:
+        The mapping is the manifold's bijective Paschen-Back label map
+        (:attr:`~.basis.Manifold.label_map`): ``(m_j, m_i)`` is the high-field
+        state that the zero-field ``|F, mF>`` connects to adiabatically.
+        Within one ``mF``, F ascending pairs with ``m_j`` ascending, e.g.
 
-        * ``(F=1, mF=0)`` ↔ ``(m_j=-1/2, m_i=+1/2)``   [lower mJ → lower F]
-        * ``(F=2, mF=0)`` ↔ ``(m_j=+1/2, m_i=-1/2)``   [upper mJ → upper F]
+        * ``(F=1, mF=0)`` ↔ ``(m_j=-1/2, m_i=+1/2)``
+        * ``(F=2, mF=0)`` ↔ ``(m_j=+1/2, m_i=-1/2)``
 
         Parameters
         ----------
@@ -245,74 +470,23 @@ class SweepResult:
 
         Examples
         --------
-        >>> res.convert_label((4, 0, 0.5, -0.5, -1.5))   # m_j, m_i -> F, mF
-        (4, 0, 0.5, 1, -2)
-        >>> res.convert_label((4, 0, 0.5, 1, -2))         # F, mF -> m_j, m_i
-        (4, 0, 0.5, -0.5, -1.5)
+        >>> res.convert_label((4, 0, 0.5, -0.5, -0.5))   # m_j, m_i -> F, mF
+        (4, 0, 0.5, 1, -1)
+        >>> res.convert_label((4, 0, 0.5, 2, -1))         # F, mF -> m_j, m_i
+        (4, 0, 0.5, 0.5, -1.5)
         """
         if len(state) != 5:
             raise ValueError("state must be a 5-tuple (n, l, j, a, b).")
         n, l, j, a, b = state
-
-        # find i_nuclear for this manifold
-        i_nuc = None
-        for man in self.basis.manifolds:
-            if man.n == n and man.l == l and abs(man.j - j) < 1e-9:
-                i_nuc = man.i_nuclear
-                break
-        if i_nuc is None:
+        man = self._manifold(n, l, j)
+        if man is None:
             raise KeyError(f"Manifold ({n}, {l}, {j}) not in basis.")
-
-        # build the bijective {F: (mj, mi)} map for the relevant mF
-        mF_query = (a + b) if not (isinstance(a, int) and isinstance(b, int)) else b
-        rep_map = self._bijective_F_representative(n, l, j, mF_query, i_nuc)
-
-        if isinstance(a, int) and isinstance(b, int):
-            F, mF = a, b
-            key = round(float(F), 9)
-            if key not in rep_map:
-                raise ValueError(f"|{n},{l},{j}; F={F}, mF={mF}> has no valid (m_j, m_i).")
-            return (n, l, j, rep_map[key][0], rep_map[key][1])
-        else:
-            m_j, m_i = float(a), float(b)
-            for F_key, (mj, mi) in rep_map.items():
-                if abs(mj - m_j) < 1e-9 and abs(mi - m_i) < 1e-9:
-                    return (n, l, j, int(round(F_key)), int(round(m_j + m_i)))
-            raise ValueError(f"|{n},{l},{j}; m_j={m_j}, m_i={m_i}> is not a representative state.")
-
-    def _bijective_F_representative(self, n, l, j, mF, i_nuc) -> dict:
-        """Return ``{F: (mj, mi)}`` giving each F's unique representative
-        uncoupled component for the given ``mF``.
-
-        Uses the **Paschen-Back adiabatic-connection** convention: for a given
-        mF, the valid ``(mJ, mI)`` pairs are sorted by mJ ascending and the
-        valid F values are sorted ascending, then paired bijectively.
-
-        This correctly handles states that swap their dominant uncoupled
-        character across avoided crossings in the Breit-Rabi diagram — e.g.
-        in K-39 (inverted hyperfine, A < 0) the F=1,mF=−1 state is
-        predominantly ``(mJ=+½, mI=−3/2)`` at zero field but adiabatically
-        connects to ``(mJ=−½, mI=−½)`` at high field.  The CG-dominant
-        zero-field label is therefore misleading; the high-field label is used
-        here.
-        """
-        mj_vals = sorted(-j + k for k in range(int(round(2 * j)) + 1))
-        mi_vals_set = {round(-i_nuc + k, 9)
-                       for k in range(int(round(2 * i_nuc)) + 1)}
-
-        # valid (mJ, mI) pairs for this mF, ordered by mJ ascending
-        valid_pairs = [(mj, mF - mj) for mj in mj_vals
-                       if round(mF - mj, 9) in mi_vals_set]
-
-        # valid F values for this mF, sorted ascending
-        all_F = sorted(abs(j - i_nuc) + k
-                       for k in range(int(round(2 * min(j, i_nuc))) + 1))
-        valid_F = [F for F in all_F if abs(mF) <= F + 1e-9]
-
-        # k-th F (ascending) ↔ k-th (mJ, mI) pair (mJ ascending)
-        return {round(F, 9): pair for F, pair in zip(valid_F, valid_pairs)}
-
-
+        try:
+            if isinstance(a, int) and isinstance(b, int):
+                return (n, l, j) + tuple(float(x) for x in man.state_for(a, b))
+            return (n, l, j) + man.label_for(a, b)
+        except KeyError as err:
+            raise ValueError(err.args[0]) from None
 
     # -- state lookup -------------------------------------------------------
     def indices_for(self, n: int, l: int, j: float,
@@ -328,7 +502,7 @@ class SweepResult:
         m_j, m_i : if both supplied, restrict to the one matching state;
             if omitted, return all states in the ``(n, l, j)`` manifold.
             If both are Python ``int``, they are interpreted as **F, mF**
-            (low-field coupled-basis labels) via a CG overlap search.
+            (low-field coupled-basis labels).
         step : sweep step at which dominant-basis weights are evaluated.
 
         Returns
@@ -347,6 +521,54 @@ class SweepResult:
                 out.append(i)
         return out
 
+    def indices_for_F_or_m_j(self, n: int, l: int, j: float,
+                             F_or_m_j: float, step: int = 0) -> List[int]:
+        """Return tracked-state indices in manifold ``(n, l, j)`` matching
+        either a given coupled-basis ``F`` or uncoupled-basis ``m_j`` value.
+
+        This supports 4-tuple state filters ``(n, l, j, q)`` where ``q`` can
+        be an int or half-int. Any state with ``F == q`` or ``m_j == q`` is
+        included.
+
+        Each matching ``(m_j, m_i)`` representative is resolved to a tracked
+        index via :meth:`_tracked_index` (the adiabatic label map), avoiding
+        the ambiguity of picking a "dominant" basis component: at ``m_F = 0``
+        (and similar cases) two different tracked eigenstates can have an
+        *exact* 50/50 split between two basis components, so an argmax-based
+        lookup can incorrectly assign the same label to both.
+        """
+        from .basis import _half_integer_range
+
+        man = next((m for m in self.basis.manifolds
+                    if m.n == n and m.l == l and abs(m.j - j) < 1e-9), None)
+        if man is None:
+            raise KeyError(f"Manifold ({n}, {l}, {j}) not in basis.")
+
+        target = float(F_or_m_j)
+        key = round(target, 9)
+        valid_F = {round(F, 9) for F in man.allowed_F()}
+        valid_mj = {round(v, 9) for v in _half_integer_range(j)}
+        if key not in valid_F and key not in valid_mj:
+            raise ValueError(
+                f"{F_or_m_j} is not a valid F or m_j for manifold "
+                f"({n}, {l}, {j}); allowed F: {sorted(valid_F)}, "
+                f"allowed m_j: {sorted(valid_mj)}")
+
+        substates = []
+        if key in valid_F:
+            substates.extend(man.states(F=target))
+        if key in valid_mj:
+            substates.extend(man.states(mJ=target))
+
+        out = []
+        seen = set()
+        for (n_, l_, j_, m_j, m_i) in substates:
+            idx = self._tracked_index(n_, l_, j_, m_j, m_i, step)
+            if idx not in seen:
+                seen.add(idx)
+                out.append(idx)
+        return out
+
     def _resolve_states(self, states, step: int = 0) -> List[int]:
         """Convert a *states* specifier to a list of tracked-state indices.
 
@@ -358,13 +580,16 @@ class SweepResult:
             All tracked states in that manifold.
         ``(n, l, j)`` — 3-tuple of numbers
             All tracked states in the ``(n, l, j)`` manifold.
+        ``(n, l, j, F_or_m_j)`` — 4-tuple of numbers
+            All tracked states in the manifold whose label satisfies
+            ``F == F_or_m_j`` or ``m_j == F_or_m_j`` (int or half-int).
         ``(n, l, j, m_j, m_i)`` — 5-tuple of numbers
             The single tracked state whose dominant component is
             ``|n l j; m_j m_i>``.
         list/sequence of tuples or Manifold objects
             Each element is a ``Manifold``, ``(n, l, j)`` tuple,
-            or ``(n, l, j, m_j, m_i)`` tuple; results are concatenated
-            (duplicates preserved).
+            ``(n, l, j, F_or_m_j)`` tuple, or ``(n, l, j, m_j, m_i)``
+            tuple; results are concatenated (duplicates preserved).
         sequence of int
             Explicit index list (existing behaviour).
         """
@@ -375,7 +600,7 @@ class SweepResult:
 
         def _is_qn_tuple(t):
             return (isinstance(t, tuple)
-                    and len(t) in (3, 5)
+                    and len(t) in (3, 4, 5)
                     and all(isinstance(s, (int, float)) for s in t))
 
         def _resolve_one(t):
@@ -384,6 +609,9 @@ class SweepResult:
             elif len(t) == 3:
                 n, l, j = t
                 return self.indices_for(n, l, j, step=step)
+            elif len(t) == 4:
+                n, l, j, F_or_m_j = t
+                return self.indices_for_F_or_m_j(n, l, j, F_or_m_j, step=step)
             else:
                 n, l, j, m_j, m_i = t
                 return self.indices_for(n, l, j, m_j, m_i, step=step)
@@ -414,57 +642,39 @@ class SweepResult:
 
         ``(m_j, m_i)`` is interpreted as the high-field limiting quantum
         numbers (same convention as :meth:`convert_label`): the bijective
-        representative map is inverted to find ``(F, mF)`` and then the
-        tracked state is located via CG overlap with ``|F, mF>``.
+        adiabatic label map of :meth:`_build_adiabatic_labels` is inverted,
+        so this is the exact inverse of :meth:`adiabatic_state`.
         """
-        mF = m_j + m_i
-        i_nuc = None
-        for man in self.basis.manifolds:
-            if man.n == n and man.l == l and abs(man.j - j) < 1e-9:
-                i_nuc = man.i_nuclear
-                break
-        if i_nuc is None:
+        man = self._manifold(n, l, j)
+        if man is None:
             raise KeyError(f"Manifold ({n}, {l}, {j}) not in basis.")
-        rep_map = self._bijective_F_representative(n, l, j, mF, i_nuc)
-        for F_key, (mj_rep, mi_rep) in rep_map.items():
-            if abs(mj_rep - m_j) < 1e-9 and abs(mi_rep - m_i) < 1e-9:
-                return self._tracked_index_F_mF(
-                    n, l, j, int(round(F_key)), int(round(mF)), step)
-        raise KeyError(
-            f"|{n},{l},{j}; m_j={m_j}, m_i={m_i}> is not a valid "
-            f"adiabatic-label representative.")
+
+        man.label_for(m_j, m_i)                  # KeyError if not in manifold
+        idx = self._adiabatic_cache(n, l, j)["by_mjmi"].get(
+            (round(float(m_j), 9), round(float(m_i), 9)))
+        if idx is None:
+            raise KeyError(
+                f"No tracked state carries the label |{n},{l},{j}; m_j={m_j}, "
+                f"m_i={m_i}> (the manifold's states are mixed with another "
+                "manifold's at the start of the sweep).")
+        return idx
 
     def _tracked_index_F_mF(self, n: int, l: int, j: float,
                             F: int, mF: int, step: int) -> int:
-        """Return the tracked-state column index for the low-field state
-        ``|n l j; F, mF>`` (coupled basis).
+        """Return the tracked-state column index for the state whose adiabatic
+        (zero-field) label is ``|n l j; F, mF>`` (coupled basis).
 
-        The coupled state is CG-expanded into the uncoupled ``|m_j, m_i>``
-        basis; the tracked state at ``step`` with the largest overlap is
-        returned.  This is most meaningful at low field (step 0) where the
-        hyperfine eigenstates are nearly pure ``|F, mF>``.
+        Looked up in the bijective label map of
+        :meth:`_build_adiabatic_labels`.  A bare per-``(F, mF)`` overlap
+        would not do: the m_F states of an F multiplet are degenerate at zero
+        field, so their step-0 eigenvectors come back arbitrarily mixed across
+        m_F and can hand two different ``(F, mF)`` the same tracked state.
         """
-        # find i_nuclear from the basis manifold
-        i_nuc = None
-        for man in self.basis.manifolds:
-            if man.n == n and man.l == l and abs(man.j - j) < 1e-9:
-                i_nuc = man.i_nuclear
-                break
-        if i_nuc is None:
+        man = self._manifold(n, l, j)
+        if man is None:
             raise KeyError(f"Manifold ({n}, {l}, {j}) not in basis.")
-
-        # build the |F, mF> state vector in the full basis
-        psi = np.zeros(self.basis.dim, dtype=complex)
-        for s in self.basis.state_list:
-            if s.n == n and s.l == l and abs(s.j - j) < 1e-9:
-                cg = _clebsch(j, s.m_j, i_nuc, s.m_i, F, mF)
-                if cg:
-                    psi[s.index] = cg
-
-        # overlap of each tracked eigenvector with |F, mF>
-        # vectors[step] has shape (n_basis, n_tracked); columns are eigenvectors
-        overlaps = np.abs(psi @ self.vectors[step]) ** 2
-        return int(np.argmax(overlaps))
+        m_j, m_i = man.state_for(F, mF)          # KeyError if not in manifold
+        return self._tracked_index(n, l, j, m_j, m_i, step)
 
     def get_energy(
         self,
@@ -480,7 +690,10 @@ class SweepResult:
         Parameters
         ----------
         n, l, j : fine-structure quantum numbers.
-        m_j, m_i : magnetic quantum numbers of J and I.
+        m_j, m_i : magnetic quantum numbers of J and I. If both are Python
+            ``int``, they are interpreted as coupled-basis **F, mF** labels
+            (same convention as :meth:`indices_for` and :meth:`convert_label`);
+            half-integer floats are the uncoupled adiabatic ``(m_j, m_i)``.
         identify_at_step : int
             Step at which to choose the tracked state by dominant uncoupled
             weight (default 0).
@@ -494,8 +707,52 @@ class SweepResult:
         -------
         ndarray or float
         """
-        i = self._tracked_index(n, l, j, m_j, m_i, identify_at_step)
+        if isinstance(m_j, int) and isinstance(m_i, int):
+            # integer args -> coupled-basis (F, mF) labels (low field)
+            i = self._tracked_index_F_mF(n, l, j, m_j, m_i, identify_at_step)
+        else:
+            i = self._tracked_index(n, l, j, m_j, m_i, identify_at_step)
         return _interp_at(self.param, self.energies[:, i], at)
+
+    def field_energy(
+        self,
+        states=None,
+        step: int = 0,
+    ) -> "Tuple[np.ndarray, np.ndarray, List[str]]":
+        """Return the swept field array, tracked energies, and labels for *states*.
+
+        Parameters
+        ----------
+        states : None, Manifold, int, (n, l, j), (n, l, j, F_or_m_j), (n, l, j, m_j, m_i), or list of such
+            Which tracked states to extract, using the same specifier grammar as
+            :meth:`plot` / :meth:`_resolve_states`:
+
+            * ``None`` (default) — every tracked state.
+            * ``Manifold`` or ``(n, l, j)`` — all states in that manifold.
+            * ``(n, l, j, F_or_m_j)`` — states with ``F == q`` or ``m_j == q``.
+            * ``(n, l, j, m_j, m_i)`` — a single state.
+            * list of any of the above, or a sequence of int indices.
+        step : int
+            Sweep step at which the specifier is resolved to tracked-state
+            indices (where dominant-basis labels are evaluated; default 0).
+
+        Returns
+        -------
+        field : ndarray, shape (n_points,)
+            The swept parameter values — the magnetic-field array (Gauss) for a
+            field sweep, or the intensity array (W/m^2) for an intensity sweep.
+            Same as :attr:`param`.
+        energies : ndarray, shape (n_states, n_points)
+            ``energies[k]`` is the energy track (Hz) of the ``k``-th resolved
+            state, ordered to match *labels*.  Always 2-D, even for a single
+            state (shape ``(1, n_points)``) — divide by ``1e6`` for MHz.
+        labels : list of str, length n_states
+            Human-readable label for each row of *energies*, in the same order.
+        """
+        idxs = self._resolve_states(states, step)
+        energies = self.energies[:, idxs].T
+        labels = [self.label(i, step) for i in idxs]
+        return self.param, energies, labels
 
     def get_transition_frequency(
         self,
@@ -599,9 +856,10 @@ class SweepResult:
         return x, self.param_name
 
     def plot(self, ax=None, energy_unit: str = "MHz", x_unit: Optional[str] = None,
-             states=None, label_states: bool = False, label_step: int = 0,
+             states=None, label_states: bool = True, label_step: int = 0,
+             coupled_labels: bool = False,
              energy_offset: float = 0.0, legend: bool = False,
-             plot_differential=False, **plot_kwargs):
+             plot_differential=False, xlim=None, **plot_kwargs):
         """Plot tracked eigen-energies versus the swept parameter.
 
         Parameters
@@ -612,24 +870,35 @@ class SweepResult:
             Units for the energy axis (default MHz).
         x_unit : str, optional
             Passed to :meth:`x_axis` (e.g. ``"mW/cm^2"`` for intensity sweeps).
-        states : Manifold, sequence of int, (n, l, j) tuple, (n, l, j, m_j, m_i) tuple, or list of such, optional
+        states : Manifold, sequence of int, (n, l, j) tuple, (n, l, j, F_or_m_j) tuple, (n, l, j, m_j, m_i) tuple, or list of such, optional
             Which states to plot.  Accepts:
             - ``None`` (default): all states.
             - ``Manifold`` object: all states in that manifold.
             - ``(n, l, j)`` 3-tuple: all states in that manifold.
+            - ``(n, l, j, F_or_m_j)`` 4-tuple: all states in that manifold
+              with ``F == F_or_m_j`` or ``m_j == F_or_m_j`` (int or half-int).
             - ``(n, l, j, m_j, m_i)`` 5-tuple: a single state.
-            - list of Manifolds and/or 3- or 5-tuples: union, concatenated.
+            - list of Manifolds and/or 3-, 4-, or 5-tuples: union, concatenated.
             - sequence of int: explicit tracked-state indices.
         label_states : bool
-            Annotate each line with its dominant-basis-state label.
+            Label each line with its adiabatic state and show the legend
+            (default True).  Labels are the TeX term-symbol form built by
+            :meth:`tex_label` / :func:`~.state_labels.state_label`, e.g.
+            ``$4S_{1/2}|m_J=-1/2, m_I=+1/2\rangle$``.  Pass ``False`` to
+            suppress them, e.g. when plotting a large basis where every line
+            would appear in the legend.
         label_step : int
             Sweep step at which dominant-state labels are evaluated (default 0,
             i.e. the start of the sweep).
+        coupled_labels : bool
+            Label states by their zero-field ``(F, m_F)`` numbers instead of
+            the uncoupled ``(m_J, m_I)`` ones (default False).
         energy_offset : float
             Value (in Hz) subtracted from every energy before scaling; handy for
             referencing to a particular state or manifold.
         legend : bool
-            Show a legend built from the state labels.
+            Force the legend on even when ``label_states`` is False.  With the
+            default ``label_states=True`` the legend is already shown.
         plot_differential : bool, (n, l, j) 3-tuple, or (n, l, j, m_j, m_i) 5-tuple, default False
             Subtract a reference energy from every plotted state:
 
@@ -647,6 +916,11 @@ class SweepResult:
               energy of the specified state from every plotted state.  Useful
               for computing differential shifts relative to a reference state
               (e.g. a clock state) across the whole sweep.
+        xlim : (float, float), optional
+            X-axis limits (in the units set by ``x_unit``/``x_axis``). When
+            given, ``ax.set_xlim`` is applied and the y-axis is autoscaled to
+            fit the plotted energy data within that x range, padded by 5% of
+            the y-span on each side.
         **plot_kwargs : forwarded to ``ax.plot``.
 
         Returns
@@ -678,6 +952,7 @@ class SweepResult:
 
         x, xlabel = self.x_axis(x_unit)
         idxs = self._resolve_states(states, label_step)
+        show_legend = bool(label_states or legend)
 
         # --- build reference track (shape: (n_steps,) or None) ---
         ref_track: np.ndarray | None = None
@@ -708,25 +983,36 @@ class SweepResult:
 
         y_all = (self.energies - energy_offset) / scale
 
+        y_plotted = []
         for i in idxs:
             yi = y_all[:, i].copy()
             if plot_differential is True:
                 yi = yi - yi[0]
             elif ref_track is not None:
                 yi = yi - ref_track[0] / scale
+            y_plotted.append(yi)
 
-            lbl = self.label(i, label_step) if (label_states or legend) else None
+            lbl = self.tex_label(i, label_step, coupled=coupled_labels) \
+                if show_legend else None
             (line,) = ax.plot(x, yi, label=lbl, **plot_kwargs)
-            if label_states:
-                ax.annotate(lbl, (x[-1], yi[-1]), fontsize=6,
-                            va="center", ha="left",
-                            xytext=(3, 0), textcoords="offset points")
 
         ax.set_xlabel(xlabel)
         diff_suffix = " (differential)" if plot_differential is not False else ""
         ax.set_ylabel(f"Energy ({energy_unit}){diff_suffix}")
-        if legend:
-            ax.legend(fontsize=6, loc="best")
+        if show_legend:
+            ax.legend(fontsize=8, loc="best")
+
+        if xlim is not None:
+            ax.set_xlim(xlim)
+            x0, x1 = min(xlim), max(xlim)
+            mask = (x >= x0) & (x <= x1)
+            if mask.any() and y_plotted:
+                y_in_range = np.concatenate([yi[mask] for yi in y_plotted])
+                y_min, y_max = np.min(y_in_range), np.max(y_in_range)
+                span = y_max - y_min
+                pad = 0.05 * span if span > 0 else 0.05 * abs(y_max) or 1.0
+                ax.set_ylim(y_min - pad, y_max + pad)
+
         return fig, ax
 
 
@@ -839,6 +1125,14 @@ class LaserSweepResult(SweepResult):
     B_gauss: float = 0.0
     _builder: Any = field(default=None, repr=False)
 
+    # Rank m_F blocks at I = 0, where the states are the Zeeman states at
+    # B_gauss (same labels as a magnetic sweep to B_gauss); at high intensity
+    # the rotating-frame dressed states can legitimately reorder.
+    _check_rank_order = False
+
+    def _label_step(self) -> int:
+        return 0
+
     def intensity_from_splitting_shift(
         self,
         state_a: tuple, state_b: tuple,
@@ -887,10 +1181,26 @@ class LaserSweepResult(SweepResult):
         basis, using the **Zeeman-dressed** (I=0) basis for transition
         frequencies and coupling elements::
 
-            Γ_scatter = Σ_e  Γ_e · Ω_ge² / (2 · (Δ_ge² + Γ_e²/4))
+            Γ_scatter = Σ_e  γ_e · Ω_ge² / (4 · (Δ_ge² + (γ_e/2π)²/4))
 
-        where ``Ω_ge = 2 |C_ge| E₀``, ``E₀ = sqrt(2I/(ε₀c))``, and
+        i.e. ``Γ_e · ρ_ee`` summed over excited states, where
+        ``Ω_ge = 2 |C_ge| E₀``, ``E₀ = sqrt(2I/(ε₀c))``, and
         ``Δ_ge = f_laser − (E_e − E_g)``.
+
+        Units: the returned rate is in s⁻¹ — photons per second, not an
+        angular frequency.  ``γ_e = 1/τ`` plays two distinct roles:
+
+        * as the **population decay constant** it multiplies ρ_ee, and is
+          already a per-second rate (dₙ_e/dt = −γ_e n_e).  It is *not*
+          divided by 2π.  Sanity check: on resonance at full saturation
+          ρ_ee → 1/2, so the rate → γ_e/2 = 1.89×10⁷ s⁻¹ for K39 D2.
+        * as the **Lorentzian half-width** inside ρ_ee it sits next to
+          Δ_ge, so it must share Δ's frequency convention.  ``Ω_ge`` and
+          ``Δ_ge`` here are ordinary frequencies (Hz), so that occurrence
+          is ``γ_e/2π`` (= 6.005 MHz on D2, where γ_e = 2π × 6.005 MHz).
+
+        Same number, two jobs — hence the asymmetry between the prefactor
+        and the denominator.
 
         Parameters
         ----------
@@ -967,12 +1277,19 @@ class LaserSweepResult(SweepResult):
 
         rates = np.zeros(len(I_arr))
         for gamma_e, c_abs, Delta in transitions:
-            Omega = 2.0 * c_abs * E0_arr          # shape (n_I,)
+            Omega = 2.0 * c_abs * E0_arr          # Hz, shape (n_I,)
+            # gamma_e = 1/tau is a population decay CONSTANT in s^-1, so the
+            # leading factor needs no 2pi: it turns rho_ee into photons/s.
+            # Inside rho_ee, gamma_e instead plays the role of a Lorentzian
+            # half-width sitting next to Delta, so there it must match Delta's
+            # convention (Hz) and becomes gamma_e/2pi.  Same number, two jobs.
+            gamma_hz = gamma_e / (2.0 * np.pi)    # Hz
             if weak_probe:
-                denom = 2.0 * (Delta ** 2 + gamma_e ** 2 / 4.0)
+                denom = 4.0 * (Delta ** 2 + gamma_hz ** 2 / 4.0)
                 rates += gamma_e * Omega ** 2 / denom
             else:
-                denom = 2.0 * (Delta ** 2 + gamma_e ** 2 / 4.0 + Omega ** 2 / 2.0)
+                denom = 4.0 * (Delta ** 2 + gamma_hz ** 2 / 4.0
+                               + Omega ** 2 / 2.0)
                 rates += gamma_e * Omega ** 2 / denom
 
         return float(rates[0]) if scalar_in else rates
@@ -1088,7 +1405,9 @@ def sweep_intensity(builder, beam, I_max: float, n_points: int = 200,
         "rwa"   -> rotating-wave dipole coupling (couples manifolds; primary).
         "stark" -> effective AC-Stark shift operator (diagonal).
     polarization : str or {q: amplitude}
-        Laser polarization for the RWA model.
+        Laser polarization relative to the quantization (B) axis.  Used by BOTH
+        models: it sets the driven dipole matrix elements under "rwa", and the
+        vector/tensor geometry factors (beta, gamma) under "stark".
     B_gauss : float
         Optional static magnetic field added via the Zeeman operator.
     """
@@ -1107,7 +1426,8 @@ def sweep_intensity(builder, beam, I_max: float, n_points: int = 200,
         E0 = np.sqrt(2.0 * I / (c.c * c.epsilon0))
         mats = [base + coupling * e0 for e0 in E0]
     elif model == "stark":
-        Sop = builder.laser_stark_operator(beam, polarizabilities=polarizabilities)
+        Sop = builder.laser_stark_operator(beam, polarizabilities=polarizabilities,
+                                           polarization=polarization)
         mats = [H0 + Sop * inten for inten in I]
     else:
         raise ValueError("model must be 'rwa' or 'stark'.")

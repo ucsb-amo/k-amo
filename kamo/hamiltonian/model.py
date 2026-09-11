@@ -33,6 +33,7 @@ from .builder import HamiltonianBuilder
 from .diagonalize import (MagneticSweepResult, LaserSweepResult,
                           SweepResult, diagonalize, sweep_field,
                           sweep_intensity)
+from .state_labels import StateLabelMixin
 
 
 def make_nlj_basis(
@@ -50,6 +51,9 @@ def make_nlj_basis(
       (capped to ``l' ≤ n' - 1``);
     * all physically valid ``j'`` for each ``(n', l')``
       (i.e. ``j' = l' + 1/2`` and, for ``l' > 0``, also ``j' = l' - 1/2``).
+
+    K's core orbitals (3s, 3p, and everything below) are left out: they are
+    not valence states, and ARC gives them meaningless energies.
 
     Parameters
     ----------
@@ -73,14 +77,15 @@ def make_nlj_basis(
     [(4, 0, 0.5), (4, 1, 0.5), (4, 1, 1.5)]
 
     >>> make_nlj_basis(4, 0, n_range=1)
-    # n ∈ {3, 4, 5}, l ∈ {0, 1}
-    [(3, 0, 0.5), (3, 1, 0.5), (3, 1, 1.5),
-     (4, 0, 0.5), (4, 1, 0.5), (4, 1, 1.5),
+    # n ∈ {3, 4, 5}, l ∈ {0, 1}; 3s and 3p are core orbitals
+    [(4, 0, 0.5), (4, 1, 0.5), (4, 1, 1.5),
      (5, 0, 0.5), (5, 1, 0.5), (5, 1, 1.5)]
 
     >>> make_nlj_basis(59, 0, n_range=3, l_range=2)
     # matches pairinteraction default basis for Rydberg S states
     """
+    from kamo.atom_properties.hyperfine import lowest_valence_n
+
     manifolds = []
     l_lo = max(0, l - l_range)
     l_hi = l + l_range
@@ -88,6 +93,8 @@ def make_nlj_basis(
         if n_prime < 1:
             continue
         for l_prime in range(l_lo, min(l_hi, n_prime - 1) + 1):
+            if n_prime < lowest_valence_n(l_prime):
+                continue
             # j = l - 1/2 (only valid when l > 0)
             if l_prime > 0:
                 manifolds.append((n_prime, l_prime, l_prime - 0.5))
@@ -96,7 +103,7 @@ def make_nlj_basis(
     return manifolds
 
 
-class AtomicStructure:
+class AtomicStructure(StateLabelMixin):
     """Build a basis from (n, l, j) manifolds and diagonalize its Hamiltonian.
 
     Parameters

@@ -7,9 +7,11 @@ from kamo import constants as c
 class ComputeLightShift():
 
     def __init__(self,
-                atom=Potassium39(),
+                atom=None,
                 force_arc=False,
                 portal_data_parser:PortalDataParser = None):
+        if atom is None:
+            atom = Potassium39(use_portal=not force_arc)
         if portal_data_parser == None:
             self.pdp = PortalDataParser(atom=atom,force_arc=force_arc)
         else:
@@ -49,7 +51,7 @@ class ComputeLightShift():
         """
         alpha_F = self.ComputePolarizabilities.compute_complete_polarizability(n,l,j,F,mF,wavelength_m,polarization,I)
         alpha_F_SI = alpha_F * c.convert_polarizability_au_to_SI
-        state_shift_J = -1/(2*c.c*c.epsilon0) * alpha_F_SI * intensity
+        state_shift_J = c.ac_stark_shift_J(alpha_F_SI, intensity)
         state_shift_Hz = state_shift_J.astype('float64') / c.h
         return state_shift_Hz
 

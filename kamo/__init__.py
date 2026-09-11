@@ -6,18 +6,43 @@
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .atom_properties.k39 import Potassium39
-    from .gaussian_beam import GaussianBeam
+    from .trap.gaussian import GaussianBeam
+    from .trap import Crossed, LightSheet, Trap, TrapCloud, Tweezer, solve
     from .light_shift import ComputeLightShift, ComputePolarizabilities
     from .BEC_properties import bec
     from .hamiltonian import AtomicStructure
+    from .dipole_dipole import (BECCloud, CoupledDipole, CyclingTransition,
+                                PairPotential, QuasiStaticLZModel)
+    from .BEC_properties.variational import GaussianVariationalCloud
+    from .imaging import ProbeBeam, Propagator, TwoLevelResponse, UniformMixture
+    from .spin import SpinField, SpinGeometry, Sequence
 
 _lazy = {
     'Potassium39':             '.atom_properties.k39',
-    'GaussianBeam':            '.gaussian_beam',
+    'GaussianBeam':            '.trap.gaussian',
+    'Tweezer':                 '.trap',
+    'LightSheet':              '.trap',
+    'Crossed':                 '.trap',
+    'Trap':                    '.trap',
+    'TrapCloud':               '.trap',
+    'solve':                   '.trap',
     'ComputeLightShift':       '.light_shift',
     'ComputePolarizabilities': '.light_shift',
     'bec':                     '.BEC_properties',
     'AtomicStructure':         '.hamiltonian',
+    'CyclingTransition':       '.dipole_dipole',
+    'PairPotential':           '.dipole_dipole',
+    'BECCloud':                '.dipole_dipole',
+    'QuasiStaticLZModel':      '.dipole_dipole',
+    'CoupledDipole':           '.dipole_dipole',
+    'GaussianVariationalCloud': '.BEC_properties.variational',
+    'ProbeBeam':               '.imaging',
+    'Propagator':              '.imaging',
+    'TwoLevelResponse':        '.imaging',
+    'UniformMixture':          '.imaging',
+    'SpinField':               '.spin',
+    'SpinGeometry':            '.spin',
+    'Sequence':                '.spin',
 }
 
 def __getattr__(name):

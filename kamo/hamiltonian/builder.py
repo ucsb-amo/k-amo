@@ -11,11 +11,13 @@ Terms
 * ``zeeman_operator``     : paramagnetic Zeeman, returned *per Gauss*.
 * ``diamagnetic_operator``: diamagnetic term, returned *per Gauss^2*.
 * ``laser_rwa_operator``  : rotating-wave dipole coupling to a Gaussian beam.
-* ``laser_stark_operator``: effective AC-Stark shift (scalar + tensor), *per W/m^2*.
+* ``laser_stark_operator``: effective AC-Stark shift (scalar + vector + tensor,
+                            weighted by the polarization geometry), *per W/m^2*.
 """
 
 from __future__ import annotations
 
+import warnings
 from functools import lru_cache
 from typing import Dict, Optional, Tuple
 
@@ -31,18 +33,54 @@ _EV_TO_HZ = c.e / c.h                       # eV -> Hz
 _HARTREE_EV = 27.211386245988               # Hartree -> eV
 _GAUSS_TO_TESLA = 1.0e-4
 
-# K39 hyperfine electric-quadrupole B constants (Hz).  Only a few are known;
-# extend as needed.  Missing entries default to 0 (pure magnetic-dipole).
-_HYPERFINE_B_HZ: Dict[Tuple[int, int, float], float] = {
-    (4, 1, 1.5): 2.786e6,   # 4P_3/2
-}
-
-# polarization helpers: spherical amplitudes {q: amplitude}
+# polarization helpers: spherical amplitudes {q: amplitude} about the
+# quantization (B) axis.  e_0 = z_hat, e_{+-1} = -+(x_hat +- i y_hat)/sqrt(2),
+# so "linear-perp" is x_hat = (e_{-1} - e_{+1})/sqrt(2).
 _POLARIZATIONS = {
-    "pi": {0: 1.0},
+    "pi": {0: 1.0},                                    # linear, eps || B
     "sigma+": {+1: 1.0},
     "sigma-": {-1: 1.0},
+    "linear_perp": {+1: -1.0 / np.sqrt(2),             # linear, eps _|_ B
+                    -1: +1.0 / np.sqrt(2)},
 }
+
+
+def _polarization_geometry(pol: Dict[int, complex]) -> Tuple[float, float]:
+    """Return the vector and tensor geometric factors ``(beta, gamma)``.
+
+    ``pol`` is ``{q: amplitude}`` in the spherical basis about the quantization
+    (B) axis; it need not be normalized.  With ``eps = sum_q c_q e_q``,
+
+        beta  = Im[(eps x eps*)_z] = |c_-1|^2 - |c_+1|^2      (circularity)
+        gamma = (3 |eps_z|^2 - 1)/2 = (3 |c_0|^2 - 1)/2       (alignment)
+
+    which enter the shift as
+
+        alpha(m_j) = alpha_s - beta (m_j / 2j) alpha_v
+                     + gamma (3 m_j^2 - j(j+1))/(j(2j-1)) alpha_t
+
+    matching :meth:`kamo.light_shift.ComputePolarizabilities.compute_complete_polarizability`
+    (which writes the same two factors in a Cartesian basis whose 0th component
+    is the quantization axis).
+
+    Reference values::
+
+        pi            (c_0  = 1)  ->  beta =  0, gamma = +1
+        sigma+        (c_+1 = 1)  ->  beta = -1, gamma = -1/2
+        sigma-        (c_-1 = 1)  ->  beta = +1, gamma = -1/2
+        linear _|_ B              ->  beta =  0, gamma = -1/2
+
+    Note that gamma depends only on ``|c_0|^2``: every polarization orthogonal
+    to B -- circular or linear -- gives the same tensor factor -1/2.  It is
+    beta that separates them.
+    """
+    norm2 = sum(abs(complex(c)) ** 2 for c in pol.values())
+    if norm2 <= 0.0:
+        raise ValueError("polarization has zero norm.")
+    c0 = abs(complex(pol.get(0, 0.0))) ** 2 / norm2
+    cp = abs(complex(pol.get(+1, 0.0))) ** 2 / norm2
+    cm = abs(complex(pol.get(-1, 0.0))) ** 2 / norm2
+    return cm - cp, (3.0 * c0 - 1.0) / 2.0
 
 
 def _clebsch(j1, m1, j2, m2, j3, m3) -> float:
@@ -88,25 +126,33 @@ class HamiltonianBuilder:
     def h0(self, include_quadrupole: bool = True) -> np.ndarray:
         """Field-free Hamiltonian (Hz): fine structure + hyperfine ``A (I.J)``.
 
+        A and B come from :func:`kamo.atom_properties.hyperfine.hyperfine_constants`
+        (39K): the measured value unless theory is at least twice as precise,
+        with n*^3 extrapolation beyond both. A manifold with no A at all
+        (l >= 3, core orbitals) gets none, with a warning.
+
         Parameters
         ----------
         include_quadrupole : bool
-            Add the electric-quadrupole term for manifolds with a known B
-            constant (currently 4P_3/2).
+            Add the electric-quadrupole ``B`` term (j > 1/2 manifolds).
         """
+        from kamo.atom_properties.hyperfine import hyperfine_constants
+
         dim = self.basis.dim
         H = np.zeros((dim, dim), dtype=float)
 
         for man, sl in self.basis.manifold_slices():
             e_fine = self.atom.getEnergy(man.n, man.l, man.j) * _EV_TO_HZ - self._e_ref_hz
-            _A = c.get_hyperfine_constant(man.l, man.j, n=man.n)
-            A_hz = (_A / c.h) if _A is not None else 0.0  # A carries h; None → no hf data for this state
+            hfs = hyperfine_constants(man.n, man.l, man.j)
+            if not hfs.has_A:
+                warnings.warn(f"No hyperfine A constant for manifold {man.nlj}; "
+                              "leaving its hyperfine structure out.")
             IJ = self._ij_operator(man.j, self.I)
-            block = e_fine * np.eye(man.dim) + A_hz * IJ
+            block = e_fine * np.eye(man.dim) + hfs.A_Hz * IJ
 
             if include_quadrupole:
-                B_hz = _HYPERFINE_B_HZ.get((man.n, man.l, man.j), 0.0)
-                if B_hz != 0.0 and man.j > 0.5:
+                B_hz = hfs.B_Hz
+                if B_hz != 0.0 and man.j > 0.5 and self.I > 0.5:
                     jj = man.j * (man.j + 1)
                     ii = self.I * (self.I + 1)
                     denom = 2 * self.I * (2 * self.I - 1) * man.j * (2 * man.j - 1)
@@ -153,7 +199,7 @@ class HamiltonianBuilder:
         dim = self.basis.dim
         diag = np.zeros(dim, dtype=float)
         for s in self.basis:
-            g_j = c.get_total_electronic_g_factor(s.l, s.j)
+            g_j = c.get_total_electronic_g_factor(s.l, s.j, n=s.n)
             val = c.mu_b * (g_j * s.m_j + c.g_I * s.m_i) / c.h  # Hz per Tesla
             diag[s.index] = val * _GAUSS_TO_TESLA               # Hz per Gauss
         return np.diag(diag)
@@ -315,6 +361,8 @@ class HamiltonianBuilder:
 
         dim = self.basis.dim
         coupling = np.zeros((dim, dim), dtype=complex)
+        sign_uncertain = getattr(self.atom, "portal_sign_uncertain", None)
+        uncertain_pairs = set()
 
         for a in self.basis:
             for b in self.basis:
@@ -322,6 +370,9 @@ class HamiltonianBuilder:
                     continue
                 if abs(a.l - b.l) != 1:
                     continue
+                if sign_uncertain is not None and sign_uncertain(
+                        a.n, a.l, a.j, b.n, b.l, b.j):
+                    uncertain_pairs.add(((a.n, a.l, a.j), (b.n, b.l, b.j)))
                 if abs(a.m_i - b.m_i) > 1e-9:      # nuclear spin is a spectator
                     continue
                 d_tot = 0.0
@@ -339,6 +390,13 @@ class HamiltonianBuilder:
                 coupling[a.index, b.index] = val
                 coupling[b.index, a.index] = np.conj(val)
 
+        if uncertain_pairs:
+            warnings.warn(
+                "ARC's sign for these couplings is uncertain (its magnitude "
+                f"disagrees with the UDel portal's): {sorted(uncertain_pairs)}. "
+                "Results that depend on interference between couplings may be "
+                "wrong.")
+
         frame = np.zeros(dim, dtype=float)
         for man, sl in self.basis.manifold_slices():
             frame[sl] = -pidx[man.nlj] * f_laser
@@ -346,36 +404,72 @@ class HamiltonianBuilder:
         return {"coupling": coupling, "frame_shift": frame, "f_laser": f_laser}
 
     def laser_stark_operator(self, beam, polarizabilities=None,
-                             include_tensor: bool = True) -> np.ndarray:
+                             include_tensor: bool = True,
+                             polarization="pi",
+                             include_vector: bool = True) -> np.ndarray:
         """Effective AC-Stark operator *per W/m^2* (Hz per W/m^2).
 
         ``H_stark(I) = laser_stark_operator(beam) * I``.
 
-        Uses scalar (and optionally tensor) polarizabilities from
-        :class:`kamo.light_shift.ComputePolarizabilities` evaluated at the beam
-        wavelength.  Diagonal in the uncoupled basis.
+        Scalar, vector and tensor polarizabilities come from
+        :class:`kamo.light_shift.ComputePolarizabilities` at the beam
+        wavelength; the operator is diagonal in the uncoupled basis,
+
+            alpha(m_j) = alpha_s - beta (m_j / 2j) alpha_v
+                         + gamma (3 m_j^2 - j(j+1))/(j(2j-1)) alpha_t
+
+        with ``(beta, gamma)`` the polarization geometry factors from
+        :func:`_polarization_geometry`.
+
+        Parameters
+        ----------
+        polarization : str or {q: amplitude}
+            Polarization relative to the quantization (B) axis -- the SAME
+            argument :meth:`laser_rwa_operator` takes.  ``"pi"`` (default) is
+            linear along B and gives ``gamma = +1``; ``"linear_perp"``,
+            ``"sigma+"`` and ``"sigma-"`` are all perpendicular to B and give
+            ``gamma = -1/2``, differing only through ``beta``.
+        include_tensor, include_vector : bool
+            Drop the rank-2 / rank-1 terms.  The vector term vanishes anyway
+            for any linear polarization (``beta = 0``), and the tensor term
+            vanishes for ``j = 1/2``.
+
+        Notes
+        -----
+        Before 2026-09, this method ignored ``polarization`` entirely and
+        hardwired ``gamma = +1`` while dropping the vector term.  ``"pi"``
+        reproduces that behaviour exactly, so the default is unchanged; any
+        other polarization now gives a different (correct) answer.
         """
         if polarizabilities is None:
             from kamo import ComputePolarizabilities
-            # force_arc=True uses ARC dipole elements directly and avoids the
-            # portal-data (pandas) code path.
-            polarizabilities = ComputePolarizabilities(force_arc=True)
+            # UDel-portal matrix elements and wavelengths, unless the atom was
+            # built with use_portal=False (or is a plain ARC atom).
+            polarizabilities = ComputePolarizabilities(
+                atom=self.atom,
+                force_arc=not getattr(self.atom, "use_portal", False))
+
+        beta, gamma = _polarization_geometry(
+            self._resolve_polarization(polarization))
 
         dim = self.basis.dim
         diag = np.zeros(dim, dtype=float)
         # U = -1/(2 eps0 c) * alpha_SI * I ; convert alpha au->SI, energy->Hz
-        pre = -1.0 / (2 * c.epsilon0 * c.c) * c.convert_polarizability_au_to_SI / c.h
+        pre = c.ac_stark_shift_J(c.convert_polarizability_au_to_SI, 1.0) / c.h
 
         for man, sl in self.basis.manifold_slices():
             a_s, a_v, a_t = polarizabilities.compute_fine_structure_polarizability(
                 man.n, man.l, man.j, beam.wavelength)
             a_s = float(np.atleast_1d(a_s)[0])
+            a_v = float(np.atleast_1d(a_v)[0]) if a_v is not None else 0.0
             a_t = float(np.atleast_1d(a_t)[0]) if a_t is not None else 0.0
+            j = man.j
             for s in self.basis.state_list[sl]:
                 shift = pre * a_s
-                if include_tensor and man.j > 0.5 and a_t != 0.0:
-                    j = man.j
+                if include_vector and beta != 0.0 and a_v != 0.0:
+                    shift -= pre * beta * (s.m_j / (2 * j)) * a_v
+                if include_tensor and j > 0.5 and gamma != 0.0 and a_t != 0.0:
                     tens = (3 * s.m_j ** 2 - j * (j + 1)) / (j * (2 * j - 1))
-                    shift += pre * a_t * tens
+                    shift += pre * gamma * a_t * tens
                 diag[s.index] = shift
         return np.diag(diag)

@@ -9,6 +9,7 @@ authors = [
 dependencies = [
     "arc",
     "numpy",
+    "pandas",
     "scipy",
     "sympy",
     "matplotlib",
