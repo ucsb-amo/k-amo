@@ -27,9 +27,11 @@ class ScatteringModel:
     ----------
     B_max : float
         Upper field for the internal threshold sweep (Gauss).
-    backend : {"empirical", "mqdt"} or backend instance
-        Engine used to compute a(B).  "mqdt" is currently UNVALIDATED (raises
-        on a(B) but exposes the verified frame-transform machinery).
+    backend : {"empirical", "cc", "mqdt"} or backend instance
+        Engine used to compute a(B).  "empirical" (default, fast, analytic)
+        covers the six channels with measured resonances; "cc" is the
+        calibrated coupled-channels solver (any channel, complex a, ~50 ms
+        per field); "mqdt" exposes the frame transform only (a(B) raises).
     dB : float
         Threshold sweep step (Gauss).
     """
@@ -38,8 +40,7 @@ class ScatteringModel:
         self.thresholds = K39Thresholds(B_max_gauss=B_max, dB_gauss=dB)
         self.backend = self._make_backend(backend)
 
-    @staticmethod
-    def _make_backend(backend):
+    def _make_backend(self, backend):
         if isinstance(backend, str):
             if backend == "empirical":
                 from .backends.empirical import EmpiricalBackend
@@ -49,7 +50,7 @@ class ScatteringModel:
                 return MQDTBackend()
             if backend in ("cc", "coupled_channels"):
                 from .backends.coupled_channels import CoupledChannelsBackend
-                return CoupledChannelsBackend(B_max=self.thresholds.B_max)
+                return CoupledChannelsBackend(thresholds=self.thresholds)
             raise ValueError(
                 f"Unknown backend {backend!r}; use 'empirical', 'cc', or 'mqdt'.")
         return backend
@@ -81,11 +82,16 @@ class ScatteringModel:
         return _ch.background_scattering_length_a0(ch, a_S, a_T)
 
     def resonances(self, state_a, state_b) -> List[kp.FeshbachResonance]:
-        """Provisional tabulated resonances for the channel."""
+        """Tabulated s-wave resonances of the channel (empirical model)."""
         return kp.resonances_for(state_a, state_b)
 
+    def measured_resonances(self, state_a, state_b, include_alternatives: bool = False):
+        """Measured resonances of the channel from the literature database."""
+        from .data import k39_feshbach as kf
+        return kf.resonances_for(state_a, state_b, include_alternatives)
+
     def zero_crossings(self, state_a, state_b) -> List[float]:
-        """Provisional a=0 zero-crossing fields (Gauss) for the channel."""
+        """Measured a=0 zero-crossing fields (Gauss) for the channel."""
         return kp.zero_crossings_for(state_a, state_b)
 
     # -- inelastic / open-channel bookkeeping (M_F conserving) --------------

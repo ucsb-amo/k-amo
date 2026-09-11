@@ -4,7 +4,9 @@ Run:  python -m kamo.scattering.examples.demo_target_channels
 
 Shows real (elastic) a(B) for |1,-1>+|1,-1>, |1,0>+|1,0>, |1,-1>+|1,0> and the
 differential a between the |1,-1> and |1,0> intra-channels (the quantity that
-drives density-dependent differential dephasing).  Parameters are PROVISIONAL.
+drives density-dependent differential dephasing).  Uses the empirical backend
+(measured resonances, :mod:`kamo.scattering.data.k39_feshbach`); pass
+``backend="cc"`` to ScatteringModel for the calibrated coupled channels.
 """
 
 from __future__ import annotations

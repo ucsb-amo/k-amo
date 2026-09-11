@@ -2,7 +2,6 @@ import arc
 from arc.wigner import Wigner6j, Wigner3j
 import numpy as np
 import kamo.constants as c
-import csv
 # import pairinteraction.real as pi
 
 dv = -1000.
@@ -1729,83 +1728,45 @@ class Potassium39(arc.Potassium39):
         
         return dct[key]
 
-    def get_scattering_length(self,f,mf,b,
-                              interp=False):
-        """Get the scattering length for the state (f,mf) at the given field b (G).
+    def get_scattering_length(self, f, mf, b, f2=None, mf2=None,
+                              interp=False, method='table', return_complex=False):
+        """s-wave scattering length (a0) of the pair |f,mf> + |f2,mf2> at field b (G).
+
+        Thin wrapper around :func:`kamo.scattering.lookup.scattering_length`.
 
         Args:
-            f (int): The nuclear quantum number F.
-            mf (int): The magnetic sublevel quantum number m_F.
-            b (float): The magnetic bias field in Gauss.
-            interp (bool, optional): If True, will interpolate the scattering
-            length. Defaults to False.
+            f (int), mf (int): hyperfine state of the first atom.
+            b (float or array): magnetic field in Gauss.
+            f2 (int), mf2 (int), optional: state of the second atom.  Omit both
+                for two atoms in |f,mf>.
+            interp (bool, optional): method='kokkelmans' only; interpolate the
+                0.5 G table instead of taking the nearest point.
+            method (str, optional):
+                'table' (default): the calibrated coupled-channels model,
+                    precomputed for all 36 pairs of ground states on 0-1000 G and
+                    shipped with kamo.  Instant.
+                'cc': the same model computed directly (~1.5 s setup, then
+                    ~40-90 ms per field, memoised).
+                'empirical': measured-resonance model.  Instant, but only for the
+                    F=1 channels with measured resonances.
+                'kokkelmans': S. Kokkelmans' tables on the Tweezers G: drive
+                    (same-state pairs only).
+            return_complex (bool, optional): return a_re - i a_im (lossy
+                channels, e.g. F=2) instead of the real part.
+
+        Returns:
+            float for scalar b, else ndarray of b's shape.
+
+        Raises:
+            ValueError: invalid states, only one of f2/mf2 given, no data for
+                the pair with this method, or b outside the method's range.
         """
-
-        if not isinstance(b,np.ndarray) or isinstance(b,list):
-            b = np.array([b])
-        elif isinstance(b,list):
-            b = np.array(b)
-
-        def find_nearest_b_idx(b,b_list):
-            return np.argmin(np.abs(b_list - b ))
-        
-        def read_data(path,bdata=False):
-            with open(path,'r') as fd:
-                reader = csv.reader(fd)
-                d = []
-                for row in reader:
-                    d.append(row)
-                float_data = []
-                for n in range(len(d)):
-                    if bdata:
-                        float_data.append(float(d[n][0]))
-                    else:
-                        float_data.append(float(d[n][0][:25]))
-                float_data = np.array(float_data)
-            return float_data
-
-        Bval = read_data('B:/_K/Resources/scattering_lengths/Kokkelmans_data_2/aa_1G_1000G/Bval.txt',bdata=True)
-        Bval = np.array(Bval)
-
-        if f==1:
-            if mf==-1:
-                dpath = 'B:/_K/Resources/scattering_lengths/Kokkelmans_data_2/cc_1G_1000G/data.txt'
-
-            elif mf==0:
-                dpath = 'B:/_K/Resources/scattering_lengths/Kokkelmans_data_2/bb_1G_1000G/data.txt'
-
-            elif mf==1:
-                dpath = 'B:/_K/Resources/scattering_lengths/Kokkelmans_data_2/aa_1G_1000G/data.txt'
-        
-        elif f==2:
-            if mf==-2:
-                dpath = 'B:/_K/Resources/scattering_lengths/Kokkelmans_data_2/dd_1G_1000G/data.txt'
-        
-            elif mf==-1:
-                dpath = 'B:/_K/Resources/scattering_lengths/Kokkelmans_data_2/ee_1G_1000G/data.txt'
-
-            elif mf==0:
-                dpath = 'B:/_K/Resources/scattering_lengths/Kokkelmans_data_2/ff_1G_1000G/data.txt'
-
-            elif mf==1:
-                dpath = 'B:/_K/Resources/scattering_lengths/Kokkelmans_data_2/gg_1G_1000G/data.txt'
-
-            elif mf==2:
-                dpath = 'B:/_K/Resources/scattering_lengths/Kokkelmans_data_2/hh_1G_1000G/data.txt'
-
-        data = read_data(dpath)
-
-        if interp:
-            scattering_length = np.interp(b, Bval, data)
-        else:
-            scattering_length = np.zeros(b.shape)
-            for n in range(len(b)):
-                scattering_length[n] = data[find_nearest_b_idx(b[n],Bval)]
-
-        if len(scattering_length) == 1:
-            scattering_length = scattering_length[0]
-
-        return scattering_length
+        from kamo.scattering.lookup import scattering_length
+        if (f2 is None) != (mf2 is None):
+            raise ValueError("give both f2 and mf2, or neither (same-state pair)")
+        second = None if f2 is None else (f2, mf2)
+        return scattering_length((f, mf), second, b, method=method, interp=interp,
+                                 return_complex=return_complex)
     
     def state_label(self,
                     n,l,j,

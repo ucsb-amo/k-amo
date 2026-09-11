@@ -1,35 +1,52 @@
-"""K39 scattering parameters — LITERATURE-VERIFIED (deep-research pass 2026-07-24).
+"""K39 scattering parameters for the empirical backend (literature-verified).
 
-Every value below was confirmed by an adversarial multi-source verification pass
-(24/25 claims 3-0) against the primary references:
+Resonance table
+---------------
+Built from the measured-resonance database :mod:`.k39_feshbach` (deep-research
+pass 2026-09-10): experimental positions ``B0`` (Etrych 2023, Chapurin 2019,
+D'Errico 2007, Tanzi 2018), with widths / local backgrounds from Etrych's
+coupled-channels characterisation (experiments measure positions and at best
+the pole strength ``a_bg*Delta``, not the split).  Six channels: the three
+F=1 intra channels plus the |1,1>+|1,0>, |1,1>+|1,-1> and |1,0>+|1,-1>
+mixtures.
 
-  * Falke et al., PRA 78, 012503 (2008)          [arXiv:0804.2949]  — a_S, a_T, C6
-  * D'Errico et al., NJP 9, 223 (2007)           [arXiv:0705.3036]  — a_S,a_T,C6, resonances
-  * Chapurin et al., PRL 123, 233402 (2019)      [arXiv:1907.00729] — 33.582 G anchor, refined a_S/a_T
-  * Etrych et al., PRResearch 5, 013174 (2023)   [arXiv:2208.13766] — precise resonance/zero-crossing map
+Model
+-----
+Sum-of-poles form (as Chapurin et al. 2019, Suppl. Eq. S4)::
 
-Units: scattering lengths in Bohr radii (a0); C6 in atomic units; fields in Gauss.
+    a(B) = b(B) - sum_i s_i / (B - B0_i)       s_i = a_bg,i * Delta_i  (pole strength)
 
-MODEL NOTE — the empirical a(B) uses the multi-resonance product form
-``a(B) = a_bg_channel * prod_i (1 - Delta_i/(B - B0_i))`` with ONE background per
-channel (A_BG_CHANNEL) and per-resonance width Delta_i.  Etrych's per-resonance
-``a_bg`` are *local* backgrounds (the other poles' tails reduce the single
-channel background to the local value near each pole), so they are stored for
-reference only; the product form reconstructs them.  Where a resonance has a
-reported zero-crossing B_zero we set ``Delta = B_zero - B0`` (self-consistent
-with Etrych's coupled-channel Delta to <1 G, and makes a(B_zero)=0 exact).
+``b(B)`` is a slowly varying background, piecewise linear through anchors
+placed at every pole (``b = a_bg,i`` minus the other poles' tails there), at
+measured zero crossings not within 5 G of a pole (there ``a = 0`` exactly),
+and at published coupled-channels values more than 10 G from any pole
+(``k39_feshbach.THEORY_POINTS``).  Unlike the product form
+``a_bg * prod(1 - Delta_i/(B - B0_i))`` this does not force spurious zeros
+between overlapping resonances (|1,-1>: 33.6 G and 162.4 G).  For lossy
+channels ``B - B0_i`` becomes ``B - B0_i - i gamma_i/2`` (``gamma_i > 0``),
+giving ``a = a_re - i a_im`` with ``a_im >= 0``.
+
+Singlet/triplet constants
+-------------------------
+``a_S``/``a_T`` below are the Falke 2008 values; the coupled-channels fit to the
+resonance database is in :mod:`.k39_calibration`, and other literature values
+in ``k39_feshbach.SINGLET_TRIPLET_LITERATURE``.  Units: a0, a.u., Gauss.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from functools import lru_cache
+from typing import Callable, List, Optional, Tuple
+
+import numpy as np
+
+from . import k39_feshbach as kf
 
 PARAMS_VERIFIED = True
 
 # --------------------------------------------------------------------------
 # Singlet / triplet background scattering lengths and van der Waals C6.
-# Canonical (with error bars): Falke 2008.  Best central estimate: Chapurin 2019.
 # --------------------------------------------------------------------------
 A_SINGLET_A0 = 138.49       # X^1 Sigma_g+  a_S [a0]  Falke 2008 (pot. B, BO-corrected)
 A_SINGLET_UNC_A0 = 0.12
@@ -42,27 +59,25 @@ A_TRIPLET_CHAPURIN_A0 = -33.40
 C6_AU = 3921.0              # K2 dispersion coeff [a.u.]  D'Errico 2007 fit
 C6_UNC_AU = 8.0
 # Alternatives (all give R_vdW = 64.5-64.6 a0): Derevianko 3897(15); Falke ~3925.9.
-C8_AU = None               # not confirmed by verified sources
+C8_AU = None
 _ST_SOURCE = "Falke 2008 (a_S,a_T); D'Errico 2007 (C6=3921(8)); Chapurin 2019 central"
 
 
 @dataclass(frozen=True)
 class FeshbachResonance:
-    """One magnetic Feshbach resonance in a specified collision channel.
-
-    a(B) near an isolated pole is ``a_bg * (1 - width/(B - B0))``; the channel
-    a(B) multiplies the ``(1 - width/(B-B0))`` factors against a single
-    ``A_BG_CHANNEL`` background (see module docstring).
+    """One s-wave Feshbach resonance of a collision channel (empirical model).
 
     Attributes
     ----------
-    B0_gauss : resonance position (Gauss), experimental.
-    width_gauss : magnetic width Delta (Gauss); sign carries into the formula.
-    a_bg_a0 : *local* background scattering length near this pole (a0), Etrych.
-    zero_crossing_gauss : reported a=0 field (Gauss) tied to this pole, or None.
-    decay_gauss : inelastic width Gamma_inel (Gauss) if the pole is lossy, else None.
+    B0_gauss : resonance position (G), experimental where measured.
+    width_gauss : magnetic width Delta (G), ``B_zero = B0 + Delta`` for an isolated pole.
+    a_bg_a0 : *local* background near this pole (a0), Etrych CC.
+    zero_crossing_gauss : measured ``a = 0`` field tied to this pole, or None.
+    decay_gauss : inelastic width gamma (G, > 0) for lossy channels, else None.
     source : provenance.
-    verified : True if B0/Delta are literature-verified; False if Delta estimated.
+    verified : True for a measured position; False for theory-only.
+    pole_strength_a0G : ``a_bg*Delta`` (a0 G); measured where reported, else
+        ``a_bg_a0 * width_gauss``.
     """
 
     B0_gauss: float
@@ -72,6 +87,13 @@ class FeshbachResonance:
     decay_gauss: Optional[float] = None
     source: str = ""
     verified: bool = True
+    pole_strength_a0G: Optional[float] = None
+
+    @property
+    def pole_strength(self) -> float:
+        if self.pole_strength_a0G is not None:
+            return self.pole_strength_a0G
+        return self.a_bg_a0 * self.width_gauss
 
 
 def channel_key(state_a: Tuple[int, int], state_b: Tuple[int, int]):
@@ -79,57 +101,71 @@ def channel_key(state_a: Tuple[int, int], state_b: Tuple[int, int]):
     return frozenset((tuple(state_a), tuple(state_b)))
 
 
-_ET = "Etrych et al. PRResearch 5, 013174 (2023)"
-_DE = "D'Errico et al. NJP 9, 223 (2007)"
-_CH = "Chapurin et al. PRL 123, 233402 (2019)"
+def _build_tables():
+    res, zcs = {}, {}
+    for z in kf.ZERO_CROSSINGS:
+        zcs.setdefault(channel_key(z.state_a, z.state_b), []).append(z.B_zero)
+    for r in kf.RESONANCES + kf.THEORY_ONLY:
+        if r.partial_wave != 's' or r.width_theory is None or r.a_bg_theory is None:
+            continue
+        key = channel_key(r.state_a, r.state_b)
+        zc = [z for z in zcs.get(key, []) if abs(z - (r.B0 + r.width_theory)) < 2.0]
+        decay = -r.gamma_inel_theory if (r.lossy and r.gamma_inel_theory) else None
+        res.setdefault(key, []).append(FeshbachResonance(
+            r.B0, r.width_theory, r.a_bg_theory, zc[0] if zc else None, decay,
+            r.source, r.B0_unc > 0, r.pole_strength))
+    for k in res:
+        res[k].sort(key=lambda x: x.B0_gauss)
+    for k in zcs:
+        zcs[k].sort()
+    return res, zcs
 
-# Single per-channel background used by the product form (a0).
-A_BG_CHANNEL = {
-    channel_key((1, -1), (1, -1)): -29.10,   # Etrych local a_bg @ 561 G (tails ~1)
-    channel_key((1, 0),  (1, 0)):  -18.0,    # D'Errico low-field |1,0> background
-    channel_key((1, 1),  (1, 1)):  -29.52,   # Etrych local a_bg @ 402 G
-}
 
-# --------------------------------------------------------------------------
-# PHYSICS NOTE (kamo thresholds + Etrych Gamma_inel): the F=1 lower manifold has
-# mF=+1 lowest (g_F<0), so |1,+1>+|1,+1> is the ABSOLUTE ground pair (Etrych
-# Gamma_inel=0 for its 402 G resonance).  Within F=1, |1,0>+|1,0> is the lowest
-# M_F=0 pair and |1,-1>+|1,-1> the unique M_F=-2 pair, so all three are elastic
-# at threshold (no open spin-exchange channel).  |1,-1>'s 33.6 G resonance has a
-# tiny dipolar Gamma_inel~1e-4 G (negligible) -> a treated as real. Verify with
-# ScatteringModel.is_lossy.
-# --------------------------------------------------------------------------
-RESONANCES = {
-    # |1,-1> + |1,-1>  (Delta: theory for 33.6/162; B_zero-B0 for 561)
-    channel_key((1, -1), (1, -1)): [
-        FeshbachResonance(33.5820,  79.469, -13.50, None,  None, _CH + "/" + _ET),  # Gamma_inel~1e-4 G negligible
-        FeshbachResonance(162.36,  -60.628, -11.73, None,  None,   _ET),
-        FeshbachResonance(561.14,  504.9 - 561.14, -29.10, 504.9, None, _ET),
-    ],
-    # |1,0> + |1,0>  (Delta = B_zero-B0 for 472/491; 58.97/65.57 narrow, est.)
-    channel_key((1, 0), (1, 0)): [
-        FeshbachResonance(58.97,   -0.5,  -18.0, None, None, _ET + " (Delta est.)", False),
-        FeshbachResonance(65.57,   -0.5,  -18.0, None, None, _ET + " (Delta est.)", False),
-        FeshbachResonance(472.33,  393.2 - 472.33, -18.0, 393.2, None, _ET),
-        FeshbachResonance(491.17,  490.1 - 491.17, -133.43, 490.1, None, _ET),
-    ],
-    # |1,+1> + |1,+1>  (absolute ground pair; 402 = B_zero-B0; 25.9/752 narrow, est.)
-    channel_key((1, 1), (1, 1)): [
-        FeshbachResonance(25.91,   -0.5,  -33.0, None, None, _DE + " (Delta est.)", False),
-        FeshbachResonance(402.74,  350.4 - 402.74, -29.52, 350.4, 0.0, _ET),
-        FeshbachResonance(752.3,   -0.4,  -35.0, None, None, _DE + " (Delta est.)", False),
-    ],
-    # inter/mixed |1,-1> + |1,0>: NOT separately tabulated in the literature
-    # (Etrych/D'Errico give intra channels only). Left empty deliberately;
-    # this channel is elastic at threshold (is_lossy False).
-}
+RESONANCES, ZERO_CROSSINGS_GAUSS = _build_tables()
 
-# Experimentally-used a=0 zero-crossing fields (Gauss), verified.
-ZERO_CROSSINGS_GAUSS = {
-    channel_key((1, 1),  (1, 1)):  [350.4],   # D'Errico 350.4(4); Etrych 350.4(1)
-    channel_key((1, -1), (1, -1)): [504.9],   # Etrych 504.9(2) (561 G resonance)
-    channel_key((1, 0),  (1, 0)):  [393.2, 490.1],  # Etrych
-}
+
+def _pole_sum(res: List[FeshbachResonance], B, skip: Optional[int] = None):
+    return sum(r.pole_strength / (B - r.B0_gauss)
+               for i, r in enumerate(res) if i != skip)
+
+
+@lru_cache(maxsize=None)
+def _background_anchors(key) -> Tuple[Tuple[float, float], ...]:
+    res = RESONANCES.get(key, [])
+    poles = [(r.B0_gauss, r.a_bg_a0 + _pole_sum(res, r.B0_gauss, skip=i))
+             for i, r in enumerate(res)]
+    zeros = [(Bz, _pole_sum(res, Bz)) for Bz in ZERO_CROSSINGS_GAUSS.get(key, [])
+             if all(abs(Bz - r.B0_gauss) > 5.0 for r in res)]   # a(Bz) = 0 exactly
+    # The local a_bg of strongly overlapping poles absorbs part of the
+    # neighbour's tail, so the implied background can be inconsistent (|1,0>
+    # at 58.97 G gives -56 a0 against ~-24 elsewhere): reject pole anchors
+    # more than 15 a0 from the channel median.  Measured zeros are kept.
+    med = np.median([p[1] for p in poles + zeros])
+    pts = [p for p in poles if abs(p[1] - med) < 15.0] + zeros
+    # published coupled-channels values far (> 10 G) from any pole pin the
+    # background where no resonance data exist (|1,-1>+|1,0> near 56 G)
+    for a_, b_, B, a_pub, _model, _src in kf.THEORY_POINTS:
+        if channel_key(a_, b_) == key and all(abs(B - r.B0_gauss) > 10.0 for r in res):
+            pts.append((B, a_pub + _pole_sum(res, B)))
+    pts = sorted(pts or poles)
+    merged = [list(pts[0])]
+    for B, b in pts[1:]:                     # average anchors closer than 1 G
+        if B - merged[-1][0] < 1.0:
+            n = merged[-1][2] if len(merged[-1]) > 2 else 1
+            merged[-1] = [(merged[-1][0] * n + B) / (n + 1), (merged[-1][1] * n + b) / (n + 1), n + 1]
+        else:
+            merged.append([B, b])
+    return tuple((m[0], m[1]) for m in merged)
+
+
+def background_function(state_a, state_b) -> Callable:
+    """Smooth background ``b(B)`` (a0) of the sum-of-poles model for the channel."""
+    anchors = _background_anchors(channel_key(state_a, state_b))
+    if not anchors:
+        raise KeyError(f"no resonances tabulated for {state_a}+{state_b}")
+    xs = np.array([p[0] for p in anchors])
+    ys = np.array([p[1] for p in anchors])
+    return lambda B: np.interp(B, xs, ys)
 
 
 def singlet_triplet():
@@ -138,14 +174,16 @@ def singlet_triplet():
 
 
 def background_channel(state_a, state_b) -> Optional[float]:
-    """Single per-channel background a_bg (a0) for the product form, or None."""
-    return A_BG_CHANNEL.get(channel_key(state_a, state_b))
+    """Mean background (a0) of the channel's empirical model, or None."""
+    anchors = _background_anchors(channel_key(state_a, state_b))
+    return float(np.mean([p[1] for p in anchors])) if anchors else None
 
 
 def resonances_for(state_a, state_b) -> List[FeshbachResonance]:
-    """Verified resonance list for the {state_a, state_b} channel ([] if none)."""
+    """Tabulated s-wave resonances for the {state_a, state_b} channel ([] if none)."""
     return list(RESONANCES.get(channel_key(state_a, state_b), []))
 
 
 def zero_crossings_for(state_a, state_b) -> List[float]:
+    """Measured a=0 fields (Gauss) of the channel."""
     return list(ZERO_CROSSINGS_GAUSS.get(channel_key(state_a, state_b), []))

@@ -2,10 +2,8 @@
 
 Two tiers:
   * INTERNAL — self-validating physics/algebra that needs no fitted params.
-    These MUST pass.
-  * GROUND-TRUTH — checks against literature values.  Marked xfail while the
-    K39 parameters remain provisional (deep-research pass rate-limited
-    2026-07-24); flip to real assertions once k39_params is verified.
+  * GROUND-TRUTH — checks against the literature resonance database
+    (:mod:`kamo.scattering.data.k39_feshbach`).
 """
 
 import numpy as np
@@ -167,11 +165,64 @@ def test_anchor_position_exact(model):
 
 
 @pytest.mark.parametrize("channel,B_zero", [
-    (((1, 1), (1, 1)), 350.4),            # D'Errico/Etrych
+    (((1, 1), (1, 1)), 350.4),            # Fattori 2008
     (((1, -1), (1, -1)), 504.9),          # Etrych
     (((1, 0), (1, 0)), 393.2),
-    (((1, 0), (1, 0)), 490.1),
+    (((1, 0), (1, 0)), 490.1),            # 1 G from the narrow 491.17 G pole
+    (((1, 0), (1, 0)), 43.0),             # Roy 2013, 43(2)
 ])
 def test_zero_crossings(model, channel, B_zero):
-    a = float(np.real(model.scattering_length(*channel, B_zero)))
-    assert abs(a) < 1.0                   # a = 0 at the reported crossing
+    from kamo.scattering.resonances import find_features
+    _, zeros = find_features(lambda B: model.scattering_length(*channel, B),
+                             B_zero - 1.0, B_zero + 1.0, dB=0.01)
+    assert zeros and min(abs(z - B_zero) for z in zeros) < 0.1
+
+
+def test_empirical_interstate_channel(model):
+    # |1,0>+|1,-1> is tabulated now (Tanzi 2018 / Etrych 2023)
+    a = model.inter((1, -1), (1, 0), np.array([113.70, 113.82]))
+    assert np.sign(a[0]) != np.sign(a[1]) and np.all(np.abs(a) > 1000)
+
+
+def test_empirical_lossy_channel_complex(model):
+    a = model.inter((1, 1), (1, -1), 77.6)
+    assert np.iscomplexobj(a) and a.imag < 0
+
+
+def test_resonance_tools_on_analytic_model():
+    from kamo.scattering.resonances import find_features, locate_pole, characterize
+    # wide pole at 100 G (Delta=-40, zero at 60) + narrow one at 100.8 G
+    # (Delta=-0.5) whose zero at 100.3 G is nearer the wide pole than its own
+    # zero -- the 472/491 G |1,0> geometry
+    abg = -30.0
+    a = lambda B: abg * (1 - (-40.0) / (B - 100.0)) * (1 - (-0.5) / (B - 100.8))
+    poles, zeros = find_features(a, 50.0, 120.0, dB=0.05)
+    assert np.allclose(poles, [100.0, 100.8], atol=1e-5)
+    assert np.allclose(zeros, [60.0, 100.3], atol=1e-5)
+    assert abs(locate_pole(a, 99.5) - 100.0) < 1e-5
+    assert abs(characterize(a, 100.0).zero_crossing - 100.3) < 1e-4    # nearest: the neighbour's
+    fit = characterize(a, 100.0, side=-1)                              # sign(Delta) hint
+    assert abs(fit.zero_crossing - 60.0) < 1e-4 and abs(fit.width + 40.0) < 1e-4
+    assert abs(fit.pole_strength - abg * (-40.0) * (1 + 0.5 / (100.0 - 100.8))) < 0.1
+    # lossy pole: residue must survive the inelastic smoothing
+    gam = 0.01
+    al = lambda B: -30.0 - 900.0 / (B - 80.0 - 0.5j * gam)
+    assert abs(characterize(al, 80.0, zero_search=5.0).pole_strength - 900.0) < 20.0
+    assert abs(locate_pole(al, 79.7, half_window=0.5) - 80.0) < 1e-4   # Re a is finite there
+
+
+def test_cc_backend_constructs():
+    # regression: _make_backend used `self` inside a staticmethod
+    m = ScatteringModel(B_max=100.0, backend="cc")
+    assert np.isfinite(m.intra((1, -1), 50.0))
+
+
+def test_measured_database_consistency():
+    from kamo.scattering.data import k39_feshbach as kf
+    for r in kf.RESONANCES:
+        assert r.B0_unc > 0 and r.partial_wave == "s"
+        if r.B0_theory is not None:
+            assert abs(r.B0_theory - r.B0) < 0.5
+        if r.width_theory is not None and r.a_bg_theory is not None and r.pole_strength:
+            # measured pole strength vs theory a_bg*Delta within 15%
+            assert abs(r.pole_strength / (r.a_bg_theory * r.width_theory) - 1) < 0.15

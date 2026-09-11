@@ -72,9 +72,17 @@ class K39Thresholds:
         """
         n, l, j = GROUND
         idx = self._sweep._tracked_index_F_mF(n, l, j, int(F), int(mF), step=0)
-        step = self._sweep.nearest_step(float(B_gauss))
-        v = self._sweep.vectors[step][:, idx]
-        return np.real_if_close(v, tol=1000).astype(float)
+        # linear interpolation between the bracketing sweep steps (sign-aligned,
+        # renormalised) so the spin state varies smoothly with B
+        param = self._sweep.param
+        k = int(np.clip(np.searchsorted(param, float(B_gauss)) - 1, 0, len(param) - 2))
+        t = float(np.clip((B_gauss - param[k]) / (param[k + 1] - param[k]), 0.0, 1.0))
+        v0 = np.real_if_close(self._sweep.vectors[k][:, idx], tol=1000).astype(float)
+        v1 = np.real_if_close(self._sweep.vectors[k + 1][:, idx], tol=1000).astype(float)
+        if v0 @ v1 < 0:
+            v1 = -v1
+        v = (1.0 - t) * v0 + t * v1
+        return v / np.linalg.norm(v)
 
     def hyperfine_splitting_hz(self) -> float:
         """Zero-field F=2 <-> F=1 splitting (Hz) — a self-consistency probe.

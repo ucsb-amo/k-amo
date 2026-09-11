@@ -121,6 +121,19 @@ class ArrayBackend:
             return sfft.ifft2(a, workers=-1)
         return self.torch.fft.ifft2(a)
 
+    def fftn(self, a):
+        """N-dimensional FFT over every axis (the 3D Gross-Pitaevskii solver)."""
+        if self.torch is None:
+            import scipy.fft as sfft
+            return sfft.fftn(a, workers=-1)
+        return self.torch.fft.fftn(a)
+
+    def ifftn(self, a):
+        if self.torch is None:
+            import scipy.fft as sfft
+            return sfft.ifftn(a, workers=-1)
+        return self.torch.fft.ifftn(a)
+
     def exp(self, a):
         return np.exp(a) if self.torch is None else self.torch.exp(a)
 
@@ -213,3 +226,16 @@ def array_exp(a):
         import torch
         return torch.exp(a)
     return np.exp(a)
+
+
+def array_sqrt(a):
+    """``sqrt(a)`` for a numpy array, a torch tensor or a Python scalar.
+
+    The sibling of :func:`array_exp`, for code (kamo.trap's beam intensities)
+    that must run unchanged on whatever coordinate arrays it is handed.
+    """
+    mod = type(a).__module__
+    if mod.split(".")[0] == "torch":
+        import torch
+        return torch.sqrt(a)
+    return np.sqrt(a)

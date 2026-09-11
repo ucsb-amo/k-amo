@@ -74,9 +74,15 @@ class SpinGeometry:
         Y = self.y[None, :, None]
         Z = self.z[None, None, :]
         w = self.widths
-        peak = cloud.N / (np.pi**1.5 * np.prod(w))
-        self.density = peak * np.exp(-(X**2 / w[0]**2 + Y**2 / w[1]**2
-                                       + Z**2 / w[2]**2))
+        if hasattr(cloud, "density_grid"):        # widths only size the window then
+            # A kamo.trap.TrapCloud: its own (non-Gaussian) density, recentred on
+            # its centroid -- the convention of kamo.trap.imaging_bridge.
+            c = np.asarray(cloud.centroid, dtype=float)
+            self.density = np.ascontiguousarray(cloud.density(X + c[0], Y + c[1], Z + c[2]))
+        else:
+            peak = cloud.N / (np.pi**1.5 * np.prod(w))
+            self.density = peak * np.exp(-(X**2 / w[0]**2 + Y**2 / w[1]**2
+                                           + Z**2 / w[2]**2))
         self.dx = float(self.x[1] - self.x[0]) if self.n_slices > 1 else 0.0
         self.dy = float(grid.d)
 
@@ -446,6 +452,12 @@ class SpinFieldSource(SusceptibilitySource):
         return i
 
     def density(self, x, Y, Z):
+        if hasattr(self.cloud, "density_grid"):
+            # A kamo.trap.TrapCloud: resampled onto this propagator's slices once.
+            if getattr(self, "_gridded", None) is None:
+                from kamo.trap.imaging_bridge import GriddedDensity
+                self._gridded = GriddedDensity(self.cloud, self._x, self.geometry.grid.axis)
+            return self._gridded.density(float(x))
         w = self.widths
         peak = self.cloud.N / (np.pi**1.5 * np.prod(w))
         return peak * np.exp(-(x**2 / w[0]**2 + Y**2 / w[1]**2 + Z**2 / w[2]**2))
