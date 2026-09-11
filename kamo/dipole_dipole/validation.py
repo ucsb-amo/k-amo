@@ -20,11 +20,13 @@ from .light_assisted_collisions import QuasiStaticLZModel
 from .pair import ANTISYMMETRIC, SYMMETRIC, PairPotential
 from .transition import CyclingTransition
 
-# Numbers measured from kamo/ARC at B = 520.6 G during development.
+# Numbers measured from kamo/ARC at B = 520.6 G during development.  Updated
+# 2026-09 when Potassium39 switched to UDel-portal E1 data and NIST energy
+# levels (ARC's defaults gave 2.8639 e a0, 6.0050 MHz and 766.696 nm).
 REF_B_GAUSS = 520.6
-REF_DIPOLE_EA0 = 2.8639
-REF_LINEWIDTH_MHZ = 6.0050
-REF_WAVELENGTH_NM = 766.696
+REF_DIPOLE_EA0 = 2.8703
+REF_LINEWIDTH_MHZ = 6.0309
+REF_WAVELENGTH_NM = 766.7009
 REF_GROUND_PURITY = 0.97544
 REF_NEAREST_CHANNEL_MHZ = 969.98
 

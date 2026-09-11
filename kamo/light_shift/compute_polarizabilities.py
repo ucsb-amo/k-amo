@@ -10,14 +10,27 @@ class ComputePolarizabilities():
                 force_arc=False,
                 portal_data_parser:PortalDataParser = None,
                 n_max=16,
-                n_min=3):
+                n_min=3,
+                include_core=True,
+                portal_species="K1"):
+        """
+        Args:
+            include_core (bool, optional): Add the ionic-core polarizability
+            (see `return_ionic_core_contribution`) to the scalar part. Defaults
+            to True.
+            portal_species (str, optional): UDel portal species whose matrix
+            elements are used when `force_arc` is False. Defaults to "K1".
+        """
 
         if atom is None:
-            atom = Potassium39()
+            atom = Potassium39(use_portal=not force_arc)
+
+        self.include_core = include_core
 
         if portal_data_parser == None:
-            self.pdp = PortalDataParser(n_max=n_max, n_min=n_min,
-                                        force_arc=force_arc)
+            self.pdp = PortalDataParser(atom=atom, n_max=n_max, n_min=n_min,
+                                        force_arc=force_arc,
+                                        portal_species=portal_species)
         else:
             if isinstance(portal_data_parser,PortalDataParser):
                 self.pdp = portal_data_parser
@@ -77,10 +90,10 @@ class ComputePolarizabilities():
 
                 nf, lf, jf = self.pdp.state_label_to_quantum_numbers(state_f)
                 if self.pdp.arc:
-                    matrix_element_SI, transition_energy_J = self.pdp.matrix_element_arc(n,l,j,nf,lf,jf)
+                    matrix_element, transition_energy_J = self.pdp.matrix_element_arc(n,l,j,nf,lf,jf)
                 else:
                     matrix_element, transition_energy_J = self.pdp.matrix_element_from_transition_table(nf,lf,jf,transition_table)
-                    matrix_element_SI = matrix_element * c.a0 * c.e
+                matrix_element_SI = matrix_element * c.a0 * c.e
 
                 common_factor = matrix_element_SI**2 / ( transition_energy_J**2 - laser_energy_J**2 )
                 
@@ -96,12 +109,18 @@ class ComputePolarizabilities():
         alpha_j_vector = alpha_j_vector / c.convert_polarizability_au_to_SI
         alpha_j_tensor = alpha_j_tensor / c.convert_polarizability_au_to_SI
 
+        if self.include_core:
+            alpha_j_scalar = alpha_j_scalar + self.return_ionic_core_contribution()
+
         return alpha_j_scalar, alpha_j_vector, alpha_j_tensor
-    
+
     def return_ionic_core_contribution(self):
         '''Returns the ionic core contribution to the polarizability in a.u.
         Numerical value from
-        https://journals.aps.org/pra/abstract/10.1103/PhysRevA.87.052504'''
+        https://journals.aps.org/pra/abstract/10.1103/PhysRevA.87.052504
+
+        Treated as static: the core's resonances are near 20 eV, so its
+        frequency dependence is negligible for wavelengths above ~300 nm.'''
         return 5.457
 
     def compute_polarizability(self,

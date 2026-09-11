@@ -17,6 +17,7 @@ Terms
 
 from __future__ import annotations
 
+import warnings
 from functools import lru_cache
 from typing import Dict, Optional, Tuple
 
@@ -358,6 +359,8 @@ class HamiltonianBuilder:
 
         dim = self.basis.dim
         coupling = np.zeros((dim, dim), dtype=complex)
+        sign_uncertain = getattr(self.atom, "portal_sign_uncertain", None)
+        uncertain_pairs = set()
 
         for a in self.basis:
             for b in self.basis:
@@ -365,6 +368,9 @@ class HamiltonianBuilder:
                     continue
                 if abs(a.l - b.l) != 1:
                     continue
+                if sign_uncertain is not None and sign_uncertain(
+                        a.n, a.l, a.j, b.n, b.l, b.j):
+                    uncertain_pairs.add(((a.n, a.l, a.j), (b.n, b.l, b.j)))
                 if abs(a.m_i - b.m_i) > 1e-9:      # nuclear spin is a spectator
                     continue
                 d_tot = 0.0
@@ -381,6 +387,13 @@ class HamiltonianBuilder:
                 val = 0.5 * d_si / c.h              # Hz per (V/m)
                 coupling[a.index, b.index] = val
                 coupling[b.index, a.index] = np.conj(val)
+
+        if uncertain_pairs:
+            warnings.warn(
+                "ARC's sign for these couplings is uncertain (its magnitude "
+                f"disagrees with the UDel portal's): {sorted(uncertain_pairs)}. "
+                "Results that depend on interference between couplings may be "
+                "wrong.")
 
         frame = np.zeros(dim, dtype=float)
         for man, sl in self.basis.manifold_slices():
@@ -428,9 +441,11 @@ class HamiltonianBuilder:
         """
         if polarizabilities is None:
             from kamo import ComputePolarizabilities
-            # force_arc=True uses ARC dipole elements directly and avoids the
-            # portal-data (pandas) code path.
-            polarizabilities = ComputePolarizabilities(force_arc=True)
+            # UDel-portal matrix elements and wavelengths, unless the atom was
+            # built with use_portal=False (or is a plain ARC atom).
+            polarizabilities = ComputePolarizabilities(
+                atom=self.atom,
+                force_arc=not getattr(self.atom, "use_portal", False))
 
         beta, gamma = _polarization_geometry(
             self._resolve_polarization(polarization))

@@ -8,5 +8,6 @@ setup(
     author_email='pagett.jared@gmail.com',
     description='K team AMO functions, modeling, and simulations',
     packages=find_packages(),
+    package_data={'kamo.light_shift': ['data/udel_portal/*.json']},
     install_requires=['arc','numpy'],
 )

@@ -84,9 +84,9 @@ def test_pi_reproduces_legacy_hardwired_gamma(model, tweezer):
     """pi must reproduce the pre-fix behaviour exactly: gamma=+1, no vector."""
     new = np.diag(model.builder.laser_stark_operator(tweezer, polarization="pi"))
 
-    # the old code, written out
+    # the old code, written out (with the operator's default polarizabilities)
     from kamo import ComputePolarizabilities
-    cp = ComputePolarizabilities(force_arc=True)
+    cp = ComputePolarizabilities()
     pre = -1.0 / (2 * kc.epsilon0 * kc.c) * kc.convert_polarizability_au_to_SI / kc.h
     old = np.zeros(model.basis.dim)
     for man, sl in model.basis.manifold_slices():
@@ -164,25 +164,26 @@ def _sigma_minus_shift(model, tweezer, polarization):
 
 
 def test_sigma_minus_shift_pi(model, tweezer):
-    """eps || B: +41.20 kHz at the typical tweezer power."""
+    """eps || B: +40.82 kHz at the typical tweezer power (UDel-portal matrix
+    elements; ARC's gave +41.20 kHz)."""
     up, dn = _sigma_minus_shift(model, tweezer, "pi")
-    assert up / 1e3 == pytest.approx(41.201, abs=0.02)
-    assert dn / 1e3 == pytest.approx(41.200, abs=0.02)
+    assert up / 1e3 == pytest.approx(40.821, abs=0.02)
+    assert dn / 1e3 == pytest.approx(40.821, abs=0.02)
 
 
 def test_sigma_minus_shift_perpendicular(model, tweezer):
-    """eps _|_ B (a tweezer propagating along B): +58.71 kHz, NOT +41.20."""
+    """eps _|_ B (a tweezer propagating along B): +58.27 kHz, NOT +40.82."""
     up, dn = _sigma_minus_shift(model, tweezer, "linear_perp")
-    assert up / 1e3 == pytest.approx(58.714, abs=0.02)
-    assert dn / 1e3 == pytest.approx(58.713, abs=0.02)
+    assert up / 1e3 == pytest.approx(58.272, abs=0.02)
+    assert dn / 1e3 == pytest.approx(58.272, abs=0.02)
 
 
 def test_perpendicular_differs_from_pi_by_the_tensor_term(model, tweezer):
     """The two geometries differ by 1.5 x |gamma| x the tensor contribution --
-    a 42% error if you use the wrong one."""
+    a 43% error if you use the wrong one."""
     up_pi, _ = _sigma_minus_shift(model, tweezer, "pi")
     up_pp, _ = _sigma_minus_shift(model, tweezer, "linear_perp")
-    assert up_pp / up_pi == pytest.approx(1.425, rel=2e-3)
+    assert up_pp / up_pi == pytest.approx(1.4275, rel=2e-3)
 
 
 def test_sigma_minus_transitions_stay_degenerate(model, tweezer):

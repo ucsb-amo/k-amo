@@ -70,7 +70,7 @@ class GaussianBeam():
         self.include_trap_properties = include_trap_properties
         if include_trap_properties:
             from kamo import light_shift
-            cp = light_shift.compute_polarizabilities.ComputePolarizabilities(force_arc=True)
+            cp = light_shift.compute_polarizabilities.ComputePolarizabilities()
             self.polarizability_ground_state = \
                 float(cp.compute_complete_polarizability(4,0,1/2,1,-1,self.wavelength)[0]) \
                     * c.convert_polarizability_au_to_SI

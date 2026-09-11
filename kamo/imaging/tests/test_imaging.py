@@ -572,8 +572,11 @@ class TestOperatingPoint:
         # |up> is the LOWER-frequency transition, so a probe at the midpoint is
         # BLUE of |up> and RED of |dn>.  This is the sign that fixes which state
         # lenses, so assert the convention itself, not just its magnitude.
-        assert probe.delta_up == pytest.approx(+18.36, abs=0.05)
-        assert probe.delta_dn == pytest.approx(-18.36, abs=0.05)
+        # delta is in half-linewidths: 110.2 MHz / (Gamma/2pi).  It was 18.36
+        # with ARC's Gamma/2pi = 6.005 MHz; the measured 4P3/2 lifetime (UDel
+        # portal, 26.39 ns) gives 6.031 MHz and hence 18.28 (2026-09).
+        assert probe.delta_up == pytest.approx(+18.28, abs=0.05)
+        assert probe.delta_dn == pytest.approx(-18.28, abs=0.05)
         assert probe.f_up < probe.f_dn
         # ... and therefore the differential shift nu_dn - nu_up is NEGATIVE
         assert probe.with_saturation(0.3).differential_light_shift_Hz() < 0

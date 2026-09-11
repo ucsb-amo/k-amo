@@ -18,9 +18,9 @@ import pytest
 from kamo import constants as c
 from kamo.gaussian_beam.gaussian import GaussianBeam
 
-# alpha_s(4S_1/2) at 1064 nm, in SI (C m^2 / V).  Pinned so the INTERNAL tests
-# do not need to instantiate ARC.
-ALPHA_1064_SI = 591.2810424316043 * c.convert_polarizability_au_to_SI
+# alpha_s(4S_1/2) at 1064 nm, in SI (C m^2 / V): UDel-portal valence sum +
+# 5.457 a.u. ionic core.  Pinned so the INTERNAL tests do not need ARC.
+ALPHA_1064_SI = 599.3005266591443 * c.convert_polarizability_au_to_SI
 
 WAIST = 3e-6
 LAMBDA = 1064e-9
@@ -98,21 +98,23 @@ def test_peak_intensity_round_trip():
 # ----------------------------------------------------------- GROUND-TRUTH
 
 def test_tweezer_operating_point():
-    """w0 = 3 um, 1064 nm, nu_r = 1 kHz -> 44.2 uW, 0.416 uK, nu_z = 79.8 Hz.
+    """w0 = 3 um, 1064 nm, nu_r = 1 kHz -> 43.7 uW, 0.416 uK, nu_z = 79.8 Hz.
 
-    Pins the numbers quoted in docs/light_shift_intensity_calibration.tex,
-    step 2.  Needs ARC for the ground-state polarizability.
+    Needs ARC for the ground-state polarizability.  In 2026-09 the ionic core
+    was added and the matrix elements moved from ARC to the UDel portal,
+    raising alpha from 591.28 to 599.30 a.u. and lowering the power from
+    44.24 uW; depth and nu_z are fixed by nu_r and did not change.
     """
     from scipy.optimize import brentq
 
     b = GaussianBeam(waist=WAIST, wavelength=LAMBDA, power=1e-3,
                      include_trap_properties=True)
     assert (b.polarizability_ground_state
-            / c.convert_polarizability_au_to_SI) == pytest.approx(591.28, abs=0.05)
+            / c.convert_polarizability_au_to_SI) == pytest.approx(599.30, abs=0.05)
 
     P = brentq(lambda p: b.trap_frequency_radial(power=p) / 2 / np.pi - 1e3,
                1e-9, 1.0)
-    assert P * 1e6 == pytest.approx(44.24, abs=0.02)              # uW
+    assert P * 1e6 == pytest.approx(43.65, abs=0.02)              # uW
     assert abs(b.trap_depth(P)) * 1e6 == pytest.approx(0.4163, abs=5e-4)  # uK
     assert b.trap_frequency_axial(power=P) / 2 / np.pi == pytest.approx(
         79.83, abs=0.05)                                          # Hz

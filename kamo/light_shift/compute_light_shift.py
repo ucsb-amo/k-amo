@@ -7,9 +7,11 @@ from kamo import constants as c
 class ComputeLightShift():
 
     def __init__(self,
-                atom=Potassium39(),
+                atom=None,
                 force_arc=False,
                 portal_data_parser:PortalDataParser = None):
+        if atom is None:
+            atom = Potassium39(use_portal=not force_arc)
         if portal_data_parser == None:
             self.pdp = PortalDataParser(atom=atom,force_arc=force_arc)
         else:

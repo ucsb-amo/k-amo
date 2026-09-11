@@ -140,15 +140,20 @@ class ProbeBeam:
         """Laser offset from the midpoint (Hz); positive is a HIGHER laser frequency."""
         return self.frequency_Hz - self.f_midpoint
 
+    # The detunings are built from the midpoint offset and the half-splitting,
+    # not as f_laser - f_up directly: subtracting two ~391 THz numbers rounds at
+    # ~0.1 Hz, differently for the two lines, which breaks the exact
+    # delta_dn = -delta_up symmetry at the midpoint.
+
     @property
     def detuning_up_Hz(self) -> float:
         """Signed detuning from the ``|up>`` transition, ``f_laser - f_up``."""
-        return self.frequency_Hz - self.f_up
+        return self.offset_Hz + 0.5 * (self.f_dn - self.f_up)
 
     @property
     def detuning_dn_Hz(self) -> float:
         """Signed detuning from the ``|dn>`` transition, ``f_laser - f_dn``."""
-        return self.frequency_Hz - self.f_dn
+        return self.offset_Hz - 0.5 * (self.f_dn - self.f_up)
 
     @property
     def delta_up(self) -> float:

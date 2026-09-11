@@ -1,4 +1,5 @@
 import arc
+from arc.wigner import Wigner6j, Wigner3j
 import numpy as np
 import kamo.constants as c
 import csv
@@ -11,10 +12,127 @@ dv = -1000.
 # pairinteraction, which has no nuclear spin and works in the m_j basis only.
 _HAMILTONIAN_N_THRESHOLD = 10
 
+# ARC's sign is trusted when its magnitude is within this factor of the portal's.
+_PORTAL_SIGN_TOLERANCE = 1.25
+
+
+def _angular_factor(l1, j1, l2, j2, s=0.5):
+    """|<j1||er||j2>| / |radial element|, in ARC's convention."""
+    return abs(np.sqrt((2*j1 + 1) * (2*j2 + 1) * (2*l1 + 1) * (2*l2 + 1))
+               * Wigner6j(j1, 1, j2, l2, s, l1) * Wigner3j(l1, 1, l2, 0, 0, 0))
+
+
 class Potassium39(arc.Potassium39):
-    def __init__(self):
-        super().__init__()
+    """ARC's Potassium39, with E1 data from the UDel portal by default.
+
+    With ``use_portal=True`` every quantity ARC builds from its radial matrix
+    element (``getDipoleMatrixElement``, ``getReducedMatrixElementJ``, Rabi
+    couplings, ...) uses the portal's recommended magnitude. The sign still
+    comes from ARC, which the portal does not provide. At zero temperature,
+    ``getTransitionRate`` and ``getStateLifetime`` return the portal's rates
+    and lifetimes (measured values where they exist, e.g. 4P). Transitions or
+    states the portal lacks fall back to ARC. ``use_portal=False`` gives
+    ARC's own E1 data.
+
+    Energies are ARC's tabulated NIST levels (``preferQuantumDefects=False``).
+    ARC's default computes every K level from Rydberg quantum defects instead,
+    which puts D2 2.55 GHz and D1 4.71 GHz too high and 3D 67 cm^-1 too low.
+    Pass ``preferQuantumDefects=True`` to get those energies back (before
+    2026-09 kamo used them).
+    """
+
+    def __init__(self, use_portal=True, portal_species="K1", preferQuantumDefects=False):
+        self.use_portal = use_portal
+        self.portal_species = portal_species
+        self._portal_data = None
+        super().__init__(preferQuantumDefects=preferQuantumDefects)
         self.cross_section = self.get_cross_section()
+
+    # ------------------------------------------------------------ portal data
+
+    @staticmethod
+    def _key(n, l, j):
+        return (round(n), round(l), round(2 * j))
+
+    def _portal(self):
+        """Portal radial elements, rates and lifetimes, loaded on first use."""
+        if self._portal_data is None:
+            from kamo.light_shift import udel_portal
+            me = udel_portal.dedupe_pairs(udel_portal.matrix_elements(self.portal_species))
+            me = me[me.n1.notna() & me.n2.notna()]
+            radial = {
+                frozenset((self._key(r.n1, r.l1, r.J1), self._key(r.n2, r.l2, r.J2))):
+                    r.d_au / _angular_factor(round(r.l1), r.J1, round(r.l2), r.J2)
+                for r in me.itertuples()}
+            tr = udel_portal.transition_rates(self.portal_species)
+            tr = tr[tr.n1.notna() & tr.n2.notna()]
+            rates = {(self._key(r.n1, r.l1, r.J1), self._key(r.n2, r.l2, r.J2)): r.A_s
+                     for r in tr.itertuples()}
+            lifetimes = {self._key(r.n1, r.l1, r.J1): r.tau_s for r in tr.itertuples()}
+            self._portal_data = {"radial": radial, "rates": rates, "lifetimes": lifetimes,
+                                 "signed": {}, "sign_uncertain": set()}
+        return self._portal_data
+
+    def getRadialMatrixElement(self, n1, l1, j1, n2, l2, j2, s=0.5, useLiterature=True):
+        """ARC's radial element, rescaled to the portal's magnitude.
+
+        ``useLiterature=False`` returns ARC's own numerical integral.
+        """
+        if not (self.use_portal and useLiterature):
+            return super().getRadialMatrixElement(n1, l1, j1, n2, l2, j2, s=s,
+                                                  useLiterature=useLiterature)
+        portal = self._portal()
+        pair = frozenset((self._key(n1, l1, j1), self._key(n2, l2, j2)))
+        if pair not in portal["signed"]:
+            arc_value = super().getRadialMatrixElement(n1, l1, j1, n2, l2, j2, s=s)
+            magnitude = portal["radial"].get(pair)
+            if magnitude is None or arc_value == 0:
+                value = arc_value
+            else:
+                value = float(np.copysign(magnitude, arc_value))
+                ratio = abs(arc_value) / magnitude
+                if not 1 / _PORTAL_SIGN_TOLERANCE < ratio < _PORTAL_SIGN_TOLERANCE:
+                    portal["sign_uncertain"].add(pair)
+            portal["signed"][pair] = value
+        return portal["signed"][pair]
+
+    def portal_sign_uncertain(self, n1, l1, j1, n2, l2, j2):
+        """True if ARC's sign for this transition should not be trusted.
+
+        That is the case when ARC's magnitude is off from the portal's by more
+        than ``_PORTAL_SIGN_TOLERANCE``. For K these are all small elements
+        (< 0.25 a.u.): 4S-nP with n >= 8, and 4P-4D. Signs matter only where
+        different matrix elements interfere (Raman couplings, D1/D2 in one
+        coupling); polarizabilities use |d|^2 alone.
+        """
+        if not self.use_portal:
+            return False
+        self.getRadialMatrixElement(n1, l1, j1, n2, l2, j2)
+        pair = frozenset((self._key(n1, l1, j1), self._key(n2, l2, j2)))
+        return pair in self._portal()["sign_uncertain"]
+
+    def getTransitionRate(self, n1, l1, j1, n2, l2, j2, temperature=0.0, s=0.5):
+        """Rate (s^-1) from state 1 to state 2.
+
+        At zero temperature this is the portal's Einstein A when it lists the
+        decay channel. At finite temperature it is ARC's formula (portal matrix
+        element, ARC transition frequency).
+        """
+        if self.use_portal and not temperature:
+            rate = self._portal()["rates"].get((self._key(n1, l1, j1), self._key(n2, l2, j2)))
+            if rate is not None:
+                return rate
+        return super().getTransitionRate(n1, l1, j1, n2, l2, j2, temperature=temperature, s=s)
+
+    def getStateLifetime(self, n, l, j, temperature=0, includeLevelsUpTo=0, s=0.5):
+        """Lifetime (s). At zero temperature this is the portal's recommended
+        value when it has one; otherwise ARC's sum over decay rates."""
+        if self.use_portal and temperature < 0.1:
+            tau = self._portal()["lifetimes"].get(self._key(n, l, j))
+            if tau is not None:
+                return tau
+        return super().getStateLifetime(n, l, j, temperature=temperature,
+                                        includeLevelsUpTo=includeLevelsUpTo, s=s)
 
     # def init_pairinteraction(self):
     #     if pi.Database.get_global_database() is None:

@@ -29,7 +29,8 @@ N_ATOMS = float(sys.argv[1]) if len(sys.argv) > 1 else 1000.0   # all-up cloud
 A_UPUP_A0 = 11.333713034704147   # a0, at B = 520.594 G
 F_RADIAL = 1.0e3                 # Hz
 WAIST = 3.0e-6                   # m, 1064 nm tweezer
-F_D2_UP = 391.018093e12          # Hz, the |up> sigma- transition
+F_D2_UP = 391.015433e12          # Hz, the |up> sigma- transition (NIST levels;
+                                 # was 391.018093e12 from ARC's quantum defects)
 DET_HALF = 55.1103e6             # Hz, probe sits this far BELOW the |up> line
 GAMMA_HZ = 6.0050e6              # Gamma / 2 pi
 SIGMA0 = 2.8316243e-13           # m^2, as used by the notebook (waxa's value)
