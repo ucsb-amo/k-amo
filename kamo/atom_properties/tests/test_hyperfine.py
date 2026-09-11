@@ -196,8 +196,8 @@ def test_extrapolation_reproduces_held_out_theory(theory_without, held_out, twoj
         ex = hfs._extrapolated_theory(n, l, twoj)
         true = full[(n, l, twoj)]
         assert abs(ex.value - true) < 2 * ex.unc, (n, ex.value, true)
-        # and the trend, not a flat average: well inside the theory uncertainty
-        assert abs(ex.value / true - 1) < hfs.THEORY_FRAC_UNC[(l, twoj)], (n, ex.value, true)
+        # and the trend, not a flat average (16% low for d3/2): within 5%
+        assert abs(ex.value / true - 1) < 0.05, (n, ex.value, true)
 
 
 def test_rydberg_values_follow_the_theory_trend():
@@ -209,6 +209,32 @@ def test_rydberg_values_follow_the_theory_trend():
     for l, twoj in [(0, 1), (1, 1), (1, 3), (2, 3), (2, 5)]:
         A = [H(n, l, twoj / 2).A_MHz for n in range(8, 40)]
         assert all(abs(a) > abs(b) > 0 for a, b in zip(A, A[1:])), (l, twoj)
+
+
+def _full_rule(iso, n, l, twoj, which):
+    """The selection rule with every candidate evaluated (no lazy shortcut)."""
+    if which == "B" and twoj == 1:
+        return hfs._Candidate(0.0, 0.0, hfs._EXACT, "")
+    meas = hfs._measured(iso, n, l, twoj, which)
+    if iso != 39:
+        return hfs._keep_measured(meas, hfs._isotope_scaled(iso, n, l, twoj, which))
+    own = hfs._keep_measured(meas, hfs._theory(39, n, l, twoj, which))
+    if hfs._is_good(own, which):
+        return own
+    return hfs._keep_measured(own, hfs._extrapolated(n, l, twoj, which))
+
+
+def test_lazy_shortcut_matches_the_full_rule():
+    for iso, n_max in [(39, 14), (40, 8), (41, 8)]:
+        for l in range(3):
+            for twoj in sorted({abs(2 * l - 1), 2 * l + 1}):
+                for n in list(range(hfs.lowest_valence_n(l), n_max + 1)) + [20, 59]:
+                    for which in "AB":
+                        lazy = hfs._best(iso, n, l, twoj, which)
+                        full = _full_rule(iso, n, l, twoj, which)
+                        assert (lazy is None) == (full is None)
+                        if lazy is not None:
+                            assert (lazy.value, lazy.source) == (full.value, full.source),                                 (iso, n, l, twoj, which)
 
 
 def test_extrapolation_only_beyond_theory():
@@ -311,6 +337,29 @@ def test_potassium39_breitRabi_has_the_full_quadrupole_term():
     # at 500 G the m_J = +3/2 levels use the Landé g_J with g_S
     top = E[1].max()
     assert top > levels[3] + 0.9 * 1.334 * 1.5 * c.mu_b * 0.05 / c.h
+
+
+def test_potassium39_breitRabi_labels_small_A_manifolds():
+    """Labels come from a field scaled to the hyperfine gap: a 1e-4 T probe
+    would F-mix 59p3/2 (A = 364 Hz)."""
+    from kamo import Potassium39
+    k = Potassium39()
+    for state in [(59, 1, 1.5), (59, 2, 2.5), (100, 0, 0.5), (5, 1, 1.5)]:
+        _, F, mF = k.breitRabi(*state, np.array([0.0]))
+        assert np.all(F == np.round(F)), state
+        for f in set(F):
+            assert np.sum(F == f) == 2 * f + 1, state
+    with pytest.raises(ValueError):
+        k.breitRabi(4, 3, 3.5, np.array([0.0]))
+    assert Potassium39.gI == c.g_I != 0                  # ARC leaves it at 0
+
+
+def test_make_nlj_basis_skips_core_orbitals():
+    from kamo.hamiltonian import make_nlj_basis
+    assert make_nlj_basis(4, 0, n_range=1) == [
+        (4, 0, 0.5), (4, 1, 0.5), (4, 1, 1.5), (5, 0, 0.5), (5, 1, 0.5), (5, 1, 1.5)]
+    assert (3, 1, 1.5) not in make_nlj_basis(3, 2)
+    assert (3, 2, 1.5) in make_nlj_basis(3, 2)
 
 
 def test_potassium39_getHFSCoefficients():

@@ -42,6 +42,11 @@ class Potassium39(arc.Potassium39):
     2026-09 kamo used them).
     """
 
+    # ARC leaves K39's nuclear g-factor at 0, which drops the nuclear Zeeman
+    # term from its getLandegfExact and breitRabi. Same sign convention
+    # (H = mu_B B (g_J J_z + g_I I_z)).
+    gI = c.g_I
+
     def __init__(self, use_portal=True, portal_species="K1", preferQuantumDefects=False):
         self.use_portal = use_portal
         self.portal_species = portal_species
@@ -161,25 +166,36 @@ class Potassium39(arc.Potassium39):
         so it uses the same A, B, g_J and g_I as every other kamo Zeeman
         calculation (no diamagnetic term, as in ARC). As in ARC, each row of
         energies is sorted ascending (not tracked). F and mF label the columns
-        by their order at 1e-7 T. ARC labels at 1e-4 T, where 4P_3/2 is already
-        F-mixed and ARC returns half-integer F. ``use_portal=False`` gives
-        ARC's original.
+        by their order at a field whose Zeeman energy is 1e-4 of the smallest
+        hyperfine gap. ARC always labels at 1e-4 T, where small-A manifolds
+        (5P_3/2 and up) are already F-mixed and come out with half-integer F.
+        A manifold with no hyperfine A (l >= 3) raises ``ValueError``, as
+        ``getHFSCoefficients`` does. ``use_portal=False`` gives ARC's original.
         """
         if not self.use_portal:
             return super().breitRabi(n, l, j, B)
+        from kamo.atom_properties.hyperfine import hyperfine_constants, hyperfine_energy
         from kamo.hamiltonian.basis import Basis
         from kamo.hamiltonian.builder import HamiltonianBuilder
+        hc = hyperfine_constants(n, l, j)
+        if not hc.has_A:
+            raise ValueError(f"No hyperfine data for state ({n}, {l}, {j}).")
         builder = HamiltonianBuilder(Basis([(n, l, j)]), atom=self)
         h0 = builder.h0()
         zeeman = builder.zeeman_operator() * 1e4          # Hz/G -> Hz/T
         B = np.atleast_1d(np.asarray(B, dtype=float))
         energies = np.array([np.linalg.eigvalsh(h0 + b * zeeman) for b in B])
-        _, vecs = np.linalg.eigh(h0 + 1e-7 * zeeman)
+        levels = np.sort([hyperfine_energy(F, builder.I, j, hc.A_Hz, hc.B_Hz)
+                          for F in builder.basis.manifolds[0].allowed_F()])
+        gap = np.diff(levels)
+        gap = gap[gap > 0].min() if np.any(gap > 0) else abs(hc.A_Hz)
+        B_label = 1e-4 * gap / np.abs(zeeman).max()       # tesla
+        _, vecs = np.linalg.eigh(h0 + B_label * zeeman)
         IJ = builder._ij_operator(j, builder.I)
         F2 = (j * (j + 1) + builder.I * (builder.I + 1)) * np.eye(len(IJ)) + 2 * IJ
         f2 = np.einsum("ik,ij,jk->k", vecs, F2, vecs)
         F = np.round(-1 + np.sqrt(1 + 4 * f2)) / 2
-        mF = np.round(2 * (np.array([s.m_f for s in builder.basis]) @ vecs ** 2)) / 2
+        mF = np.round(2 * (np.array([s.m_f for s in builder.basis]) @ vecs ** 2)) / 2 + 0.0
         return energies, F, mF
 
     # def init_pairinteraction(self):

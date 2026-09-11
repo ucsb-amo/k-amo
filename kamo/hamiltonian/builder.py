@@ -127,9 +127,9 @@ class HamiltonianBuilder:
         """Field-free Hamiltonian (Hz): fine structure + hyperfine ``A (I.J)``.
 
         A and B come from :func:`kamo.atom_properties.hyperfine.hyperfine_constants`
-        (39K): measured or theory, whichever is more precise, with n*^3
-        extrapolation beyond both. A manifold with no A at all (l >= 3, core
-        orbitals) gets none, with a warning.
+        (39K): the measured value unless theory is at least twice as precise,
+        with n*^3 extrapolation beyond both. A manifold with no A at all
+        (l >= 3, core orbitals) gets none, with a warning.
 
         Parameters
         ----------

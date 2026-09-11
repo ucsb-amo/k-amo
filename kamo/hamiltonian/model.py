@@ -84,6 +84,8 @@ def make_nlj_basis(
     >>> make_nlj_basis(59, 0, n_range=3, l_range=2)
     # matches pairinteraction default basis for Rydberg S states
     """
+    from kamo.atom_properties.hyperfine import lowest_valence_n
+
     manifolds = []
     l_lo = max(0, l - l_range)
     l_hi = l + l_range
@@ -91,6 +93,8 @@ def make_nlj_basis(
         if n_prime < 1:
             continue
         for l_prime in range(l_lo, min(l_hi, n_prime - 1) + 1):
+            if n_prime < lowest_valence_n(l_prime):
+                continue
             # j = l - 1/2 (only valid when l > 0)
             if l_prime > 0:
                 manifolds.append((n_prime, l_prime, l_prime - 0.5))

@@ -25,9 +25,10 @@ model-derived values fill in wherever no measurement is better than
    series. ``C(n*) = C_inf + a / n*^2`` is fitted to the three highest-n
    theory values of the ``(l, j)`` series and scaled to the target, with
    ``n*`` taken from ARC's NIST energies. This follows a series that has not
-   yet converged (d3/2 is still rising at 7d). The theory uncertainty is kept.
-   B has no theory, so ``B n*^3`` is averaged over the highest-n measured
-   values instead.
+   yet converged (d3/2 is still rising at 7d). The uncertainty is the theory
+   uncertainty plus a model term and the fit residual. B has no theory, so
+   the same trend is fitted to the highest-n measured B values instead (their
+   mean when there are only two).
 4. **isotope-scaled** (40K, 41K): the 39K value scaled by the ratio of nuclear
    moments. For A that ratio is the measured 4S ratio for s states (it already
    contains the s-state hyperfine anomaly) and mu/I for l >= 1. For B it is the
@@ -50,6 +51,7 @@ import functools
 import math
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 
 import numpy as np
 import pandas as pd
@@ -220,7 +222,7 @@ def nuclear_moments(iso: int) -> dict:
     if row.empty:
         raise KeyError(f"No nuclear data for {iso}K in the portal snapshot.")
     r = row.iloc[0]
-    return {"I": float(r.I), "mu": float(r.mu_N), "Q": float(r.Q)}
+    return MappingProxyType({"I": float(r.I), "mu": float(r.mu_N), "Q": float(r.Q)})
 
 
 @functools.lru_cache(maxsize=None)
@@ -249,6 +251,8 @@ def _measured(iso, n, l, twoj, which):
     ref = f"{SURVEY_REF}: {row.ref}"
     if which == "A" and row.sign_from:
         ref += f" (sign from {row.sign_from})"
+    if row.note:
+        ref += f"; note: {row.note}"
     return _Candidate(float(value), float(unc), "bound" if value == 0 else "measured", ref)
 
 
@@ -288,52 +292,67 @@ def _extrapolated(n, l, twoj, which):
     return _extrapolated_measured(n, l, twoj, which)
 
 
+def _scaled_trend(n, l, twoj, anchors):
+    """``X n*^3`` of the ``(n, value, unc)`` anchors, carried to ``n``.
+
+    Three or more anchors are fitted with ``C_inf + a/n*^2`` (weighted); two
+    are averaged. Returns ``(C_t, model, resid, sC)``: the prediction, a model
+    error (half the step beyond the highest anchor), the fit residual, and the
+    anchors' own ``X n*^3`` uncertainties.
+    """
+    ns = {m: _effective_n(m, l, twoj) for m, _, _ in anchors}
+    x = np.array([ns[m] ** -2 for m, _, _ in anchors])
+    C = np.array([v * ns[m] ** 3 for m, v, _ in anchors])
+    sC = np.array([u * ns[m] ** 3 for m, _, u in anchors])
+    x_t = _effective_n(n, l, twoj) ** -2
+    if len(anchors) >= 3:
+        slope, c_inf = np.polyfit(x, C, 1, w=1 / sC)
+        fit = c_inf + slope * x
+        C_t = c_inf + slope * x_t
+    else:
+        w = 1 / sC ** 2
+        fit = np.full_like(C, np.sum(w * C) / np.sum(w))
+        C_t = fit[0]
+    top = int(np.argmin(x))                   # highest-n anchor
+    model = 0.5 * abs(C_t - C[top])
+    resid = float(np.sqrt(np.mean((C - fit) ** 2)))
+    return float(C_t), model, resid, sC
+
+
 def _extrapolated_theory(n, l, twoj):
-    """``A n*^3 = C_inf + a/n*^2`` fitted to the top three theory values."""
+    """``A n*^3 = C_inf + a/n*^2`` fitted to the top three theory values. The
+    uncertainty is the theory one plus the model and fit errors."""
     pts = sorted((m, a) for (m, ll, tj), a in _portal_theory().items()
                  if (ll, tj) == (l, twoj))
     if n <= pts[-1][0]:
         return None                           # inside the range theory covers
-    top = pts[-3:]
-    x = np.array([_effective_n(m, l, twoj) ** -2 for m, _ in top])
-    C = np.array([a * _effective_n(m, l, twoj) ** 3 for m, a in top])
-    slope, c_inf = np.polyfit(x, C, 1)
-    resid = float(np.sqrt(np.mean((C - (c_inf + slope * x)) ** 2)))
-    ns = _effective_n(n, l, twoj)
-    C_t = c_inf + slope * ns ** -2
-    # Half of the fit's own step beyond the last theory point, as a model error.
-    model = 0.5 * abs(C_t - C[-1])
-    frac = math.hypot(THEORY_FRAC_UNC[(l, twoj)], model / abs(C_t), resid / abs(C_t))
-    value = C_t / ns ** 3
-    return _Candidate(value, abs(value) * frac, "extrapolated",
+    top = [(m, a, abs(a)) for m, a in pts[-3:]]  # equal relative weights
+    C_t, model, resid, _ = _scaled_trend(n, l, twoj, top)
+    ns3 = _effective_n(n, l, twoj) ** 3
+    unc = math.hypot(THEORY_FRAC_UNC[(l, twoj)] * C_t, model, resid) / ns3
+    return _Candidate(C_t / ns3, unc, "extrapolated",
                       f"A n*^3 = C_inf + a/n*^2 fitted to theory at 39K n = "
-                      f"{', '.join(str(m) for m, _ in top)} [{THEORY_REF}]")
+                      f"{', '.join(str(m) for m, _, _ in top)} [{THEORY_REF}]")
 
 
 def _extrapolated_measured(n, l, twoj, which):
-    """Weighted mean of ``X n*^3`` over the three highest-n good measurements."""
+    """``X n*^3`` trend of the three highest-n good 39K measurements."""
     known_n = sorted({k[1] for k in _survey_index() if k[0] == 39 and k[2:] == (l, twoj)},
                      reverse=True)
-    anchors = [(m, c) for m in known_n if m != n
+    anchors = [(m, c.value, c.unc) for m in known_n if m != n
                for c in [_measured(39, m, l, twoj, which)] if _is_good(c, which)][:3]
-    if len(anchors) < 2 or n <= min(m for m, _ in anchors):
+    if len(anchors) < 2 or n <= min(m for m, _, _ in anchors):
         return None
-    scaled = [(c.value * _effective_n(m, l, twoj) ** 3, c.unc * _effective_n(m, l, twoj) ** 3)
-              for m, c in anchors]
-    C = np.array([s[0] for s in scaled])
-    sC = np.array([s[1] for s in scaled])
-    w = 1 / sC ** 2
-    c_mean = float(np.sum(w * C) / np.sum(w))
-    # The anchors' errors are correlated (one method), so the scatter is not
-    # averaged down. Allow for the series to keep drifting by as much as it
-    # did across the anchor window.
-    c_unc = math.hypot(float(sC.min()), float(C[0] - C[-1]))
+    C_t, model, resid, sC = _scaled_trend(n, l, twoj, anchors)
+    # The anchors' errors are correlated (one method), so they are not
+    # averaged down: the most precise one sets the floor.
     ns3 = _effective_n(n, l, twoj) ** 3
-    value = c_mean / ns3
-    unc = max(c_unc / ns3, abs(value) * EXTRAP_FRAC_FLOOR)
+    value = C_t / ns3
+    unc = max(math.hypot(float(sC.min()), model, resid) / ns3,
+              abs(value) * EXTRAP_FRAC_FLOOR)
     return _Candidate(value, unc, "extrapolated",
-                      f"{which} n*^3 averaged over measured 39K n = "
-                      f"{', '.join(str(m) for m, _ in anchors)} [{SURVEY_REF}]")
+                      f"{which} n*^3 trend of measured 39K n = "
+                      f"{', '.join(str(m) for m, _, _ in anchors)} [{SURVEY_REF}]")
 
 
 def _isotope_scaled(iso, n, l, twoj, which):
@@ -403,9 +422,9 @@ def hyperfine_constants(n: int, l: int, j: float, iso: int = 39) -> HyperfineCon
 @functools.lru_cache(maxsize=None)
 def _hyperfine_constants(n, l, twoj, iso):
     if n < lowest_valence_n(l):
-        none = _Candidate(0.0, math.nan, "none", "core orbital, not a valence state")
-        return HyperfineConstants(iso, n, l, twoj / 2, *vars(none).values(),
-                                  *vars(none).values())
+        why = "core orbital, not a valence state"
+        return HyperfineConstants(iso, n, l, twoj / 2, 0.0, math.nan, "none", why,
+                                  0.0, math.nan, "none", why)
     A = _best(iso, n, l, twoj, "A") or _Candidate(0.0, math.nan, "none", "no data")
     B = (_best(iso, n, l, twoj, "B")
          or _Candidate(0.0, math.nan, "none", "no data; B taken as 0"))
