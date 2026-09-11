@@ -52,6 +52,9 @@ def make_nlj_basis(
     * all physically valid ``j'`` for each ``(n', l')``
       (i.e. ``j' = l' + 1/2`` and, for ``l' > 0``, also ``j' = l' - 1/2``).
 
+    K's core orbitals (3s, 3p, and everything below) are left out: they are
+    not valence states, and ARC gives them meaningless energies.
+
     Parameters
     ----------
     n : int
@@ -74,9 +77,8 @@ def make_nlj_basis(
     [(4, 0, 0.5), (4, 1, 0.5), (4, 1, 1.5)]
 
     >>> make_nlj_basis(4, 0, n_range=1)
-    # n ∈ {3, 4, 5}, l ∈ {0, 1}
-    [(3, 0, 0.5), (3, 1, 0.5), (3, 1, 1.5),
-     (4, 0, 0.5), (4, 1, 0.5), (4, 1, 1.5),
+    # n ∈ {3, 4, 5}, l ∈ {0, 1}; 3s and 3p are core orbitals
+    [(4, 0, 0.5), (4, 1, 0.5), (4, 1, 1.5),
      (5, 0, 0.5), (5, 1, 0.5), (5, 1, 1.5)]
 
     >>> make_nlj_basis(59, 0, n_range=3, l_range=2)
