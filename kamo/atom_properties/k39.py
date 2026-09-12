@@ -1299,8 +1299,11 @@ class Potassium39(arc.Potassium39):
             "lf_str": state_label(n, l, j, int(F), int(mF), term=False),
         }
 
-    def get_scattering_length(self, f, mf, b, f2=None, mf2=None,
-                              interp=False, method='table', return_complex=False):
+    def get_scattering_length(self, f, mf, b,
+                            f2=None, mf2=None,
+                            interp=True,
+                            method='table',
+                            return_complex=False):
         """s-wave scattering length (a0) of the pair |f,mf> + |f2,mf2> at field b (G).
 
         Thin wrapper around :func:`kamo.scattering.lookup.scattering_length`.
@@ -1313,15 +1316,21 @@ class Potassium39(arc.Potassium39):
             interp (bool, optional): method='kokkelmans' only; interpolate the
                 0.5 G table instead of taking the nearest point.
             method (str, optional):
-                'table' (default): the calibrated coupled-channels model,
-                    precomputed for all 36 pairs of ground states on 0-1000 G and
-                    shipped with kamo.  Instant.
+                'table': (default) the calibrated coupled-channels model, precomputed for all
+                    36 pairs of ground states on 0-1000 G and shipped with kamo.
+                    Instant, and the only method covering every pair.  Accurate to
+                    ~1e-3 relative above 0.01 G and exact at b = 0; in
+                    0 < b < 0.01 G unresolved channel-opening jumps make it
+                    indicative only -- use 'cc' there.
+                'kokkelmans': S. Kokkelmans' tables on the
+                    Tweezers G: drive, same-state pairs only, 1-1000 G.  Needs the
+                    share mounted, and differs from the calibrated model by ~2% at
+                    some fields.  NOTE: this default disagrees with 'table' below;
+                    pass method explicitly if it matters.
                 'cc': the same model computed directly (~1.5 s setup, then
                     ~40-90 ms per field, memoised).
                 'empirical': measured-resonance model.  Instant, but only for the
                     F=1 channels with measured resonances.
-                'kokkelmans': S. Kokkelmans' tables on the Tweezers G: drive
-                    (same-state pairs only).
             return_complex (bool, optional): return a_re - i a_im (lossy
                 channels, e.g. F=2) instead of the real part.
 

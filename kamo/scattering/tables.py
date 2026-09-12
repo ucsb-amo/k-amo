@@ -7,9 +7,13 @@ costs ~40-90 ms per field; these tables make it instant.  They ship with kamo as
 
 Representation
 --------------
-``a(B)`` is meromorphic in B: smooth apart from Feshbach poles.  Each pair stores
-``a`` on a uniform grid plus its poles ``z_i`` (complex: ``B0_i + i gamma_i/2``,
-with ``gamma_i > 0`` only where the pole is smoothed by inelastic loss).  On load,
+``a(B)`` is meromorphic in B apart from Feshbach poles and, below ~0.2 G, a handful of
+step discontinuities where an inelastic channel opens (the Zeeman splitting closes, a
+threshold crosses the entrance channel, and ``Im a`` jumps).  Each pair stores ``a`` on
+a uniform grid, its poles ``z_i`` (complex: ``B0_i + i gamma_i/2``, with ``gamma_i > 0``
+only where the pole is smoothed by inelastic loss), and its break fields.  The grid is
+split at the breaks and each smooth piece splined separately -- interpolating through a
+jump corrupts several cells either side.  On load,
 the pole-free numerator
 
     N(B) = a(B) * prod_i (B - z_i) / L
@@ -26,11 +30,23 @@ candidate's complex position is refined by an iterated three-point fit of
 
 Grid and accuracy
 -----------------
-0.05 G steps on 0-2 G (the F=1 threshold cusp near B -> 0), then 0.5 G to 1000 G;
-lookups are served on 1-1000 G.  Validated against direct coupled-channels
-evaluations at 400 random fields per pair plus points 0.003-0.3 G from every pole
-(2026-09-11): median error ~1e-6 a0, worst relative error 5e-3 (in lossy F=1+F=2
-mixtures; typical worst <2e-4).  A 1 G grid failed that bar (1.3e-2), hence 0.5 G.
+Three segments: 0.001 G on 0-0.3 G (poles sit as close as 0.003 G to zero and the
+F=1 thresholds collapse as B -> 0), 0.05 G to 2 G, then 0.5 G to 1000 G.  Lookups are
+served on the whole 0-1000 G.  Validated against direct coupled-channels
+evaluations at 40 random fields per band per pair plus points 0.003-0.3 G from every
+pole (2026-09-11).  Worst relative error over all 36 pairs, by band:
+
+    0.01-0.3 G   1.4e-3        0.3-2 G   3.3e-5        2-1000 G   5.2e-6
+
+A 1 G step above 2 G failed an earlier 5e-3 bar (1.3e-2), hence 0.5 G.  ``B = 0`` is a
+grid node and reproduces the model exactly (worst 1.6e-5 a0 across the 36 pairs).
+
+The exception is ``0 < B < 0.01 G``, where the table is indicative only (errors reach
+~100%).  More channel openings live down there -- e.g. |1,-1>+|2,0> jumps from 245 to
+87 a0 between 1e-5 and 1e-4 G -- below the 0.001 G step, so they are neither resolved
+nor split out as breaks.  Resolving them needs a near-zero sub-grid (the pole finder
+otherwise fits a spurious "pole" that just tracks the step size: 0.0020 G at h=0.002,
+0.0012 at h=0.001, 0.0005 at h=0.0005).  Use ``method="cc"`` in that window.
 
 Storage: float32 values, XOR-delta + byte-shuffle + lzma (:func:`_pack`), ~225 kB
 for all 36 pairs, lossless on the float32 values (plain npz compression: 410 kB).
@@ -51,17 +67,21 @@ import numpy as np
 
 TABLE_PATH = Path(__file__).parent / "data" / "k39_cc_tables.npz"
 B_MIN, B_MAX = 0.0, 1000.0      # tabulated
-B_VALID = (1.0, 1000.0)         # served.  Below ~1 G the F=1 pair thresholds become
-                                # degenerate (splitting ~ B^2), a(B) has a threshold cusp
-                                # near 0.01-0.1 G, and a zero-energy a is ill-defined.
-LOW_FIELD = (2.0, 0.05)         # fine segment [0, 2) G at 0.05 G contains that cusp
+B_VALID = (0.0, 1000.0)         # served.  See the accuracy note above for 0 < B < 0.01 G,
+                                # where unresolved channel openings make the table
+                                # indicative only (B = 0 itself is exact).
+LOW_FIELD = (2.0, 0.05)         # mid segment [ULTRA_LOW[0], 2) G at 0.05 G
+ULTRA_LOW = (0.3, 0.001)        # finest segment [0, 0.3) G: resolves the near-zero poles
+                                # (0.003-0.2 G) and the collapsing F=1 thresholds
 _L = 100.0                      # G, scale of the pole factors (keeps N O(1))
 
 
 def make_grid(h: float = 0.5) -> np.ndarray:
-    """Field grid: 0.05 G steps below 2 G, then ``h`` up to ``B_MAX``."""
+    """Field grid: 0.001 G below 0.3 G, 0.05 G to 2 G, then ``h`` up to ``B_MAX``."""
+    b_ul, h_ul = ULTRA_LOW
     b_lo, h_lo = LOW_FIELD
-    return np.round(np.concatenate([np.arange(B_MIN, b_lo, h_lo),
+    return np.round(np.concatenate([np.arange(B_MIN, b_ul, h_ul),
+                                    np.arange(b_ul, b_lo, h_lo),
                                     np.arange(b_lo, B_MAX + h / 2, h)]), 9)
 
 
@@ -112,7 +132,48 @@ def _refine_pole(fn, z, d, n_iter=12):
     return z, s
 
 
-def _poles_on_grid(fn, B, a, d2_thresh=0.5):
+def _find_jumps(B, a, poles=(), min_jump=5.0, ratio=50.0):
+    """Indices ``k`` where ``a`` steps discontinuously between ``B[k]`` and ``B[k+1]``.
+
+    Sub-gauss channel openings (an inelastic threshold crossing the entrance channel as
+    the Zeeman splitting closes) make ``a(B)`` genuinely discontinuous: one cell carries a
+    large change and both neighbours stay smooth.  A narrow pole instead spikes and comes
+    back, so it moves *two* adjacent cells -- hence the two-sided neighbour test.
+    """
+    da = np.abs(np.diff(a))
+    if da.size < 3:
+        return []
+    nb = np.maximum(np.r_[da[1], da[:-1]], np.r_[da[1:], da[-2]])
+    idx = np.where((da > min_jump) & (da > ratio * np.maximum(nb, 1e-9)))[0]
+    if len(poles):
+        pr = np.asarray(poles).real
+        idx = np.array([k for k in idx if np.min(np.abs(pr - B[k])) > 3e-3], dtype=int)
+    return list(idx)
+
+
+def _refine_jump(fn, lo, hi, tol=1e-7):
+    """Bisect the discontinuity inside the cell ``[lo, hi]`` onto the threshold field.
+
+    Both sides are smooth and far apart in value, so a sample belongs to whichever
+    endpoint it is closer to.
+    """
+    a_lo, a_hi = complex(fn(lo)), complex(fn(hi))
+    while hi - lo > tol:
+        mid = 0.5 * (lo + hi)
+        a_mid = complex(fn(mid))
+        if abs(a_mid - a_lo) < abs(a_mid - a_hi):
+            lo, a_lo = mid, a_mid
+        else:
+            hi, a_hi = mid, a_mid
+    return 0.5 * (lo + hi)
+
+
+def find_breaks(fn, B, a):
+    """Threshold fields (G) where ``a(B)`` jumps, refined to ~1e-7 G."""
+    return np.array([_refine_jump(fn, B[k], B[k + 1]) for k in _find_jumps(B, a)])
+
+
+def _poles_on_grid(fn, B, a, d2_thresh=0.5, breaks=()):
     """Complex poles ``B0 + i gamma/2`` of ``a`` (sampled on grid ``B``).
 
     1. Sign changes of Re a that are poles (Brent): exact for elastic poles; for
@@ -126,7 +187,12 @@ def _poles_on_grid(fn, B, a, d2_thresh=0.5):
     from .resonances import _resolve_sign_change
     zs = []
     re = a.real
+    breaks = np.asarray(breaks, dtype=float)
+    def _at_break(x, w):
+        return breaks.size and np.min(np.abs(breaks - x)) < w
     for k in range(len(B) - 1):
+        if breaks.size and np.any((breaks > B[k]) & (breaks < B[k + 1])):
+            continue                      # a discontinuity, not a pole
         if re[k] * re[k + 1] < 0:
             B0, kind = _resolve_sign_change(fn, B[k], B[k + 1])
             if kind != 'pole':
@@ -153,6 +219,8 @@ def _poles_on_grid(fn, B, a, d2_thresh=0.5):
         new = []
         for k in flag[np.argsort(-d2[flag - 1])]:          # strongest first
             h = _local_step(B, B[k])
+            if _at_break(B[k], 3 * h):
+                continue
             if known.size and np.min(np.abs(known - B[k])) < 2.5 * h:
                 continue
             if any(abs(B[k] - x) < 2.5 * h for x in tried + [z.real for z, _ in new]):
@@ -173,7 +241,7 @@ def _poles_on_grid(fn, B, a, d2_thresh=0.5):
 
 
 def refresh_poles(checkpoint_dir, workers=None):
-    """Re-run the pole search on existing checkpoints (grid values are reused)."""
+    """Re-run the pole and jump search on existing checkpoints (grid values are reused)."""
     from concurrent.futures import ProcessPoolExecutor
     for var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
         os.environ[var] = "1"
@@ -190,20 +258,29 @@ def _repole_worker(args):
         B, a = d["B"], d["a"]
     cc = worker_cc()
     fn = lambda x: cc.scattering_length(*pair, float(np.clip(x, B_MIN, B_MAX)))
-    np.savez(path, B=B, a=a, poles=np.array(_poles_on_grid(fn, B, a), dtype=complex))
+    poles, breaks = analyse_pair(fn, B, a)
+    np.savez(path, B=B, a=a, poles=poles, breaks=breaks)
     return pair
 
 
 def build_pair(pair, h=0.5, cc=None):
-    """Tabulate one pair: ``(B, a, poles)`` on :func:`make_grid` ``(h)``."""
+    """Tabulate one pair: ``(B, a, poles, breaks)`` on :func:`make_grid` ``(h)``."""
     from .coupled_channels import CoupledChannels
     cc = cc or CoupledChannels(B_max=B_MAX)
     a_st, b_st = pair
     fn = lambda B: cc.scattering_length(a_st, b_st, float(np.clip(B, B_MIN, B_MAX)))
     B = make_grid(h)
     a = np.array([fn(x) for x in B])
-    poles = _poles_on_grid(fn, B, a)
-    return B, a, np.array(poles, dtype=complex)
+    return (B, a) + analyse_pair(fn, B, a)
+
+
+def analyse_pair(fn, B, a):
+    """``(poles, breaks)`` of a tabulated pair -- the part that needs no new grid values."""
+    breaks = find_breaks(fn, B, a)
+    poles = np.array(_poles_on_grid(fn, B, a, breaks=breaks), dtype=complex)
+    if breaks.size and poles.size:       # a break that landed on a real pole is not a jump
+        breaks = breaks[np.min(np.abs(breaks[:, None] - poles.real[None, :]), axis=1) > 3e-3]
+    return poles, breaks
 
 
 def worker_cc(tries=20):
@@ -226,8 +303,8 @@ def _build_worker(args):
     pair, h, ckpt = args
     out = Path(ckpt) / f"{pair_key(*pair)}.npz"
     if not out.exists():
-        B, a, poles = build_pair(pair, h, cc=worker_cc())
-        np.savez(out, B=B, a=a, poles=poles)
+        B, a, poles, breaks = build_pair(pair, h, cc=worker_cc())
+        np.savez(out, B=B, a=a, poles=poles, breaks=breaks)
     return pair
 
 
@@ -288,6 +365,7 @@ def write_table(checkpoint_dir, path=TABLE_PATH, stride=1):
         k = pair_key(*pair)
         with np.load(Path(checkpoint_dir) / f"{k}.npz") as d:
             B, a, poles = d["B"], d["a"], d["poles"]
+            poles_d[f"breaks_{k}"] = d["breaks"] if "breaks" in d else np.empty(0)
         keep = np.concatenate([np.where(B < LOW_FIELD[0])[0],
                                np.where(B >= LOW_FIELD[0])[0][::stride]])
         a, h = a[keep], (B[-1] - B[-2]) * stride
@@ -295,7 +373,8 @@ def write_table(checkpoint_dir, path=TABLE_PATH, stride=1):
         if np.any(np.abs(a.imag) > 0):
             keys.append(f"im_{k}"); cols.append(a.imag)
         poles_d[f"poles_{k}"] = poles
-    meta = dict(format=1, B_valid=B_VALID, h=float(h), low_field=LOW_FIELD, dtype="float32",
+    meta = dict(format=3, B_valid=B_VALID, h=float(h), low_field=LOW_FIELD,
+                ultra_low=ULTRA_LOW, dtype="float32",
                 a_S=kc.A_SINGLET, a_T=kc.A_TRIPLET, delta_S=kc.DELTA_S, delta_T=kc.DELTA_T,
                 created=datetime.date.today().isoformat(),
                 model="kamo.scattering.CoupledChannels on the Falke 2008 curves, inner walls "
@@ -316,6 +395,13 @@ def _load(path=TABLE_PATH):
     with np.load(path) as z:
         d = {k: z[k] for k in z.files}
     keys = [str(k) for k in d.pop("keys")]
+    import json
+    fmt = json.loads(str(d["meta"])).get("format")
+    if fmt != 3:
+        raise ValueError(f"{path} is format {fmt}, expected 3 (the grid gained a 0.001 G "
+                         f"segment below 0.3 G, and a(B) is now split at its sub-gauss "
+                         f"threshold jumps); rebuild with "
+                         f"`python -m kamo.scattering.tables --build`")
     n = len(make_grid(float(d["h"])))
     d.update(zip(keys, _unpack(d.pop("blob"), len(keys), n)))
     return d
@@ -323,13 +409,23 @@ def _load(path=TABLE_PATH):
 
 @lru_cache(maxsize=None)
 def _spline(key, path=TABLE_PATH):
+    """``(segment splines, break fields, poles)`` for one pair.
+
+    ``a(B)`` is split at its threshold jumps (:func:`find_breaks`) and splined on each
+    smooth piece; interpolating through a jump corrupts several cells either side.
+    """
     from scipy.interpolate import CubicSpline
     d = _load(path)
     B = make_grid(float(d["h"]))
     a = d[f"re_{key}"].astype(float) + 1j * (d[f"im_{key}"].astype(float)
                                              if f"im_{key}" in d else 0.0)
     poles = d[f"poles_{key}"]
-    return CubicSpline(B, a * _pole_product(B, poles)), poles
+    breaks = np.asarray(d.get(f"breaks_{key}", np.empty(0)), dtype=float)
+    aP = a * _pole_product(B, poles)
+    edges = np.searchsorted(B, breaks)
+    segs = tuple(CubicSpline(B[lo:hi], aP[lo:hi]) for lo, hi in
+                 zip(np.r_[0, edges].astype(int), np.r_[edges, len(B)].astype(int)))
+    return segs, breaks, poles
 
 
 def _pole_product(B, poles):
@@ -341,10 +437,18 @@ def _pole_product(B, poles):
 
 def table_scattering_length(state_a, state_b, B, path=TABLE_PATH) -> np.ndarray:
     """Complex a (a0) of the pair from the precomputed table, at fields ``B`` (array)."""
-    spl, poles = _spline(pair_key(state_a, state_b), path)
+    segs, breaks, poles = _spline(pair_key(state_a, state_b), path)
     B = np.asarray(B, dtype=float)
+    flat = np.atleast_1d(B).ravel()
+    num = np.empty(flat.shape, dtype=complex)
+    which = (np.searchsorted(breaks, flat, side="right") if breaks.size
+             else np.zeros(flat.shape, dtype=int))
+    for j, spl in enumerate(segs):
+        m = which == j
+        if m.any():
+            num[m] = spl(flat[m])
     with np.errstate(divide="ignore", invalid="ignore"):
-        return spl(B) / _pole_product(B, poles)
+        return (num.reshape(B.shape) if B.ndim else num[0]) / _pole_product(B, poles)
 
 
 def table_poles(state_a, state_b, max_width=1.0, path=TABLE_PATH) -> np.ndarray:
@@ -354,10 +458,19 @@ def table_poles(state_a, state_b, max_width=1.0, path=TABLE_PATH) -> np.ndarray:
     in a lossy channel) as wide complex poles; ``max_width`` (G) drops those with
     ``gamma > max_width``.
     """
-    _, poles = _spline(pair_key(state_a, state_b), path)
+    poles = _spline(pair_key(state_a, state_b), path)[2]
     keep = ((poles.real >= B_VALID[0]) & (poles.real <= B_VALID[1])
             & (2 * np.abs(poles.imag) <= max_width))
     return poles[keep]
+
+
+def table_breaks(state_a, state_b, path=TABLE_PATH) -> np.ndarray:
+    """Fields (G) where ``a(B)`` of the pair jumps discontinuously.
+
+    Sub-gauss inelastic-channel openings; the table splines each side separately, so
+    ``a`` is correct up to either edge but undefined exactly at the break.
+    """
+    return _spline(pair_key(state_a, state_b), path)[1]
 
 
 def table_meta(path=TABLE_PATH) -> dict:

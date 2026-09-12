@@ -9,9 +9,11 @@ This is the engine behind ``Potassium39.get_scattering_length``.
 Methods
 -------
 ``"table"`` (default)
-    The calibrated coupled channels, precomputed for all 36 pairs of ground states on
-    0-1000 G and shipped with kamo (:mod:`kamo.scattering.tables`).  Instant; complex
-    ``a`` in lossy channels.
+    The calibrated coupled channels, precomputed for all 36 pairs of ground states and
+    shipped with kamo (:mod:`kamo.scattering.tables`).  Instant; complex ``a`` in lossy
+    channels.  Served on 0-1000 G: B = 0 is exact, and above 0.01 G the table tracks the
+    model to 1.4e-3 relative or better.  In 0 < B < 0.01 G unresolved channel openings
+    make it indicative only -- use ``method="cc"`` there.
 ``"cc"``
     The same model evaluated directly (:class:`~kamo.scattering.CoupledChannels`), for
     checks or fields the table does not cover.  The first call takes ~1.5 s of setup, then
@@ -124,7 +126,8 @@ def scattering_length(state_a, state_b=None, B_gauss=0.0, method: str = "table",
         Hyperfine states of the two atoms.  ``state_b=None`` means both atoms are in
         ``state_a``.
     B_gauss : float or array-like
-        Magnetic field(s), G.
+        Magnetic field(s), G.  ``"table"`` covers 0-1000 G; see the module docstring for
+        the 0 < B < 0.01 G caveat.
     method : {"table", "cc", "empirical", "kokkelmans"}
         See the module docstring.
     interp : bool
@@ -154,13 +157,15 @@ def scattering_length(state_a, state_b=None, B_gauss=0.0, method: str = "table",
         raise ValueError(f"no {method!r} scattering-length data for |{a[0]},{a[1]:+d}>+"
                          f"|{b[0]},{b[1]:+d}>; available: {available_pairs(method)}.{hint}")
 
+    from .tables import B_VALID
     B = np.asarray(B_gauss, dtype=float)
     Bf = np.atleast_1d(B).ravel()
-    lo, hi = {"table": (1.0, 1000.0), "cc": (0.0, 1000.0), "empirical": (0.0, np.inf),
+    lo, hi = {"table": B_VALID, "cc": (0.0, 1000.0), "empirical": (0.0, np.inf),
               "kokkelmans": (1.0, 999.998)}[method]
-    if np.any(Bf < lo) or np.any(Bf > hi):
+    bad = (Bf < lo) | (Bf > hi)
+    if np.any(bad):
         raise ValueError(f"B outside the {method!r} range [{lo}, {hi}] G "
-                         f"(got {Bf.min():g} .. {Bf.max():g})")
+                         f"(got {Bf[bad].min():g} .. {Bf[bad].max():g})")
 
     if method == "table":
         from .tables import table_scattering_length

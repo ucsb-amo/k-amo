@@ -31,10 +31,30 @@ def test_table_poles_are_calibrated_positions():
         assert np.min(np.abs(poles - cal)) < 1e-3, (label, B0)
 
 
-def test_table_below_valid_range_raises():
+def test_table_covers_zero_to_1000_G():
+    """The table is served on the whole 0-1000 G, endpoints included."""
+    for B in (0.0, 1000.0):
+        assert np.isfinite(scattering_length((1, 0), None, B))
     with pytest.raises(ValueError, match="range"):
-        scattering_length((1, 0), None, 0.5)
-    assert np.isfinite(scattering_length((1, 0), None, 0.5, method="cc"))
+        scattering_length((1, 0), None, -1e-9)
+    with pytest.raises(ValueError, match="range"):
+        scattering_length((1, 0), None, 1000.1)
+
+
+def test_table_zero_field_is_exact():
+    """B = 0 is a grid node, so the table reproduces the coupled channels there."""
+    for pair in [((1, -1), None), ((1, 0), None), ((1, 1), (1, -1)), ((2, 0), (2, 1))]:
+        t = scattering_length(pair[0], pair[1], 0.0, return_complex=True)
+        d = scattering_length(pair[0], pair[1], 0.0, method="cc", return_complex=True)
+        assert abs(t - d) < 1e-3, (pair, t, d)
+
+
+def test_table_low_field_matches_cc():
+    """Above the ~0.01 G branch-point region the refined low-field grid tracks the model."""
+    for B in (0.02, 0.05, 0.2, 0.5, 0.9):
+        t = scattering_length((1, -1), (1, 0), B, return_complex=True)
+        d = scattering_length((1, -1), (1, 0), B, method="cc", return_complex=True)
+        assert abs(t - d) < 1e-2 * max(abs(d), 1.0), (B, t, d)
 
 
 def test_same_state_default_and_symmetry():
