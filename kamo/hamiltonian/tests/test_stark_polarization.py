@@ -200,3 +200,92 @@ def test_sweep_honours_polarization(model, tweezer):
     up_pi, _ = _sigma_minus_shift(model, tweezer, "pi")
     up_pp, _ = _sigma_minus_shift(model, tweezer, "linear_perp")
     assert abs(up_pp - up_pi) > 1.0e4      # Hz; they must not coincide
+
+
+# ============================================ full operator (m_j-changing couplings)
+from kamo.hamiltonian.builder import _POLARIZATIONS as _POLS  # noqa: E402
+from kamo.hamiltonian.builder import spherical_amplitudes  # noqa: E402
+
+CIRC_X_PLUS = (0.0, 1.0, 1j)       # circular, propagating along x (perpendicular to B)
+CIRC_X_MINUS = (0.0, 1.0, -1j)
+
+
+def _stark(model, tweezer, pol, **kw):
+    return model.builder.laser_stark_operator(tweezer, polarization=pol, **kw)
+
+
+@pytest.mark.parametrize("pol", ["pi", "sigma+", "sigma-"])
+def test_full_operator_equals_diagonal_for_axial_polarizations(model, tweezer, pol):
+    """Symmetric about B: the rank-1/2 parts have no m_j-changing component."""
+    full = _stark(model, tweezer, pol)
+    diag = _stark(model, tweezer, pol, diagonal_only=True)
+    assert np.max(np.abs(full - diag)) <= 1e-12 * np.max(np.abs(diag))
+
+
+@pytest.mark.parametrize("pol", ["linear_perp", CIRC_X_PLUS, CIRC_X_MINUS])
+def test_full_operator_keeps_the_diagonal_and_adds_couplings(model, tweezer, pol):
+    full = _stark(model, tweezer, pol)
+    diag = _stark(model, tweezer, pol, diagonal_only=True)
+    scale = np.max(np.abs(diag))
+    assert np.allclose(np.diag(full), np.diag(diag), rtol=1e-12, atol=1e-12 * scale)
+    off = full - np.diag(np.diag(full))
+    assert np.max(np.abs(off[8:, 8:])) > 1e-3 * scale          # 4P3/2 block
+
+
+def test_circular_perpendicular_geometry_factors():
+    b, g = _polarization_geometry(spherical_amplitudes(CIRC_X_PLUS))
+    assert b == pytest.approx(0.0, abs=1e-12)
+    assert g == pytest.approx(0.25, abs=1e-12)
+
+
+def test_cartesian_polarization_matches_named(model, tweezer):
+    for vec, name in (((0.0, 0.0, 1.0), "pi"), ((1.0, 0.0, 0.0), "linear_perp"),
+                      ((-1.0, -1j, 0.0), "sigma+"), ((1.0, -1j, 0.0), "sigma-")):
+        a, b = _stark(model, tweezer, vec), _stark(model, tweezer, name)
+        assert np.allclose(a, b, rtol=1e-12, atol=1e-12 * np.max(np.abs(b)))
+        assert _polarization_geometry(spherical_amplitudes(vec)) == \
+            pytest.approx(_polarization_geometry(_POLS[name]), abs=1e-12)
+
+
+def test_full_operator_is_hermitian(model, tweezer):
+    for pol in ("linear_perp", CIRC_X_PLUS, (0.3, 0.5 + 0.2j, 0.7j)):
+        op = _stark(model, tweezer, pol)
+        assert np.allclose(op, np.conj(op.T), rtol=0, atol=1e-14 * np.max(np.abs(op)))
+
+
+def _block_spectra(op, model):
+    return [np.sort(np.linalg.eigvalsh(op[sl, sl])) for _, sl in model.basis.manifold_slices()]
+
+
+@pytest.mark.parametrize("pol, ref", [
+    ((1.0, 0.0, 0.0), "pi"), ((0.0, 1.0, 0.0), "pi"), ((1.0, 1.0, 1.0), "pi"),
+    (CIRC_X_PLUS, "sigma+"), (CIRC_X_MINUS, "sigma+"), ((1.0, 1j, 0.0), "sigma+"),
+    ((1.0, 0.0, 1j), "sigma-"),
+])
+def test_stark_spectrum_is_rotation_invariant(model, tweezer, pol, ref):
+    """Independent check of the tensor algebra: with no field the quantization axis
+    is arbitrary, so rotating the polarization cannot change a manifold's Stark
+    spectrum.  The trusted pi / sigma+ diagonals are the reference."""
+    for a, b in zip(_block_spectra(_stark(model, tweezer, pol), model),
+                    _block_spectra(_stark(model, tweezer, ref), model)):
+        assert a == pytest.approx(b, rel=1e-10, abs=1e-12 * np.max(np.abs(b)))
+
+
+def test_diagonal_only_breaks_rotation_invariance(model, tweezer):
+    """...which is why the diagonal is only the high-field first-order answer."""
+    a = _block_spectra(_stark(model, tweezer, (0.0, 1.0, 0.0), diagonal_only=True), model)[1]
+    b = _block_spectra(_stark(model, tweezer, "pi"), model)[1]
+    assert np.max(np.abs(a - b)) > 1e-3 * np.max(np.abs(b))
+
+
+def test_sigma_minus_shift_circular_perpendicular(model, tweezer):
+    """Circular light propagating perpendicular to B: beta = 0, gamma = +1/4.  At the
+    typical power the shift is linear in gamma between linear-perp (gamma = -1/2)
+    and pi (gamma = +1); the m_j-changing couplings only enter at O(I^2)."""
+    up_pi, _ = _sigma_minus_shift(model, tweezer, "pi")
+    up_pp, _ = _sigma_minus_shift(model, tweezer, "linear_perp")
+    expected = up_pp + (0.25 + 0.5) / 1.5 * (up_pi - up_pp)
+    for pol in (CIRC_X_PLUS, CIRC_X_MINUS):
+        up, dn = _sigma_minus_shift(model, tweezer, pol)
+        assert up == pytest.approx(expected, abs=1.0)          # Hz
+        assert abs(dn - up) < 5.0

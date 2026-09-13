@@ -11,8 +11,9 @@ Terms
 * ``zeeman_operator``     : paramagnetic Zeeman, returned *per Gauss*.
 * ``diamagnetic_operator``: diamagnetic term, returned *per Gauss^2*.
 * ``laser_rwa_operator``  : rotating-wave dipole coupling to a Gaussian beam.
-* ``laser_stark_operator``: effective AC-Stark shift (scalar + vector + tensor,
-                            weighted by the polarization geometry), *per W/m^2*.
+* ``laser_stark_operator``: effective AC-Stark operator (scalar + vector + tensor
+                            irreducible parts for any polarization, including
+                            the m_j-changing couplings), *per W/m^2*.
 """
 
 from __future__ import annotations
@@ -81,6 +82,52 @@ def _polarization_geometry(pol: Dict[int, complex]) -> Tuple[float, float]:
     cp = abs(complex(pol.get(+1, 0.0))) ** 2 / norm2
     cm = abs(complex(pol.get(-1, 0.0))) ** 2 / norm2
     return cm - cp, (3.0 * c0 - 1.0) / 2.0
+
+
+def spherical_amplitudes(eps_xyz) -> Dict[int, complex]:
+    """``{q: c_q}`` about the quantization axis from a Cartesian polarization.
+
+    ``eps_xyz`` is a complex 3-vector in a right-handed frame whose z axis is B
+    (the transverse x, y orientation is arbitrary; it only sets the phases of
+    the c_q).  With ``e_0 = z``, ``e_{+-1} = -+(x +- i y)/sqrt(2)``::
+
+        c_0 = eps_z,   c_{+1} = -(eps_x - i eps_y)/sqrt(2),   c_{-1} = (eps_x + i eps_y)/sqrt(2)
+
+    E.g. circular light propagating along x, ``(0, 1, i)``, has
+    ``|c_0|^2 = 1/2`` and ``|c_{+1}|^2 = |c_{-1}|^2 = 1/4``: beta = 0, gamma = +1/4.
+    """
+    ex, ey, ez = (complex(v) for v in np.asarray(eps_xyz).ravel())
+    s2 = np.sqrt(2.0)
+    return {0: ez, +1: -(ex - 1j * ey) / s2, -1: (ex + 1j * ey) / s2}
+
+
+def _spherical_to_cartesian(pol: Dict[int, complex]) -> np.ndarray:
+    """Unit Cartesian ``eps`` (z along B) from ``{q: c_q}``; inverse of
+    :func:`spherical_amplitudes`."""
+    c0 = complex(pol.get(0, 0.0))
+    cp = complex(pol.get(+1, 0.0))
+    cm = complex(pol.get(-1, 0.0))
+    s2 = np.sqrt(2.0)
+    eps = np.array([(cm - cp) / s2, -1j * (cp + cm) / s2, c0], dtype=complex)
+    norm = np.linalg.norm(eps)
+    if norm <= 0.0:
+        raise ValueError("polarization has zero norm.")
+    return eps / norm
+
+
+@lru_cache(maxsize=None)
+def _j_operators(j: float):
+    """``(m_j, Jx, Jy, Jz)`` for angular momentum j; rows ordered m_j = j ... -j.
+
+    Standard Condon-Shortley phases: ``J+ |m> = sqrt(j(j+1) - m(m+1)) |m+1>``.
+    The cached arrays are shared; do not modify them in place.
+    """
+    m = np.arange(j, -j - 0.5, -1.0)
+    Jp = np.zeros((m.size, m.size), dtype=complex)
+    for k in range(1, m.size):
+        Jp[k - 1, k] = np.sqrt(j * (j + 1) - m[k] * (m[k] + 1))
+    Jm = Jp.conj().T
+    return m, (Jp + Jm) / 2, (Jp - Jm) / (2 * 1j), np.diag(m).astype(complex)
 
 
 def _clebsch(j1, m1, j2, m2, j3, m3) -> float:
@@ -304,7 +351,11 @@ class HamiltonianBuilder:
             return dict(_POLARIZATIONS[polarization])
         if isinstance(polarization, dict):
             return polarization
-        raise TypeError("polarization must be a str or {q: amplitude} dict.")
+        arr = np.asarray(polarization)
+        if arr.shape == (3,):
+            return spherical_amplitudes(arr)
+        raise TypeError("polarization must be a str, a {q: amplitude} dict, or a "
+                        "Cartesian 3-vector (x, y, z) with z along B.")
 
     def _photon_index(self) -> Dict[Tuple[int, int, float], int]:
         """Assign a rotating-frame photon index to each manifold via BFS over
@@ -406,40 +457,68 @@ class HamiltonianBuilder:
     def laser_stark_operator(self, beam, polarizabilities=None,
                              include_tensor: bool = True,
                              polarization="pi",
-                             include_vector: bool = True) -> np.ndarray:
+                             include_vector: bool = True,
+                             diagonal_only: bool = False) -> np.ndarray:
         """Effective AC-Stark operator *per W/m^2* (Hz per W/m^2).
 
         ``H_stark(I) = laser_stark_operator(beam) * I``.
 
         Scalar, vector and tensor polarizabilities come from
         :class:`kamo.light_shift.ComputePolarizabilities` at the beam
-        wavelength; the operator is diagonal in the uncoupled basis,
+        wavelength.  Within each fine-structure manifold the operator is
+        (Le Kien, Schneeweiss & Rauschenbeutel, EPJ D 67, 92 (2013))
+
+            alpha_s - alpha_v (b . J)/(2j)
+            + alpha_t [3((eps* . J)(eps . J) + (eps . J)(eps* . J)) - 2 j(j+1)] / (2j(2j-1))
+
+        with ``b = Im(eps x eps*)`` and ``eps`` in the frame whose z axis is B.
+        Its diagonal is the familiar
 
             alpha(m_j) = alpha_s - beta (m_j / 2j) alpha_v
                          + gamma (3 m_j^2 - j(j+1))/(j(2j-1)) alpha_t
 
-        with ``(beta, gamma)`` the polarization geometry factors from
-        :func:`_polarization_geometry`.
+        with ``(beta, gamma)`` from :func:`_polarization_geometry`.  For a
+        polarization symmetric about B (pi, sigma+, sigma-) that is the whole
+        operator.  For anything else -- linear or circular light at an angle
+        to B -- the vector term has a component transverse to B and the
+        tensor term couples Delta m_j = +-1, +-2.  These shift energies only
+        at second order against the Zeeman splitting, i.e. they make the
+        light shift nonlinear in I, but they matter at high intensity and
+        they are what makes the spectrum rotation invariant at B = 0.  The
+        nuclear spin is a spectator (Delta m_i = 0); couplings between
+        different j of one (n, l) are neglected (suppressed by the
+        fine-structure splitting).
 
         Parameters
         ----------
-        polarization : str or {q: amplitude}
+        polarization : str, {q: amplitude}, or Cartesian 3-vector
             Polarization relative to the quantization (B) axis -- the SAME
             argument :meth:`laser_rwa_operator` takes.  ``"pi"`` (default) is
             linear along B and gives ``gamma = +1``; ``"linear_perp"``,
             ``"sigma+"`` and ``"sigma-"`` are all perpendicular to B and give
-            ``gamma = -1/2``, differing only through ``beta``.
+            ``gamma = -1/2``, differing only through ``beta``.  A 3-vector is
+            ``(eps_x, eps_y, eps_z)`` with z along B, e.g. ``(0, 1, 1j)`` for
+            circular light propagating along x (``beta = 0, gamma = +1/4``).
         include_tensor, include_vector : bool
-            Drop the rank-2 / rank-1 terms.  The vector term vanishes anyway
-            for any linear polarization (``beta = 0``), and the tensor term
-            vanishes for ``j = 1/2``.
+            Drop the rank-2 / rank-1 terms.  The rank-1 term vanishes for any
+            linear polarization, and the rank-2 term for ``j = 1/2``.
+        diagonal_only : bool
+            Keep only the (beta, gamma) diagonal: the first-order shift at
+            high field, and the pre-2026-09-13 behaviour.
+
+        Returns
+        -------
+        ndarray (dim, dim), real when every element is real (always for
+        pi, sigma+-, linear light and circular light about an axis
+        perpendicular to B in these phase conventions), else complex Hermitian.
 
         Notes
         -----
         Before 2026-09, this method ignored ``polarization`` entirely and
         hardwired ``gamma = +1`` while dropping the vector term.  ``"pi"``
-        reproduces that behaviour exactly, so the default is unchanged; any
-        other polarization now gives a different (correct) answer.
+        reproduces that behaviour exactly.  Until 2026-09-13 it returned only
+        the diagonal for every polarization; pi and sigma+- are unchanged, and
+        non-axial polarizations now carry their m_j-changing couplings.
         """
         if polarizabilities is None:
             from kamo import ComputePolarizabilities
@@ -449,11 +528,13 @@ class HamiltonianBuilder:
                 atom=self.atom,
                 force_arc=not getattr(self.atom, "use_portal", False))
 
-        beta, gamma = _polarization_geometry(
-            self._resolve_polarization(polarization))
+        pol = self._resolve_polarization(polarization)
+        beta, gamma = _polarization_geometry(pol)
+        eps = _spherical_to_cartesian(pol)
+        bvec = np.imag(np.cross(eps, np.conj(eps)))          # z component is beta
 
         dim = self.basis.dim
-        diag = np.zeros(dim, dtype=float)
+        H = np.zeros((dim, dim), dtype=complex)
         # U = -1/(2 eps0 c) * alpha_SI * I ; convert alpha au->SI, energy->Hz
         pre = c.ac_stark_shift_J(c.convert_polarizability_au_to_SI, 1.0) / c.h
 
@@ -464,12 +545,37 @@ class HamiltonianBuilder:
             a_v = float(np.atleast_1d(a_v)[0]) if a_v is not None else 0.0
             a_t = float(np.atleast_1d(a_t)[0]) if a_t is not None else 0.0
             j = man.j
-            for s in self.basis.state_list[sl]:
-                shift = pre * a_s
-                if include_vector and beta != 0.0 and a_v != 0.0:
-                    shift -= pre * beta * (s.m_j / (2 * j)) * a_v
-                if include_tensor and j > 0.5 and gamma != 0.0 and a_t != 0.0:
-                    tens = (3 * s.m_j ** 2 - j * (j + 1)) / (j * (2 * j - 1))
-                    shift += pre * gamma * a_t * tens
-                diag[s.index] = shift
-        return np.diag(diag)
+            states = self.basis.state_list[sl]
+            if diagonal_only:
+                for s in states:
+                    shift = pre * a_s
+                    if include_vector and beta != 0.0 and a_v != 0.0:
+                        shift -= pre * beta * (s.m_j / (2 * j)) * a_v
+                    if include_tensor and j > 0.5 and gamma != 0.0 and a_t != 0.0:
+                        tens = (3 * s.m_j ** 2 - j * (j + 1)) / (j * (2 * j - 1))
+                        shift += pre * gamma * a_t * tens
+                    H[s.index, s.index] = shift
+                continue
+
+            mvals, Jx, Jy, Jz = _j_operators(j)
+            J = (Jx, Jy, Jz)
+            eye = np.eye(mvals.size)
+            block = a_s * eye.astype(complex)
+            if include_vector and a_v != 0.0:
+                block = block - a_v / (2 * j) * sum(bvec[k] * J[k] for k in range(3))
+            if include_tensor and j > 0.5 and a_t != 0.0:
+                A = sum(eps[k] * J[k] for k in range(3))              # eps . J
+                Ad = sum(np.conj(eps[k]) * J[k] for k in range(3))    # eps* . J
+                block = block + a_t * (3 * (Ad @ A + A @ Ad) - 2 * j * (j + 1) * eye) \
+                    / (2 * j * (2 * j - 1))
+            row = {float(mv): k for k, mv in enumerate(mvals)}
+            for s in states:
+                for t in states:
+                    if abs(s.m_i - t.m_i) > 1e-9:            # nuclear spin is a spectator
+                        continue
+                    H[s.index, t.index] = pre * block[row[float(s.m_j)], row[float(t.m_j)]]
+
+        scale = np.max(np.abs(H)) if H.size else 0.0
+        if np.max(np.abs(H.imag), initial=0.0) <= 1e-14 * scale:
+            return H.real
+        return H

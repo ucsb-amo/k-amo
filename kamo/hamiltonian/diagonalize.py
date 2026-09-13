@@ -1416,11 +1416,11 @@ def sweep_intensity(builder, beam, I_max: float, n_points: int = 200,
                    the basis enter as a residual polarizability.
         "rwa"   -> rotating-wave dipole coupling (couples manifolds), exact
                    within the basis but without counter-rotating terms.
-        "stark" -> effective AC-Stark shift operator (diagonal).
-    polarization : str or {q: amplitude}
+        "stark" -> effective AC-Stark operator (rank 0/1/2 within each manifold).
+    polarization : str, {q: amplitude}, or Cartesian 3-vector (z along B)
         Laser polarization relative to the quantization (B) axis.  Used by BOTH
         models: it sets the driven dipole matrix elements under "rwa", and the
-        vector/tensor geometry factors (beta, gamma) under "stark".
+        vector/tensor parts of the effective operator under "stark".
     B_gauss : float
         Optional static magnetic field added via the Zeeman operator.
     """
