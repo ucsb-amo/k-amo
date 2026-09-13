@@ -564,19 +564,26 @@ class LightSheet(Beam):
 
     Each size keyword takes a scalar (both axes) or a ``(u, v)`` pair; still
     exactly one keyword from the size group.  ``u`` lies along
-    ``transverse_axis`` (default ``z``: the thin axis vertical). The two axes
-    have *different* Rayleigh ranges, ``zR_i = pi w_i^2 n / lambda``: the thin
-    axis diverges fastest, and a single zR gets the axial confinement wrong by
-    ``(w_u / w_v)^2``.
+    ``transverse_axis`` (default ``z``: the thin axis vertical, which is what a
+    light sheet is for).  The two axes have *different* Rayleigh ranges,
+    ``zR_i = pi w_i^2 n / lambda``: the thin axis diverges fastest, and a single
+    zR gets the axial confinement wrong by ``(w_u / w_v)^2``.
+
+    Defaults are the same as :class:`Tweezer`'s: propagation along ``+x`` with
+    the ``(0, 1, i)/sqrt(2)`` polarization, so a round ``LightSheet`` is a
+    ``Tweezer``.  A sheet that crosses the x tweezer needs its geometry
+    spelled out, e.g. ``propagation_direction=(0, 0, 1), transverse_axis=(1, 0, 0),
+    polarization=(1, 0, 0)`` as in ``examples/trap_demo.ipynb``.  (Those were
+    briefly the defaults on 2026-09-13, contradicting this docstring and the
+    tests; restored the same day.)
     """
 
     def __init__(self, *, waist=None, NA=None, rayleigh_range=None,
-                 divergence_angle=None, 
-                 transverse_axis=(1., 0., 0.),
+                 divergence_angle=None, transverse_axis=(0.0, 0.0, 1.0),
                  waist_offset_v: float = 0.0, wavelength_m=None, frequency_Hz=None,
                  power=None, peak_intensity=None, n_medium=1.0,
-                 polarization=(0.,1.,0.),
-                 propagation_direction=(0.,0.,1.),
+                 polarization=DEFAULT_POLARIZATION,
+                 propagation_direction=DEFAULT_PROPAGATION,
                  origin=(0.0, 0.0, 0.0), transversality: str = "raise",
                  label: Optional[str] = None):
         if waist_offset_v != 0.0:
