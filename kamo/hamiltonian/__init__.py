@@ -11,6 +11,10 @@ Quick start
 >>> from kamo.hamiltonian import AtomicStructure
 >>> model = AtomicStructure([(4, 0, 0.5), (4, 1, 0.5), (4, 1, 1.5)])
 >>> res = model.magnetic_sweep(B_max=600.0)     # 0.1 G steps by default
+
+Light shifts: ``choose_laser_model`` picks the RWA or the AC-Stark model for a
+transition and ``light_shift_basis`` builds an RWA basis from the channels that
+carry the polarizability at the laser wavelength (see ``laser_model.py``).
 """
 
 from .basis import Basis, BasisState, Manifold
@@ -19,6 +23,11 @@ from .diagonalize import (MagneticSweepResult, LaserSweepResult,
                           SweepResult, diagonalize, eigenshuffle, sweep_field,
                           sweep_intensity)
 from .model import AtomicStructure, make_nlj_basis
+from .laser_model import (Channel, StateChannels, BasisSelection, LaserModelChoice,
+                          state_channels,
+                          channel_weights, light_shift_basis,
+                          choose_laser_model, photon_indices,
+                          substructure_spread_Hz)
 from .state_labels import (state_label, uncoupled_label, coupled_label,
                            both_labels, format_state, rs_state_label,
                            StateLabelMixin)
@@ -37,6 +46,16 @@ __all__ = [
     "HamiltonianBuilder",
     "AtomicStructure",
     "make_nlj_basis",
+    "Channel",
+    "StateChannels",
+    "state_channels",
+    "BasisSelection",
+    "LaserModelChoice",
+    "channel_weights",
+    "light_shift_basis",
+    "choose_laser_model",
+    "photon_indices",
+    "substructure_spread_Hz",
     "diagonalize",
     "eigenshuffle",
     "sweep_field",

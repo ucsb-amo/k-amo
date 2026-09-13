@@ -21,6 +21,19 @@ def _angular_factor(l1, j1, l2, j2, s=0.5):
                * Wigner6j(j1, 1, j2, l2, s, l1) * Wigner3j(l1, 1, l2, 0, 0, 0))
 
 
+def _own_manifolds(*states):
+    """The ``(n, l, j)`` manifolds of ``states`` plus their fine-structure
+    partners (same n and l, other j), in first-seen order."""
+    out = []
+    for st in states:
+        n, l = int(st[0]), int(st[1])
+        js = (float(st[2]),) if l == 0 else (l - 0.5, l + 0.5)
+        for j in js:
+            if (n, l, j) not in out:
+                out.append((n, l, j))
+    return out
+
+
 class Potassium39(arc.Potassium39):
     """ARC's Potassium39, with E1 data from the UDel portal by default.
 
@@ -738,7 +751,7 @@ class Potassium39(arc.Potassium39):
         frequency_Hz=None,
         intensity=None,
         polarization="pi",
-        laser_model="rwa",
+        laser_model="auto",
         basis=None,
         n_points=200,
         dB=0.1,
@@ -803,14 +816,24 @@ class Potassium39(arc.Potassium39):
             ``beam.I0`` when supplied alongside ``beam``.
         polarization : str, optional
             Laser polarization: "pi", "sigma+", or "sigma-" (default "pi").
-        laser_model : {"rwa", "stark"}, optional
-            Light-shift model (default "rwa").
+        laser_model : {"auto", "rwa", "stark"}, optional
+            Light-shift model (default "auto").  "auto" calls
+            :func:`kamo.hamiltonian.choose_laser_model`: "rwa" when the two
+            states share a manifold (the Stark operator cannot see hyperfine
+            admixture), when the light is non-perturbative, or when the laser
+            is close enough to a line that the coupled manifold's hyperfine and
+            Zeeman substructure matters more than the counter-rotating terms;
+            "stark" otherwise (about 1 THz from the D lines for K39 at 520 G).
+            The decision is attached to the returned sweep as
+            ``sweep.model_choice`` (``return_sweep=True``).
         basis : AtomicStructure, optional
             Override the atomic-structure basis.  When omitted, a basis is built
-            automatically: just the two states' own manifolds for a pure
-            magnetic calculation (e.g. only ``(4, 0, 1/2)`` for a ground-state
-            transition), or those manifolds plus their dipole-coupled
-            neighbours when a light shift is requested.
+            automatically: just the two states' own manifolds (and their
+            fine-structure partners) for a pure magnetic calculation or the
+            Stark model, whose operator is diagonal; for the RWA model,
+            :func:`kamo.hamiltonian.light_shift_basis` adds every manifold that
+            carries at least 1e-3 of either state's polarizability at the laser
+            wavelength (so 3D and 5S appear for a 4P state at 1064 nm).
         n_points : int, optional
             Intensity steps for the laser sweep (default 200).
         dB : float, optional
@@ -828,7 +851,8 @@ class Potassium39(arc.Potassium39):
         float, or (float, SweepResult) when ``return_sweep`` is True.
         """
         from kamo import GaussianBeam
-        from kamo.hamiltonian import AtomicStructure, make_nlj_basis
+        from kamo.hamiltonian import (AtomicStructure, choose_laser_model,
+                                      light_shift_basis)
 
         s1 = tuple(state1)
         s2 = tuple(state2)
@@ -854,23 +878,33 @@ class Potassium39(arc.Potassium39):
                 "relative_mode must be None, 'absolute', 'magnetic', or "
                 f"'optical'; got {relative_mode!r}.")
 
+        # ---- choose the laser model ----
+        model_choice = None
+        if use_light:
+            f_laser = beam.frequency() if has_beam else float(frequency_Hz)
+            I_choice = (float(intensity) if intensity is not None
+                        else (float(beam.I0) if has_beam else None))
+            if laser_model == "auto":
+                model_choice = choose_laser_model(
+                    (s1, s2), f_laser, I_choice, B_gauss=float(B), atom=self)
+                laser_model = model_choice.model
+            elif laser_model not in ("rwa", "stark"):
+                raise ValueError(
+                    f"laser_model must be 'auto', 'rwa' or 'stark'; got {laser_model!r}.")
+
         # ---- build / accept the basis ----
         if basis is not None:
             model = basis
-        elif use_light:
-            # light shift needs the dipole-coupled (Δl = ±1) manifolds present
-            manifolds = []
-            for st in (s1, s2):
-                for m in make_nlj_basis(int(st[0]), int(st[1]),
-                                        n_range=0, l_range=1):
-                    if m not in manifolds:
-                        manifolds.append(m)
-            model = AtomicStructure(manifolds, atom=self)
+        elif use_light and laser_model == "rwa":
+            # the RWA only sees channels present in the basis: take every
+            # manifold carrying >= 1e-3 of either state's polarizability
+            sel = (model_choice.basis if model_choice is not None else
+                   light_shift_basis((s1, s2), f_laser, atom=self, B_gauss=float(B)))
+            model = AtomicStructure(list(sel.manifolds), atom=self)
         else:
-            # pure magnetic: only the states' own manifolds are needed
-            manifolds = list(dict.fromkeys(
-                (int(st[0]), int(st[1]), float(st[2])) for st in (s1, s2)))
-            model = AtomicStructure(manifolds, atom=self)
+            # pure magnetic, or the (diagonal) Stark operator: the states' own
+            # manifolds and their fine-structure partners are all that matter
+            model = AtomicStructure(_own_manifolds(s1, s2), atom=self)
 
         # ---- bare transition frequency at B (magnetic sweep, lab frame) ----
         B = float(B)
@@ -896,6 +930,7 @@ class Potassium39(arc.Potassium39):
             # intensity difference cancels the RWA rotating-frame offset,
             # leaving the true lab-frame light shift of the transition.
             df_light = resL.transition_frequency_shift(s1, s2, at=I_max)
+            resL.model_choice = model_choice
 
         f_BI = f_B0 + df_light                                  # f(B, I)
 
@@ -921,7 +956,7 @@ class Potassium39(arc.Potassium39):
         frequency_Hz=None,
         wavelength_m=None,
         polarization="pi",
-        laser_model="rwa",
+        laser_model="auto",
         basis=None,
         n_points=200,
         I_max=None,
@@ -1030,7 +1065,9 @@ class Potassium39(arc.Potassium39):
             of ``beam``, ``frequency_Hz``, ``wavelength_m`` must be given.
         polarization : str, optional
             Laser polarization: "pi", "sigma+", or "sigma-" (default "pi").
-        laser_model : {"rwa", "stark"}, optional
+        laser_model : {"auto", "rwa", "stark"}, optional
+            "auto" chooses as in :meth:`get_transition_frequency`, using
+            ``I_max`` (or the beam's ``I0``) for the perturbativity check.
             Light-shift model (default "rwa").
         basis : AtomicStructure, optional
             Override the atomic-structure basis.  When omitted, the two states'
@@ -1104,7 +1141,8 @@ class Potassium39(arc.Potassium39):
             same inversion on an existing sweep, using ``|df|``.
         """
         from kamo import GaussianBeam
-        from kamo.hamiltonian import AtomicStructure, make_nlj_basis
+        from kamo.hamiltonian import (AtomicStructure, choose_laser_model,
+                                      light_shift_basis)
 
         s1 = tuple(state1)
         s2 = tuple(state2)
@@ -1140,17 +1178,27 @@ class Potassium39(arc.Potassium39):
         targets = np.atleast_1d(np.asarray(light_shift_Hz, dtype=float))
         scalar_in = np.ndim(light_shift_Hz) == 0
 
-        # ---- build / accept the basis (needs the dipole-coupled manifolds) ----
+        # ---- choose the laser model ----
+        model_choice = None
+        I_choice = float(I_max) if I_max is not None else float(getattr(beam, "I0", 0.0))
+        if laser_model == "auto":
+            model_choice = choose_laser_model(
+                (s1, s2), beam.frequency(), I_choice if I_choice > 0 else None,
+                B_gauss=B, atom=self)
+            laser_model = model_choice.model
+        elif laser_model not in ("rwa", "stark"):
+            raise ValueError(
+                f"laser_model must be 'auto', 'rwa' or 'stark'; got {laser_model!r}.")
+
+        # ---- build / accept the basis ----
         if basis is not None:
             model = basis
+        elif laser_model == "rwa":
+            sel = (model_choice.basis if model_choice is not None else
+                   light_shift_basis((s1, s2), beam.frequency(), atom=self, B_gauss=B))
+            model = AtomicStructure(list(sel.manifolds), atom=self)
         else:
-            manifolds = []
-            for st in (s1, s2):
-                for m in make_nlj_basis(int(st[0]), int(st[1]),
-                                        n_range=0, l_range=1):
-                    if m not in manifolds:
-                        manifolds.append(m)
-            model = AtomicStructure(manifolds, atom=self)
+            model = AtomicStructure(_own_manifolds(s1, s2), atom=self)
 
         def _sweep(i_max, npts):
             return model.laser_sweep(
