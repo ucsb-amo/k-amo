@@ -128,16 +128,21 @@ class TestGeometry:
         assert t.with_peak_intensity(2 * t.I0).power == pytest.approx(2 * P, rel=1e-14)
 
     def test_lightsheet_axes(self):
+        """Default sheet (2026-09-13): k along +z, thin axis along x, wide axis and
+        polarization along y; it crosses the x tweezer."""
         s = LightSheet(waist=(8e-6, 120e-6), wavelength_m=LAM, power=0.2)
-        assert np.allclose(s.frame[0], [0, 0, 1])                 # thin axis vertical
+        u, v, k = s.frame
+        assert np.allclose(k, [0, 0, 1]) and np.allclose(u, [1, 0, 0]) and np.allclose(v, [0, 1, 0])
+        assert np.allclose(s.polarization, [0, 1, 0])
         assert s.rayleigh_range_u / s.rayleigh_range_v == pytest.approx((8 / 120) ** 2)
         assert s.peak_intensity == pytest.approx(2 * 0.2 / (np.pi * 8e-6 * 120e-6))
-        assert s.intensity(0.0, 0.0, 8e-6) / s.I0 == pytest.approx(np.exp(-2.0))
-        assert s.intensity(0.0, 120e-6, 0.0) / s.I0 == pytest.approx(np.exp(-2.0))
+        assert s.intensity(8e-6, 0.0, 0.0) / s.I0 == pytest.approx(np.exp(-2.0))    # thin: x
+        assert s.intensity(0.0, 120e-6, 0.0) / s.I0 == pytest.approx(np.exp(-2.0))  # wide: y
+        assert s.intensity(0.0, 0.0, s.rayleigh_range_u) / s.I0 > 0.5                # k: z
 
     def test_lightsheet_rejects_bad_axes(self):
         with pytest.raises(ValueError, match="parallel"):
-            LightSheet(waist=W0, wavelength_m=LAM, transverse_axis=(1, 0, 0))
+            LightSheet(waist=W0, wavelength_m=LAM, transverse_axis=(0, 0, 1))   # along k
         with pytest.raises(NotImplementedError):
             LightSheet(waist=W0, wavelength_m=LAM, waist_offset_v=1e-6)
         with pytest.raises(ValueError, match="pair"):
@@ -165,8 +170,11 @@ class TestIntensity:
         assert t.intensity(Zs, Rs, 0.0) == pytest.approx(gb.intensity(P, r=Rs, z=Zs), rel=1e-13)
 
     def test_lightsheet_of_equal_waists_is_the_tweezer(self):
+        """Given the tweezer's frame and polarization (the defaults differ), a
+        round sheet is the tweezer, bit for bit."""
         t = _tw()
-        s = LightSheet(waist=W0, wavelength_m=LAM, power=P, transverse_axis=t.frame[0])
+        s = LightSheet(waist=W0, wavelength_m=LAM, power=P, transverse_axis=t.frame[0],
+                       propagation_direction=t.frame[2], polarization=t.polarization)
         X, Y, Z = (RNG.normal(size=(50,)) * W0 for _ in range(3))
         assert np.array_equal(s.intensity(X, Y, Z), t.intensity(X, Y, Z))
 
