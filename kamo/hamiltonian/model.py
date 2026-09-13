@@ -15,7 +15,7 @@ Example
 >>>
 >>> # Laser intensity sweep (RWA dipole coupling)
 >>> beam = GaussianBeam(waist=50e-6, wavelength=767e-9, power=1e-3)
->>> res_l = model.laser_sweep(beam, I_max=beam.I0, model="rwa",
+>>> res_l = model.laser_sweep(beam, I_max=beam.I0,
 ...                           polarization="sigma+")
 >>>
 >>> # One-off diagonalization at a single field
@@ -284,19 +284,20 @@ class AtomicStructure(StateLabelMixin):
                            include_quadrupole=include_quadrupole)
 
     def laser_sweep(self, beam, I_max: float = None, n_points: int = 200,
-                    model: str = "rwa", polarization="pi",
+                    model: str = "auto", polarization="pi",
                     B_gauss: float = 0.0,
                     include_quadrupole: bool = True,
                     polarizabilities=None) -> LaserSweepResult:
         """Sweep laser intensity from 0 to ``I_max`` with eigenshuffle tracking.
 
-        ``model="rwa"`` uses rotating-wave dipole coupling built from ``beam``;
-        ``model="stark"`` uses the effective AC-Stark operator from
-        fine-structure polarizabilities (see :func:`sweep_intensity`);
-        ``model="perturbative"`` uses the second-order sum over the exact
-        eigenstates of ``h0 + B * Zeeman`` with both rotating terms (see
-        :mod:`kamo.hamiltonian.perturbative`), which needs the channel
-        manifolds in the basis (:func:`light_shift_basis`).
+        ``model`` (default ``"auto"``): ``"perturbative"`` is the second-order
+        sum over the exact eigenstates of ``h0 + B * Zeeman`` with both
+        rotating terms (:mod:`kamo.hamiltonian.perturbative`); ``"rwa"`` the
+        rotating-wave dipole coupling built from ``beam``; ``"stark"`` the
+        effective AC-Stark operator from fine-structure polarizabilities;
+        ``"auto"`` picks "rwa" only when the light is not perturbative for
+        some pair in the basis (see :func:`sweep_intensity`).  The first two
+        need the channel manifolds in the basis (:func:`light_shift_basis`).
 
         To run a laser sweep *at a field taken from a magnetic sweep*, pass that
         field via ``B_gauss`` (a static Zeeman term is added to H0, so at
@@ -307,12 +308,6 @@ class AtomicStructure(StateLabelMixin):
         """
         if I_max is None:
             I_max = beam.I0
-        if model == "perturbative":
-            from .perturbative import sweep_intensity_perturbative
-            return sweep_intensity_perturbative(
-                self.builder, beam, I_max, n_points=n_points,
-                polarization=polarization, B_gauss=B_gauss,
-                include_quadrupole=include_quadrupole)
         return sweep_intensity(self.builder, beam, I_max, n_points=n_points,
                                model=model, polarization=polarization,
                                B_gauss=B_gauss,

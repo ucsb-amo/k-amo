@@ -15,9 +15,11 @@ Quick start
 Light shifts: three laser models, ``"rwa"`` (non-perturbative, rotating frame),
 ``"perturbative"`` (second-order sum over the exact field eigenstates, both
 rotating terms; ``perturbative.py``) and ``"stark"`` (fine-structure
-polarizabilities).  ``choose_laser_model`` picks between the first two for a
-transition and ``light_shift_basis`` builds the basis from the channels that
-carry the polarizability at the laser wavelength (see ``laser_model.py``).
+polarizabilities).  ``"auto"`` is the default everywhere: ``choose_laser_model``
+picks between the first two for a transition (``Potassium39``), ``choose_sweep_model``
+for a whole-basis sweep (``sweep_intensity``, ``laser_sweep``), and
+``light_shift_basis`` builds the basis from the channels that carry the
+polarizability at the laser wavelength (see ``laser_model.py``).
 """
 
 from .basis import Basis, BasisState, Manifold
@@ -31,7 +33,8 @@ from .laser_model import (Channel, StateChannels, BasisSelection, LaserModelChoi
                           channel_weights, light_shift_basis,
                           choose_laser_model, photon_indices,
                           substructure_spread_Hz)
-from .perturbative import perturbative_stark_operator, sweep_intensity_perturbative
+from .perturbative import (perturbative_stark_operator, sweep_intensity_perturbative,
+                           choose_sweep_model, SweepModelChoice)
 from .state_labels import (state_label, uncoupled_label, coupled_label,
                            both_labels, format_state, rs_state_label,
                            StateLabelMixin)
@@ -62,6 +65,8 @@ __all__ = [
     "substructure_spread_Hz",
     "perturbative_stark_operator",
     "sweep_intensity_perturbative",
+    "choose_sweep_model",
+    "SweepModelChoice",
     "diagonalize",
     "eigenshuffle",
     "sweep_field",

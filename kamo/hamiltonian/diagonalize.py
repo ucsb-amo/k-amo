@@ -1070,12 +1070,14 @@ class MagneticSweepResult(SweepResult):
         B_gauss: Optional[float] = None,
         I_max: Optional[float] = None,
         n_points: int = 200,
-        model: str = "rwa",
+        model: str = "auto",
         polarization: str = "pi",
         include_quadrupole: bool = True,
         polarizabilities=None,
     ) -> "LaserSweepResult":
         """Chain: run a laser-intensity sweep at a field from this sweep.
+
+        ``model`` defaults to ``"auto"``; see :func:`sweep_intensity`.
 
         Parameters
         ----------
@@ -1387,7 +1389,7 @@ def sweep_field(builder, B_max: float, dB: float = 0.1,
 
 
 def sweep_intensity(builder, beam, I_max: float, n_points: int = 200,
-                    model: str = "rwa", polarization="pi",
+                    model: str = "auto", polarization="pi",
                     B_gauss: float = 0.0, include_quadrupole: bool = True,
                     polarizabilities=None) -> SweepResult:
     """Diagonalize H(I) over a laser-intensity sweep from 0 to ``I_max``.
@@ -1401,8 +1403,19 @@ def sweep_intensity(builder, beam, I_max: float, n_points: int = 200,
         Maximum intensity in W/m^2.
     n_points : int
         Number of intensity steps (linearly spaced from 0).
-    model : {"rwa", "stark"}
-        "rwa"   -> rotating-wave dipole coupling (couples manifolds; primary).
+    model : {"auto", "perturbative", "rwa", "stark"}
+        "auto"  -> :func:`kamo.hamiltonian.perturbative.choose_sweep_model`:
+                   "rwa" when the most strongly driven pair in the basis has
+                   Rabi/(2 detuning) above 0.1 at ``I_max`` or when its square
+                   exceeds that pair's counter-rotating error, "perturbative"
+                   otherwise.  The decision is attached to the result as
+                   ``model_choice``.  (Default since 2026-09-13.)
+        "perturbative" -> second-order sum over the exact eigenstates of
+                   H0 + B*Zeeman with both rotating terms
+                   (:mod:`kamo.hamiltonian.perturbative`); channels outside
+                   the basis enter as a residual polarizability.
+        "rwa"   -> rotating-wave dipole coupling (couples manifolds), exact
+                   within the basis but without counter-rotating terms.
         "stark" -> effective AC-Stark shift operator (diagonal).
     polarization : str or {q: amplitude}
         Laser polarization relative to the quantization (B) axis.  Used by BOTH
@@ -1417,6 +1430,22 @@ def sweep_intensity(builder, beam, I_max: float, n_points: int = 200,
 
     I = np.linspace(0.0, I_max, n_points)
 
+    model_choice = None
+    if model in ("auto", "perturbative"):
+        from .perturbative import choose_sweep_model, sweep_intensity_perturbative
+        op = None
+        if model == "auto":
+            model_choice, op = choose_sweep_model(
+                builder, beam, I_max, polarization=polarization, B_gauss=B_gauss,
+                include_quadrupole=include_quadrupole)
+            model = model_choice.model
+        if model == "perturbative":
+            res = sweep_intensity_perturbative(
+                builder, beam, I_max, n_points=n_points, polarization=polarization,
+                B_gauss=B_gauss, include_quadrupole=include_quadrupole, op=op)
+            res.model_choice = model_choice
+            return res
+
     if model == "rwa":
         rwa = builder.laser_rwa_operator(beam, polarization=polarization)
         base = H0 + np.diag(rwa["frame_shift"])
@@ -1430,11 +1459,13 @@ def sweep_intensity(builder, beam, I_max: float, n_points: int = 200,
                                            polarization=polarization)
         mats = [H0 + Sop * inten for inten in I]
     else:
-        raise ValueError("model must be 'rwa' or 'stark'.")
+        raise ValueError("model must be 'auto', 'perturbative', 'rwa' or 'stark'.")
 
     energies, vectors = eigenshuffle(mats)
-    return LaserSweepResult(
+    res = LaserSweepResult(
         I, "Intensity (W/m^2)", energies, vectors, builder.basis,
         beam=beam, polarization=polarization, B_gauss=B_gauss,
         _builder=builder,
     )
+    res.model_choice = model_choice
+    return res

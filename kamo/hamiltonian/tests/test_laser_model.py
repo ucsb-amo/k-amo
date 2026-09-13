@@ -15,8 +15,9 @@ import pytest
 
 import kamo.constants as kc
 from kamo import ComputePolarizabilities, GaussianBeam, Potassium39
-from kamo.hamiltonian import (AtomicStructure, choose_laser_model, light_shift_basis,
-                              photon_indices, state_channels, substructure_spread_Hz)
+from kamo.hamiltonian import (AtomicStructure, choose_laser_model, choose_sweep_model,
+                              light_shift_basis, photon_indices, state_channels,
+                              substructure_spread_Hz, sweep_intensity)
 from kamo.hamiltonian.perturbative import (channel_polarizability_components,
                                            dipole_operator, perturbative_stark_operator)
 from kamo.atom_properties.k39 import _own_manifolds
@@ -310,3 +311,53 @@ def test_intensity_inversion_uses_auto(atom):
                                             wavelength_m=1064e-9, n_points=6)
     k, _ = _shift(atom, (GROUND, EXCITED), F_1064, 1e8, "perturbative")
     assert I == pytest.approx(target / (k / 1e8), rel=1e-2)
+
+
+# ------------------------------------------------- sweep-level auto (no transition)
+
+def _channel_model(atom, states, f):
+    sel = light_shift_basis(states, f, atom=atom, B_gauss=B_LAB)
+    return AtomicStructure(list(sel.manifolds), atom=atom)
+
+
+def test_sweep_intensity_defaults_to_auto_and_matches_explicit(atom, f_d2, f_d1):
+    """laser_sweep / sweep_intensity choose per basis: perturbative for perturbative
+    light, RWA when some pair is driven hard, and the result equals the explicit model."""
+    cases = [(F_1064, 1e8, (GROUND, EXCITED), "perturbative"),
+             (f_d2 - 40e9, 1e8, (GROUND, EXCITED), "rwa"),
+             (f_d1 + 40e9, 1.06e6, (GROUND, QUBIT_OTHER), "rwa")]
+    for f, I, sts, expect in cases:
+        m = _channel_model(atom, sts, f)
+        beam = GaussianBeam(waist=1e-6, frequency=f, power=0.0)
+        res = m.laser_sweep(beam, I_max=I, n_points=4, B_gauss=B_LAB)
+        assert res.model_choice.model == expect, res.model_choice.describe()
+        exp = m.laser_sweep(beam, I_max=I, n_points=4, B_gauss=B_LAB, model=expect)
+        assert exp.model_choice is None
+        assert res.transition_frequency_shift(*sts, at=I) == pytest.approx(
+            exp.transition_frequency_shift(*sts, at=I), rel=1e-12)
+        low = sweep_intensity(m.builder, beam, I, n_points=4, B_gauss=B_LAB)
+        assert low.model_choice.model == expect
+    choice, op = choose_sweep_model(m.builder, beam, 1.06e6, B_gauss=B_LAB)
+    assert choice.model == "rwa" and choice.eps_perturbative == choice.eta ** 2 > choice.eps_rwa
+    assert "eps_rwa_dominant" in op
+
+
+def test_magnetic_sweep_chain_and_spectroscopy_default_to_auto(atom):
+    from kamo.hamiltonian.spectroscopy import transition_frequency_shift
+    m = _channel_model(atom, (GROUND, EXCITED), F_1064)
+    beam = GaussianBeam(waist=1e-6, frequency=F_1064, power=0.0)
+    res_b = m.magnetic_sweep(B_max=B_LAB + 0.1, dB=0.1)
+    res_l = res_b.laser_sweep(beam, B_gauss=B_LAB, I_max=1e8, n_points=4)
+    assert res_l.model_choice.model == "perturbative"
+    k_pert, _ = _shift(atom, (GROUND, EXCITED), F_1064, 1e8, "perturbative")
+    assert res_l.transition_frequency_shift(GROUND, EXCITED, at=1e8) == pytest.approx(k_pert, rel=1e-6)
+    df = transition_frequency_shift(m, GROUND, EXCITED, beam=beam, intensity_Wpm2=1e8,
+                                    I_max=1e8, n_points=4)          # B = 0, auto
+    assert np.isfinite(df) and df > 0
+
+
+def test_sweep_rejects_unknown_model(atom):
+    m = AtomicStructure([(4, 0, 0.5), (4, 1, 1.5)], atom=atom)
+    beam = GaussianBeam(waist=1e-6, frequency=F_1064, power=0.0)
+    with pytest.raises(ValueError, match="model must be"):
+        m.laser_sweep(beam, I_max=1e8, n_points=2, model="floquet")

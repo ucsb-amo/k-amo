@@ -9,7 +9,7 @@
         B     = res_B.field_from_splitting(sa, sb, f_hz)
         df_B  = res_B.transition_frequency_shift(sa, sb, at=100.0)
 
-        res_L = model.laser_sweep(beam, model="stark")
+        res_L = model.laser_sweep(beam)                 # model="auto"
         I     = res_L.intensity_from_splitting_shift(sa, sb, df_hz)
         Gamma = res_L.scattering_rate(state, I)
         pairs = res_L.dominant_couplings(n_top=10)
@@ -55,7 +55,7 @@ def intensity_from_splitting_shift(
     df_measured_hz: float,
     B_gauss: float = 0.0,
     n_points: int = 300,
-    laser_model: str = "stark",
+    laser_model: str = "auto",
     polarization: str = "pi",
     I_max: Optional[float] = None,
     branch: int = 0,
@@ -129,7 +129,7 @@ def transition_frequency_shift(
     diamagnetic: bool = False,
     intensity_Wpm2=None,
     n_points: int = 200,
-    laser_model: str = "stark",
+    laser_model: str = "auto",
     polarization: str = "pi",
     I_max: Optional[float] = None,
     as_sweep: bool = False,

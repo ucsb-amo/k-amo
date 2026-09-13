@@ -51,7 +51,7 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass
-from typing import Dict, Iterable, Tuple
+from typing import Dict, Iterable, Optional, Tuple
 
 import numpy as np
 
@@ -60,6 +60,7 @@ import kamo.constants as kc
 from .diagonalize import LaserSweepResult, eigenshuffle
 
 __all__ = ["perturbative_stark_operator", "sweep_intensity_perturbative",
+           "choose_sweep_model", "SweepModelChoice",
            "dipole_operator", "channel_polarizability_components",
            "residual_polarizability_au"]
 
@@ -172,7 +173,7 @@ class _ResidualPolarizabilities:
 
 def perturbative_stark_operator(builder, beam, polarization="pi", B_gauss: float = 0.0,
                                 include_quadrupole: bool = True, residual: bool = True,
-                                eta_warn: float = 0.1, I_ref: float = None) -> Dict:
+                                eta_warn: Optional[float] = 0.1, I_ref: float = None) -> Dict:
     """Second-order light-shift operator *per W/m^2* over the exact eigenstates.
 
     Returns a dict with
@@ -192,8 +193,13 @@ def perturbative_stark_operator(builder, beam, polarization="pi", B_gauss: float
     ``eta``
         max over coupled eigenstate pairs of ``|V| / |E_k - E_m + h f_L|`` at
         ``I_ref`` (the near-resonant denominators): the small parameter of
-        the expansion.  A warning is raised above ``eta_warn``.  ``I_ref``
-        defaults to the beam's ``I0``; pass 0 or None to skip.
+        the expansion.  A warning is raised above ``eta_warn`` (``None``
+        disables it).  ``I_ref`` defaults to the beam's ``I0``; pass 0 or
+        None to skip.
+    ``eps_rwa_dominant``
+        counter-rotating error estimate ``|f_c - f_L| / (f_c + f_L)`` of the
+        most strongly driven pair (the one setting ``eta``); what an RWA
+        sweep of this basis would be off by.  0 when ``eta`` was not evaluated.
     """
     f_L = _beam_frequency(beam)
     H0 = builder.h0(include_quadrupole=include_quadrupole)
@@ -249,13 +255,17 @@ def perturbative_stark_operator(builder, beam, polarization="pi", B_gauss: float
 
     # small parameter of the expansion at the reference intensity
     eta = 0.0
+    eps_rwa_dominant = 0.0
     if I_ref is None:
         I_ref = float(getattr(beam, "I0", 0.0) or 0.0)
     if I_ref and I_ref > 0:
         E0 = np.sqrt(e2 * float(I_ref))
         ratio = np.maximum(np.abs(A) * np.abs(DpT), np.abs(A).T * np.abs(Dm)) * E0
-        eta = float(ratio.max())
-        if eta > eta_warn:
+        m_i, k_i = np.unravel_index(int(np.argmax(ratio)), ratio.shape)
+        eta = float(ratio[m_i, k_i])
+        f_c = abs(f[m_i] - f[k_i])
+        eps_rwa_dominant = float(abs(f_c - f_L) / (f_c + f_L)) if eta > 0 else 0.0
+        if eta_warn is not None and eta > eta_warn:
             warnings.warn(
                 f"perturbative laser model: Rabi/(2 detuning) reaches {eta:.2f} at "
                 f"I = {I_ref:.3g} W/m^2; second-order perturbation theory is not "
@@ -264,13 +274,58 @@ def perturbative_stark_operator(builder, beam, polarization="pi", B_gauss: float
     return {"operator": Sop, "H0": H0, "energies": f, "vectors": U,
             "W_eig": W, "group": group,
             "shift_per_I": shift_per_I, "residual_au": residual_au,
-            "eta": eta, "f_laser": f_L}
+            "eta": eta, "eps_rwa_dominant": eps_rwa_dominant, "f_laser": f_L}
+
+
+@dataclass(frozen=True)
+class SweepModelChoice:
+    """Outcome of :func:`choose_sweep_model` (basis-level, no transition given)."""
+
+    model: str                  #: "rwa" or "perturbative"
+    reason: str
+    eta: float                  #: max Rabi / (2 detuning) over the basis at I_max
+    eps_rwa: float              #: counter-rotating error of the most strongly driven pair
+    eps_perturbative: float     #: eta^2
+
+    def describe(self) -> str:
+        return (f"model={self.model!r}: {self.reason} (eta={self.eta:.1e}, "
+                f"eps_rwa~{self.eps_rwa:.1e}, eps_perturbative~{self.eps_perturbative:.1e})")
+
+
+def choose_sweep_model(builder, beam, I_max: float, polarization="pi", B_gauss: float = 0.0,
+                       include_quadrupole: bool = True, residual: bool = True,
+                       eta_max: float = 0.1) -> Tuple[SweepModelChoice, Dict]:
+    """Pick ``"rwa"`` or ``"perturbative"`` for a whole-basis intensity sweep.
+
+    The transition-aware choice lives in :func:`kamo.hamiltonian.choose_laser_model`;
+    this is its basis-level counterpart for :func:`kamo.hamiltonian.sweep_intensity`,
+    where no pair of states is singled out.  It builds the perturbative
+    operator once (returned as the second element so the caller can reuse it)
+    and decides from the most strongly driven pair in the basis at ``I_max``:
+    ``"rwa"`` when ``eta = Rabi/(2 detuning)`` exceeds ``eta_max`` or when
+    ``eta^2`` exceeds that pair's counter-rotating error estimate,
+    ``"perturbative"`` otherwise.
+    """
+    op = perturbative_stark_operator(builder, beam, polarization=polarization,
+                                     B_gauss=B_gauss, include_quadrupole=include_quadrupole,
+                                     residual=residual, eta_warn=None, I_ref=float(I_max))
+    eta, eps_rwa = op["eta"], op["eps_rwa_dominant"]
+    if eta > eta_max:
+        model, reason = "rwa", f"non-perturbative: Rabi/(2 detuning) = {eta:.2f} > {eta_max}"
+    elif eta ** 2 > eps_rwa:
+        model, reason = "rwa", ("counter-rotating error below the next order of the "
+                                "perturbative sum")
+    else:
+        model, reason = "perturbative", ("perturbative light; exact eigenstates with both "
+                                         "rotating terms")
+    return SweepModelChoice(model, reason, float(eta), float(eps_rwa), float(eta ** 2)), op
 
 
 def sweep_intensity_perturbative(builder, beam, I_max: float, n_points: int = 200,
                                  polarization="pi", B_gauss: float = 0.0,
                                  include_quadrupole: bool = True,
-                                 residual: bool = True) -> LaserSweepResult:
+                                 residual: bool = True, op: Optional[Dict] = None
+                                 ) -> LaserSweepResult:
     """Intensity sweep with the second-order operator of
     :func:`perturbative_stark_operator`; same return type as
     :func:`kamo.hamiltonian.sweep_intensity`.
@@ -288,9 +343,10 @@ def sweep_intensity_perturbative(builder, beam, I_max: float, n_points: int = 20
     kW/cm^2 come out clean; a full-matrix diagonalization with 4e14 Hz on the
     diagonal is only good to ~0.05 Hz.
     """
-    op = perturbative_stark_operator(builder, beam, polarization=polarization,
-                                     B_gauss=B_gauss, include_quadrupole=include_quadrupole,
-                                     residual=residual, I_ref=float(I_max))
+    if op is None:
+        op = perturbative_stark_operator(builder, beam, polarization=polarization,
+                                         B_gauss=B_gauss, include_quadrupole=include_quadrupole,
+                                         residual=residual, I_ref=float(I_max))
     I = np.linspace(0.0, float(I_max), int(n_points))
     f, U, W, group = op["energies"], op["vectors"], op["W_eig"], op["group"]
     dim = f.size
@@ -314,5 +370,6 @@ def sweep_intensity_perturbative(builder, beam, I_max: float, n_points: int = 20
         beam=beam, polarization=polarization, B_gauss=B_gauss,
         _builder=builder,
     )
-    res.perturbative = {k: op[k] for k in ("shift_per_I", "residual_au", "eta", "f_laser")}
+    res.perturbative = {k: op[k] for k in ("shift_per_I", "residual_au", "eta",
+                                           "eps_rwa_dominant", "f_laser")}
     return res
