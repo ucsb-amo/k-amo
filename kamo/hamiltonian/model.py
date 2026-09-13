@@ -291,8 +291,12 @@ class AtomicStructure(StateLabelMixin):
         """Sweep laser intensity from 0 to ``I_max`` with eigenshuffle tracking.
 
         ``model="rwa"`` uses rotating-wave dipole coupling built from ``beam``;
-        ``model="stark"`` uses the effective AC-Stark operator.  See
-        :func:`sweep_intensity`.
+        ``model="stark"`` uses the effective AC-Stark operator from
+        fine-structure polarizabilities (see :func:`sweep_intensity`);
+        ``model="perturbative"`` uses the second-order sum over the exact
+        eigenstates of ``h0 + B * Zeeman`` with both rotating terms (see
+        :mod:`kamo.hamiltonian.perturbative`), which needs the channel
+        manifolds in the basis (:func:`light_shift_basis`).
 
         To run a laser sweep *at a field taken from a magnetic sweep*, pass that
         field via ``B_gauss`` (a static Zeeman term is added to H0, so at
@@ -303,6 +307,12 @@ class AtomicStructure(StateLabelMixin):
         """
         if I_max is None:
             I_max = beam.I0
+        if model == "perturbative":
+            from .perturbative import sweep_intensity_perturbative
+            return sweep_intensity_perturbative(
+                self.builder, beam, I_max, n_points=n_points,
+                polarization=polarization, B_gauss=B_gauss,
+                include_quadrupole=include_quadrupole)
         return sweep_intensity(self.builder, beam, I_max, n_points=n_points,
                                model=model, polarization=polarization,
                                B_gauss=B_gauss,

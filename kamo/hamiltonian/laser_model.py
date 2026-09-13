@@ -1,6 +1,6 @@
 """Choosing the laser model and the basis for a light-shift calculation.
 
-``kamo.hamiltonian`` has two laser models, and each fails in a different regime:
+``kamo.hamiltonian`` has three laser models, and each fails in a different regime:
 
 ``"rwa"``
     Explicit dipole couplings in a single-frequency rotating frame.  It resolves
@@ -16,15 +16,28 @@
     relative error of about ``W_c / |Δ|`` per channel, where ``W_c`` is the
     manifold's hyperfine plus Zeeman spread (about 1.5 GHz for 4P3/2 at
     520 G), it is linear in intensity, and it is *identically zero* for the
-    differential shift of two states with the same ``(n, l, j, m_j)``.  It is
-    the right model far from every line.
+    differential shift of two states with the same ``(n, l, j, m_j)``.
 
-For K39 at 520 G the two error estimates cross about 1 THz from the D lines;
-between 300 GHz and 3 THz both models agree to better than 1e-3 (checked
-2026-09-13 with both sweeps on the imaging line).  At 1064 nm the RWA with a
-basis lacking 3D and 5S was 5.5x low on the imaging-line shift; the
-contribution-based basis below removes that failure mode and leaves the
-counter-rotating error (about 10 %).
+``"perturbative"``
+    The second-order sum over the exact eigenstates of ``h0 + B * Zeeman``
+    with both rotating terms (:mod:`kamo.hamiltonian.perturbative`): the
+    substructure error of "stark" and the counter-rotating error of "rwa" are
+    both absent.  What remains is the next order of perturbation theory,
+    about ``eta^2`` with ``eta = Rabi / (2 detuning)``, so it is the model of
+    choice whenever the light is perturbative.  It needs the channel
+    manifolds in the basis, like the RWA.
+
+``choose_laser_model`` therefore picks between "rwa" and "perturbative":
+"rwa" when ``eta`` exceeds ``eta_max`` or when ``eta^2`` exceeds the RWA's
+counter-rotating error estimate, "perturbative" otherwise.  "stark" is kept
+as the fast explicit option.  Its error estimate is still reported.
+
+For K39 at 520 G the RWA and Stark error estimates cross about 1 THz from the
+D lines; between 300 GHz and 3 THz those two models agree to better than
+1e-3 (checked 2026-09-13 with both sweeps on the imaging line).  At 1064 nm
+the RWA with a basis lacking 3D and 5S was 5.5x low on the imaging-line
+shift; the contribution-based basis below removes that failure mode and
+leaves the counter-rotating error (1.3 % on the imaging line).
 
 Public helpers
 --------------
@@ -37,8 +50,8 @@ Public helpers
     ``tol`` of either state's polarizability is present, with a consistency
     check on the rotating-frame photon indices.
 ``choose_laser_model(states, frequency_Hz, ...)``
-    ``"rwa"`` or ``"stark"`` for a given transition, laser and intensity, with
-    the numbers behind the decision.
+    ``"rwa"`` or ``"perturbative"`` for a given transition, laser and
+    intensity, with the numbers behind the decision.
 
 The polarizability breakdown comes from :func:`kamo.trap.polarizability.scalar_breakdown`
 (UDel portal matrix elements, ARC fill-in), imported lazily so that this module
@@ -167,6 +180,7 @@ class Channel:
     share: float                #: |alpha_au| / |alpha_total| for this state
     detuning_Hz: float          #: f_c - f_L (positive: laser red of the line)
     substructure_Hz: float      #: hyperfine + Zeeman spread of the manifold at B
+    energy_Hz: float = 0.0      #: signed (E_final - E_initial)/h
     f_laser_Hz: float = field(default=0.0, repr=False, compare=False)
 
     @property
@@ -237,7 +251,8 @@ def state_channels(state, frequency_Hz: float, B_gauss: float = 0.0,
         out.append(Channel(
             state=(n, l, j), manifold=man, final=t.final, origin=t.origin,
             d_au=float(t.d_au), alpha_au=float(t.scalar_au), share=float(share),
-            detuning_Hz=float(f_c - f_L), substructure_Hz=float(W), f_laser_Hz=f_L))
+            detuning_Hz=float(f_c - f_L), substructure_Hz=float(W),
+            energy_Hz=float(t.energy_J / kc.h), f_laser_Hz=f_L))
     return StateChannels((n, l, j), f_L, float(bd.total_au), float(bd.core_au), tuple(out))
 
 
@@ -294,18 +309,25 @@ def _fs_partners(nlj: NLJ) -> List[NLJ]:
 def light_shift_basis(states: Iterable, frequency_Hz: float, tol: float = 1e-3,
                       atom=None, B_gauss: float = 0.0,
                       per_state: Optional[Sequence[StateChannels]] = None,
-                      coverage_warn: float = 0.97) -> BasisSelection:
-    """Manifolds for an RWA basis that captures the light shift of ``states``.
+                      coverage_warn: float = 0.97,
+                      check_loops: bool = True) -> BasisSelection:
+    """Manifolds for a basis that captures the light shift of ``states``.
 
     Always included: each state's own manifold and its fine-structure partner
     (Zeeman mixing between them matters for the bare transition frequency).
     Added in decreasing order of share: every channel carrying at least ``tol``
-    of a state's scalar polarizability at the laser frequency.  A channel whose
-    manifold would create a rotating-frame photon-index loop (a manifold graph
-    a single-frequency RWA cannot represent consistently) is left out,
-    reported in ``dropped`` and warned about.  A second warning fires if a
-    state's coverage (everything the basis cannot represent: excluded
-    channels and the ionic core) falls below ``coverage_warn``.
+    of a state's scalar polarizability at the laser frequency.  With
+    ``check_loops`` (needed for the RWA model, not for the perturbative one) a
+    channel whose manifold would create a rotating-frame photon-index loop (a
+    manifold graph a single-frequency RWA cannot represent consistently) is
+    left out, reported in ``dropped`` and warned about.  A second warning
+    fires if a state's coverage (everything the basis cannot represent:
+    excluded channels and the ionic core) falls below ``coverage_warn``.
+
+    The manifolds come back sorted by energy.  ``laser_rwa_operator`` assumes
+    that the earlier-listed manifold of a coupled pair is the lower one when it
+    assigns which sublevels a sigma photon connects, so an energy-ordered
+    basis keeps circular polarizations right.
 
     The selection uses the perturbative breakdown at the *laser* frequency, so
     a channel the laser is nearly resonant with dominates the shares and is
@@ -336,13 +358,15 @@ def light_shift_basis(states: Iterable, frequency_Hz: float, tol: float = 1e-3,
     for m in ordered:
         energies[m] = atom.getEnergy(*m)
         trial = chosen + [m]
-        _, bad = photon_indices(trial, energies)
-        if bad:
-            other = sorted({b for pair in bad for b in pair if b != m})
-            dropped.append((m, cand[m], "photon-index loop with "
-                            + ", ".join(_fmt(b) for b in other)))
-            continue
+        if check_loops:
+            _, bad = photon_indices(trial, energies)
+            if bad:
+                other = sorted({b for pair in bad for b in pair if b != m})
+                dropped.append((m, cand[m], "photon-index loop with "
+                                + ", ".join(_fmt(b) for b in other)))
+                continue
         chosen = trial
+    chosen.sort(key=lambda m: energies[m])
 
     coverage: Dict[NLJ, float] = {}
     core_share: Dict[NLJ, float] = {}
@@ -369,11 +393,12 @@ def light_shift_basis(states: Iterable, frequency_Hz: float, tol: float = 1e-3,
 class LaserModelChoice:
     """Outcome of :func:`choose_laser_model`."""
 
-    model: str                          #: "rwa" or "stark"
+    model: str                          #: "rwa" or "perturbative"
     reason: str
     eps_rwa: float                      #: estimated relative error of the RWA result
-    eps_stark: float                    #: estimated relative error of the Stark result
+    eps_stark: float                    #: estimated relative error of the explicit Stark model
     eta: float                          #: max Rabi / (2 detuning) at the intensity given
+    eps_perturbative: float             #: eta^2, the next order of the perturbative sum
     err_rwa_au: float                   #: absolute error estimate on the differential (a.u.)
     err_stark_au: float
     differential_au: float              #: alpha(state2) - alpha(state1), scalar parts
@@ -381,42 +406,40 @@ class LaserModelChoice:
 
     def describe(self) -> str:
         return (f"laser_model={self.model!r}: {self.reason} "
-                f"(eps_rwa~{self.eps_rwa:.1e}, eps_stark~{self.eps_stark:.1e}, "
-                f"eta={self.eta:.1e}); {self.basis.describe()}")
+                f"(eps_rwa~{self.eps_rwa:.1e}, eps_perturbative~{self.eps_perturbative:.1e}, "
+                f"eps_stark~{self.eps_stark:.1e}, eta={self.eta:.1e}); {self.basis.describe()}")
 
 
 def choose_laser_model(states: Iterable, frequency_Hz: float,
                        intensity_W_m2: Optional[float] = None,
                        B_gauss: float = 0.0, atom=None, tol: float = 1e-3,
                        eta_max: float = 0.1, poor_warn: float = 0.05) -> LaserModelChoice:
-    """Pick ``"rwa"`` or ``"stark"`` for the light shift of a transition.
+    """Pick ``"rwa"`` or ``"perturbative"`` for the light shift of a transition.
 
     Decision, in order:
 
-    1. Both states in the same ``(n, l, j)`` manifold -> ``"rwa"``.  The Stark
-       operator is diagonal in ``(n, l, j, m_j)`` and blind to hyperfine
-       admixture, so it returns exactly zero for the qubit and misses the
-       hyperfine part of any within-manifold differential.
-    2. ``eta = max_c Rabi_c / (2 |Δ_c|) > eta_max`` at the given intensity ->
-       ``"rwa"``.  Second-order perturbation theory (the Stark model) is not
-       valid.
-    3. Otherwise compare the estimated absolute errors on the differential
-       shift, ``err = Σ_states |α_s| Σ_channels share_c eps_c`` with
-       ``eps_c = |Δ| / (f_c + f_L)`` for the RWA and ``W_c / |Δ|`` for the Stark
-       model; the smaller wins.  Weighting by ``|α_s|`` matters: 40 GHz from
-       D1 the ground state's shift is 40x the excited state's, so the Stark
-       model's error on the ground state decides even though its relative
-       error on the excited state is smaller.
+    1. ``eta = max_c Rabi_c / (2 |Δ_c|) > eta_max`` at the given intensity ->
+       ``"rwa"``: second-order perturbation theory is not valid.
+    2. ``eta^2 > eps_rwa`` -> ``"rwa"``: the next order of the perturbative
+       sum would be larger than the RWA's counter-rotating error.
+    3. Otherwise ``"perturbative"``.
 
-    ``eps_rwa`` and ``eps_stark`` are those absolute errors relative to the
-    differential scalar shift (relative to the larger state shift when the two
-    states share a manifold).  Both are upper bounds: against the two sweeps
-    at 520 G the RWA estimate was 10-25x conservative, because the
-    counter-rotating terms of the two states partly cancel in a differential,
-    and the Stark estimate about 6x.  A warning is raised when the chosen
-    model's estimate exceeds ``poor_warn``.
+    ``eps_rwa`` and ``eps_stark`` are the estimated absolute errors of those
+    two models on the differential shift, ``Σ_states |α_s| Σ_channels share_c
+    eps_c`` with ``eps_c = |Δ| / (f_c + f_L)`` for the RWA and ``W_c / |Δ|``
+    for the Stark model, relative to the differential scalar shift (relative
+    to the larger state shift when the two states share a manifold, where
+    the Stark model gives zero).  Weighting by ``|α_s|`` matters: 40 GHz from
+    D1 the ground state's shift is 40x the excited state's.  Both are upper
+    bounds: against the two sweeps at 520 G the RWA estimate was 10-25x
+    conservative, because the counter-rotating terms of the two states partly
+    cancel in a differential, and the Stark estimate about 6x.  The Stark
+    estimate is reported for the explicit ``laser_model="stark"`` user; it
+    never drives the choice.  A warning is raised when the RWA is forced by
+    ``eta`` and its counter-rotating error estimate exceeds ``poor_warn``.
 
-    ``intensity_W_m2=None`` skips the perturbativity check.
+    ``intensity_W_m2=None`` skips the perturbativity check (eta = 0), which
+    selects the perturbative model.
     """
     states = [tuple(s) for s in states]
     if len(states) != 2:
@@ -444,28 +467,21 @@ def choose_laser_model(states: Iterable, frequency_Hz: float,
         eta = max(c.rabi_Hz(intensity_W_m2) / (2.0 * abs(c.detuning_Hz))
                   for sc in per_state for c in sc.channels if c.share >= tol)
 
-    if same_manifold:
-        model, reason = "rwa", ("both states in one manifold; the Stark operator has no "
-                                "hyperfine resolution for a within-manifold differential")
-    elif eta > eta_max:
+    eps_pert = eta ** 2
+    if eta > eta_max:
         model, reason = "rwa", f"non-perturbative: Rabi/(2 detuning) = {eta:.2f} > {eta_max}"
-    elif err_rwa <= err_stark:
-        model, reason = "rwa", "counter-rotating error below the substructure error"
+    elif eps_pert > eps_rwa:
+        model, reason = "rwa", ("counter-rotating error below the next order of the "
+                                "perturbative sum")
     else:
-        model, reason = "stark", "substructure error below the counter-rotating error"
+        model, reason = "perturbative", ("perturbative light; exact eigenstates with both "
+                                         "rotating terms")
 
     choice = LaserModelChoice(model, reason, float(eps_rwa), float(eps_stark), float(eta),
-                              float(err_rwa), float(err_stark), float(differential), basis)
-    chosen_eps = eps_rwa if model == "rwa" else eps_stark
-    if chosen_eps > poor_warn:
-        if same_manifold:
-            msg = ("The RWA is the only model for a within-manifold differential, but "
-                   f"its counter-rotating error estimate here is {eps_rwa:.1e} of the "
-                   "state shift (an upper bound): ")
-        elif model == "rwa" and eta > eta_max:
-            msg = ("The light is non-perturbative so the RWA is required, but its "
-                   f"counter-rotating error estimate is {eps_rwa:.1e}: ")
-        else:
-            msg = "Neither laser model is accurate here: "
-        warnings.warn(msg + choice.describe(), RuntimeWarning, stacklevel=2)
+                              float(eps_pert), float(err_rwa), float(err_stark),
+                              float(differential), basis)
+    if model == "rwa" and eta > eta_max and eps_rwa > poor_warn:
+        warnings.warn("The light is non-perturbative so the RWA is required, but its "
+                      f"counter-rotating error estimate is {eps_rwa:.1e}: " + choice.describe(),
+                      RuntimeWarning, stacklevel=2)
     return choice

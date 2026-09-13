@@ -12,8 +12,11 @@ Quick start
 >>> model = AtomicStructure([(4, 0, 0.5), (4, 1, 0.5), (4, 1, 1.5)])
 >>> res = model.magnetic_sweep(B_max=600.0)     # 0.1 G steps by default
 
-Light shifts: ``choose_laser_model`` picks the RWA or the AC-Stark model for a
-transition and ``light_shift_basis`` builds an RWA basis from the channels that
+Light shifts: three laser models, ``"rwa"`` (non-perturbative, rotating frame),
+``"perturbative"`` (second-order sum over the exact field eigenstates, both
+rotating terms; ``perturbative.py``) and ``"stark"`` (fine-structure
+polarizabilities).  ``choose_laser_model`` picks between the first two for a
+transition and ``light_shift_basis`` builds the basis from the channels that
 carry the polarizability at the laser wavelength (see ``laser_model.py``).
 """
 
@@ -28,6 +31,7 @@ from .laser_model import (Channel, StateChannels, BasisSelection, LaserModelChoi
                           channel_weights, light_shift_basis,
                           choose_laser_model, photon_indices,
                           substructure_spread_Hz)
+from .perturbative import perturbative_stark_operator, sweep_intensity_perturbative
 from .state_labels import (state_label, uncoupled_label, coupled_label,
                            both_labels, format_state, rs_state_label,
                            StateLabelMixin)
@@ -56,6 +60,8 @@ __all__ = [
     "choose_laser_model",
     "photon_indices",
     "substructure_spread_Hz",
+    "perturbative_stark_operator",
+    "sweep_intensity_perturbative",
     "diagonalize",
     "eigenshuffle",
     "sweep_field",
