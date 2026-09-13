@@ -296,6 +296,21 @@ class TestConstructors:
             Tweezer.from_trap_frequency(1e3, polarizability_SI=-ALPHA_1064_SI, mass=M,
                                         waist=W0, wavelength_m=LAM)
 
+    def test_from_trap_frequency_on_an_instance_reuses_its_geometry(self):
+        base = Tweezer(waist=W0, wavelength_m=LAM, propagation_direction=(1, 0, 0),
+                       polarization=(0, 0, 1), label="1064")
+        t = base.from_trap_frequency(1.0e3, polarizability_SI=ALPHA_1064_SI, mass=M)
+        ref = Tweezer.from_trap_frequency(1.0e3, polarizability_SI=ALPHA_1064_SI, mass=M,
+                                          waist=W0, wavelength_m=LAM,
+                                          propagation_direction=(1, 0, 0),
+                                          polarization=(0, 0, 1), label="1064")
+        assert t.power == pytest.approx(ref.power, rel=1e-14)
+        assert t.waist == W0 and t.label == "1064"
+        assert np.allclose(t.propagation_direction, (1, 0, 0))
+        assert base.power == 0.0                                  # immutable
+        with pytest.raises(ValueError, match="reuses its geometry"):
+            base.from_trap_frequency(1e3, polarizability_SI=ALPHA_1064_SI, waist=W0)
+
     def test_repr(self):
         assert "Tweezer" in repr(_tw()) and "LightSheet" in repr(
             LightSheet(waist=(1e-6, 2e-6), wavelength_m=LAM))

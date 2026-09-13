@@ -25,8 +25,9 @@ hard aperture; a truncated aperture of the same NA gives a waist 10-20% larger.
 For an objective with a real aperture use :class:`kamo.trap.thin_lens.Objective`.
 Trap depth is deliberately *not* a beam specifier -- it needs an atom, a state
 and a field direction -- and lives on :class:`kamo.trap.Trap` instead.
-:meth:`Tweezer.from_trap_frequency` is the atom-free inverse for when the
-polarizability is already known.
+:meth:`Tweezer.from_trap_frequency` is the inverse: it solves for the strength
+given a radial frequency, with the polarizability from :class:`kamo.Potassium39`
+by default or passed in explicitly.
 
 Beams are immutable: ``with_power``, ``with_peak_intensity``, ``scaled``,
 ``moved_to`` and ``rotated`` return new objects.
@@ -42,6 +43,8 @@ intensities incoherently (see :class:`InterferenceWarning`).
 
 from __future__ import annotations
 
+import functools
+import types
 import warnings
 from typing import Optional
 
@@ -158,6 +161,19 @@ class IntensityField:
 
 
 # --------------------------------------------------------------------- Beam
+
+
+class _hybridmethod:
+    """A method that binds to the instance when called on one and to the class
+    otherwise (``Tweezer.from_trap_frequency(...)`` builds the geometry from
+    keywords; ``tweezer.from_trap_frequency(...)`` reuses the beam's)."""
+
+    def __init__(self, func):
+        self.__func__ = func
+        functools.update_wrapper(self, func)
+
+    def __get__(self, obj, objtype=None):
+        return types.MethodType(self.__func__, obj if obj is not None else objtype)
 
 class Beam(IntensityField):
     """A fundamental Gaussian mode with an elliptical waist, in the lab frame.
@@ -469,25 +485,74 @@ class Tweezer(Beam):
         return cls(waist=gb.waist, wavelength_m=gb.wavelength, power=gb.power,
                    n_medium=gb.n_medium, **kw)
 
-    @classmethod
-    def from_trap_frequency(cls, f_radial_Hz: float, *, polarizability_SI: float,
+    @_hybridmethod
+    def from_trap_frequency(cls_or_self, f_radial_Hz: float, *,
+                            polarizability_SI: Optional[float] = None,
+                            atom=None, state=(4, 0, 0.5, 1, -1), B_direction=None,
+                            source: Optional[str] = None, nuclear_spin: float = 1.5,
                             mass: Optional[float] = None, **kw) -> "Tweezer":
         """The tweezer whose harmonic radial frequency is ``f_radial_Hz``.
 
         Inverts ``omega_r = sqrt(4 U0 / (m w0^2))`` with
         ``U0 = alpha I0 / (2 c eps0 n)`` -- the relation (curvature factor 4)
-        documented in :meth:`GaussianBeam.trap_frequency`.  ``kw`` gives the
-        colour, size and geometry; the strength is what is solved for.
+        documented in :meth:`GaussianBeam.trap_frequency`.  The strength is
+        what is solved for; the geometry comes either from ``kw`` (colour,
+        size, direction, polarization) when called on the class, or from the
+        existing beam when called on an instance::
+
+            Tweezer.from_trap_frequency(1e3, waist=3e-6, wavelength_m=1064e-9)
+            Tweezer(waist=3e-6, wavelength_m=1064e-9).from_trap_frequency(1e3)
+
+        Parameters
+        ----------
+        polarizability_SI : float, optional
+            Bypass the atom with a known polarizability (C m^2/V).  By default
+            it is computed for ``state`` from :class:`kamo.Potassium39` via
+            :class:`kamo.trap.polarizability.StatePolarizability` -- the same
+            path :class:`kamo.trap.Trap` takes -- at this beam's wavelength and
+            polarization, quantized along ``B_direction`` (default ``z``).
+        atom : Potassium39, optional
+            Supplies the mass and, via ``use_portal``, the data source.
+        state : (n, l, j, F, mF)
+            Hyperfine state, default ``|4S1/2, F=1, mF=-1>``.
+        source : {"portal", "arc"}, optional
+            Matrix-element source; default from ``atom.use_portal``, else "portal".
+        mass : float, optional
+            Atomic mass (kg); default ``atom.mass`` or ``kamo.constants.m_K``.
         """
         if "power" in kw or "peak_intensity" in kw:
             raise ValueError("from_trap_frequency solves for the strength; do not "
                              "pass power or peak_intensity.")
-        alpha = float(polarizability_SI)
+        if isinstance(cls_or_self, Beam):
+            if kw:
+                raise ValueError("from_trap_frequency on an existing beam reuses its "
+                                 f"geometry; unexpected keywords {sorted(kw)}.")
+            t = cls_or_self
+        else:
+            t = cls_or_self(**kw)
+
+        if polarizability_SI is None:
+            from .polarizability import StatePolarizability
+            use_portal = getattr(atom, "use_portal", None)
+            if source is None:
+                source = "arc" if use_portal is False else "portal"
+            elif use_portal is not None and bool(use_portal) != (source == "portal"):
+                raise ValueError(f"source={source!r} disagrees with atom.use_portal="
+                                 f"{use_portal}; give one or the other.")
+            bhat = fr.as_unit_real_vector((0.0, 0.0, 1.0) if B_direction is None
+                                          else B_direction, "B_direction")
+            alpha = StatePolarizability(state, source, nuclear_spin).alpha_SI(
+                t.wavelength_m, t.polarization, bhat)
+        else:
+            alpha = float(polarizability_SI)
         if not alpha > 0:
             raise ValueError("a red-detuned (alpha > 0) polarizability is needed for "
                              "the intensity maximum to trap.")
+        if mass is None:
+            mass = getattr(atom, "mass", None)
         m = float(kc.m_K if mass is None else mass)
-        t = cls(**kw)
+        if not (np.isfinite(m) and m > 0):
+            raise ValueError(f"mass must be positive; got {mass}")
         omega = 2.0 * np.pi * _positive("f_radial_Hz", f_radial_Hz)
         U0 = m * omega ** 2 * t.waist ** 2 / 4.0
         I0 = U0 * 2.0 * kc.c * kc.epsilon0 * t.n_medium / alpha
@@ -499,18 +564,19 @@ class LightSheet(Beam):
 
     Each size keyword takes a scalar (both axes) or a ``(u, v)`` pair; still
     exactly one keyword from the size group.  ``u`` lies along
-    ``transverse_axis`` (default ``z``: the thin axis vertical, which is what a
-    light sheet is for).  The two axes have *different* Rayleigh ranges,
-    ``zR_i = pi w_i^2 n / lambda``: the thin axis diverges fastest, and a single
-    zR gets the axial confinement wrong by ``(w_u / w_v)^2``.
+    ``transverse_axis`` (default ``z``: the thin axis vertical). The two axes
+    have *different* Rayleigh ranges, ``zR_i = pi w_i^2 n / lambda``: the thin
+    axis diverges fastest, and a single zR gets the axial confinement wrong by
+    ``(w_u / w_v)^2``.
     """
 
     def __init__(self, *, waist=None, NA=None, rayleigh_range=None,
-                 divergence_angle=None, transverse_axis=(0.0, 0.0, 1.0),
+                 divergence_angle=None, 
+                 transverse_axis=(1., 0., 0.),
                  waist_offset_v: float = 0.0, wavelength_m=None, frequency_Hz=None,
                  power=None, peak_intensity=None, n_medium=1.0,
-                 polarization=DEFAULT_POLARIZATION,
-                 propagation_direction=DEFAULT_PROPAGATION,
+                 polarization=(0.,1.,0.),
+                 propagation_direction=(0.,0.,1.),
                  origin=(0.0, 0.0, 0.0), transversality: str = "raise",
                  label: Optional[str] = None):
         if waist_offset_v != 0.0:

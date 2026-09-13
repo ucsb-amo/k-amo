@@ -264,6 +264,28 @@ class TestPortalOperatingPoint:
         assert tr.trap_frequencies().frequencies_Hz[0] == pytest.approx(F_R, rel=1e-6)
         assert "snapshot" in tr.summary()
 
+    def test_from_trap_frequency_default_polarizability_matches_trap(self, offline):
+        """No polarizability_SI: the beam takes alpha for the default state from
+        Potassium39 at its own wavelength and polarization, so a Trap built on it
+        with the same state and field direction reports exactly f_radial."""
+        bare = Tweezer(waist=W0, wavelength_m=LAM, propagation_direction=(1, 0, 0),
+                       polarization=(0, 0, 1), label="1064")
+        t = bare.from_trap_frequency(F_R, mass=M)
+        tr = Trap(t, B_gauss=520.583, B_direction=(0, 0, 1), mass=M, gravity=False)
+        assert tr.trap_frequencies().frequencies_Hz[0] == pytest.approx(F_R, rel=1e-9)
+        # z-polarized light quantized along z is pi light: beta = 0, so alpha is
+        # scalar + tensor, identical for every mF of F=1 and for the class call.
+        t2 = Tweezer.from_trap_frequency(F_R, mass=M, waist=W0, wavelength_m=LAM,
+                                         propagation_direction=(1, 0, 0),
+                                         polarization=(0, 0, 1), state=(4, 0, 0.5, 1, 0))
+        assert t2.power == pytest.approx(t.power, rel=1e-12)
+        # an explicit atom supplies the mass and the source
+        from kamo import Potassium39
+        t3 = bare.from_trap_frequency(F_R, atom=Potassium39(use_portal=True))
+        assert t3.power == pytest.approx(t.power * Potassium39().mass / M, rel=1e-12)
+        with pytest.raises(ValueError, match="disagrees"):
+            bare.from_trap_frequency(F_R, atom=Potassium39(use_portal=True), source="arc")
+
     def test_vector_shift_with_the_field_along_the_beam(self, offline):
         t = _tweezer()                                        # (0, 1, i): sigma+ about x
         along_x = Trap(t, B_gauss=520.594, B_direction=(1, 0, 0), mass=M, gravity=False)
