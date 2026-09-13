@@ -3,3 +3,6 @@
 *.h5
 *.gif
 *.png
+__pycache__/
+*.nbc
+*.nbi
