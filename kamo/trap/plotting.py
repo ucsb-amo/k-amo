@@ -11,8 +11,15 @@
   dashed.  Where the two part company is the anharmonicity, and it is the
   cheapest visual check on the Hessian.
 * :func:`plot_beam_profile` -- the two beam radii ``w_u(s)``, ``w_v(s)``.
+* :func:`plot_bimodal_profile` -- a finite-temperature cloud's column density along
+  one lab axis with the condensate and thermal parts drawn separately.
 * :func:`plot_trap_summary` -- three lab planes through the minimum plus the
   line cuts.
+
+Every cloud entry point takes ``component="total" | "condensate" | "thermal"``
+(the thermal part needs a cloud from ``solve(..., T_K=...)``); the default window
+of a finite-temperature cloud is ``max(4 sigma_condensate, 1.5 sigma_thermal)``,
+so the core is visible and the wings are hinted at.
 
 The data behind the plots are available without matplotlib from
 :func:`plane_cut`, :func:`column_density_map` and :func:`line_cuts`.
@@ -142,6 +149,44 @@ def _check_units(units: str) -> float:
     return UNIT_SCALE[units]
 
 
+def _component_of(obj, component: str):
+    """A callable ``density(x, y, z)`` for one component of a cloud."""
+    if component == "total":
+        return obj.density
+    if component not in ("condensate", "thermal"):
+        raise ValueError(f"component must be 'total', 'condensate' or 'thermal'; got {component!r}")
+    if not hasattr(obj, "density_thermal"):
+        raise ValueError(f"component={component!r} needs a gridded finite-temperature cloud "
+                         f"(a TrapCloud); {type(obj).__name__} has no components")
+    if component == "thermal" and getattr(obj, "density_thermal", None) is None:
+        raise ValueError("this cloud is at T = 0: it has no thermal component")
+    return lambda x, y, z: obj.density(x, y, z, component=component)
+
+
+_THERMAL_WINDOW = 1.5     #: default window of a finite-T cloud: max(4 sigma_cond, this x sigma_th)
+
+
+def _window_sigma(obj, component: str) -> np.ndarray:
+    """The rms width the default window of a cloud plot is built on (4x it)."""
+    if component == "condensate":
+        return np.asarray(obj.sigma_condensate, dtype=float)
+    if component == "thermal":
+        return np.asarray(obj.sigma_thermal, dtype=float)
+    if getattr(obj, "density_thermal", None) is not None:
+        return np.maximum(np.asarray(obj.sigma_condensate, dtype=float),
+                          _THERMAL_WINDOW / 4.0 * np.asarray(obj.sigma_thermal, dtype=float))
+    return np.asarray(obj.sigma, dtype=float)
+
+
+def _component_density(obj, quantity: str, component: str):
+    """The density callable for a density plot; ``component`` means nothing else."""
+    if quantity != "density":
+        if component != "total":
+            raise ValueError("component= applies to a cloud density only")
+        return None
+    return _component_of(obj, component)
+
+
 def _quantity_for(obj, quantity: Optional[str]) -> str:
     trap, cloud = _is_trap(obj), _is_cloud(obj)
     default = "potential" if trap else "density" if cloud else "intensity"
@@ -219,11 +264,11 @@ def _beam_extent(beam, e) -> float:
     return abs(float(e @ k)) * _axial_extent(beam) + _N_SCALES * across
 
 
-def _extent_along(obj, e) -> float:
+def _extent_along(obj, e, component: str = "total") -> float:
     """Default half-width along ``e`` (see the module docstring)."""
     e = np.asarray(e, dtype=float)
     if _is_cloud(obj):
-        sigma = np.asarray(obj.sigma, dtype=float)
+        sigma = _window_sigma(obj, component)
         return 4.0 * float(np.sqrt(np.sum(e ** 2 * sigma ** 2)))
     beams = _beams_of(obj)
     if not beams:                                   # a HarmonicTrap: oscillator widths
@@ -236,9 +281,9 @@ def _extent_along(obj, e) -> float:
     return tightest + spread                                # a trap's sag must not widen it
 
 
-def _half_widths(obj, e1, e2, half_width):
+def _half_widths(obj, e1, e2, half_width, component: str = "total"):
     if half_width is None:
-        return _extent_along(obj, e1), _extent_along(obj, e2)
+        return _extent_along(obj, e1, component), _extent_along(obj, e2, component)
     hw = np.atleast_1d(np.asarray(half_width, dtype=float))
     if hw.size not in (1, 2) or not np.all(np.isfinite(hw)) or np.any(hw <= 0):
         raise ValueError(f"half_width must be a positive scalar or (h1, h2) pair (m); "
@@ -335,7 +380,7 @@ class PlaneCut:
 
 def plane_cut(obj, normal=(0.0, 1.0, 0.0), center=None, *, quantity: Optional[str] = None,
               xlim=None, ylim=None, half_width=None, n=(241, 241), in_plane_axis=None,
-              units: str = "uK") -> PlaneCut:
+              units: str = "uK", component: str = "total") -> PlaneCut:
     """Sample a quantity on the plane ``{r : (r - center) . normal = 0}``.
 
     ``obj`` is a beam or crossed beams (``quantity="intensity"``), a trap
@@ -349,7 +394,8 @@ def plane_cut(obj, normal=(0.0, 1.0, 0.0), center=None, *, quantity: Optional[st
     scale = _check_units(units)
     e1, e2, nrm = _plane_axes(normal, in_plane_axis)
     c = _center_for(obj, center)
-    h1, h2 = _half_widths(obj, e1, e2, half_width)
+    density = _component_density(obj, quantity, component)
+    h1, h2 = _half_widths(obj, e1, e2, half_width, component)
     c1, c2 = float(c @ e1), float(c @ e2)
     lo1, hi1 = _window(xlim, c1, h1, "xlim")
     lo2, hi2 = _window(ylim, c2, h2, "ylim")
@@ -361,7 +407,7 @@ def plane_cut(obj, normal=(0.0, 1.0, 0.0), center=None, *, quantity: Optional[st
     if quantity == "intensity":
         cut.values = np.asarray(_field_of(obj).intensity(X, Y, Z), dtype=float)
     elif quantity == "density":
-        cut.values = np.broadcast_to(np.asarray(obj.density(X, Y, Z), dtype=float),
+        cut.values = np.broadcast_to(np.asarray(density(X, Y, Z), dtype=float),
                                      (n1, n2)).copy()
     else:
         cut.values = np.asarray(obj.potential_J(X, Y, Z), dtype=float) * scale
@@ -369,7 +415,7 @@ def plane_cut(obj, normal=(0.0, 1.0, 0.0), center=None, *, quantity: Optional[st
 
 
 def column_density_map(cloud, axis="x", *, xlim=None, ylim=None, half_width=None,
-                       n=(241, 241)) -> PlaneCut:
+                       n=(241, 241), component: str = "total") -> PlaneCut:
     """The density of a gridded cloud integrated along lab ``axis`` (1/m^2).
 
     The plot axes are the other two lab axes, oriented as in :func:`plane_cut`
@@ -387,14 +433,15 @@ def column_density_map(cloud, axis="x", *, xlim=None, ylim=None, half_width=None
     e1, e2, nrm = _plane_axes(np.eye(3)[k])
     i1, i2 = int(np.argmax(np.abs(e1))), int(np.argmax(np.abs(e2)))
     c = np.asarray(cloud.centroid, dtype=float)
-    h1, h2 = _half_widths(cloud, e1, e2, half_width)
+    h1, h2 = _half_widths(cloud, e1, e2, half_width, component)
     lo1, hi1 = _window(xlim, float(c[i1]), h1, "xlim")
     lo2, hi2 = _window(ylim, float(c[i2]), h2, "ylim")
     n1, n2 = _n_pair(n)
     p1, p2 = np.linspace(lo1, hi1, n1), np.linspace(lo2, hi2, n2)
 
     g = cloud.grid
-    column = np.sum(cloud.density_grid, axis=k) * g.d[k]      # remaining axes, index order
+    rho = cloud.component_density_grid(component)                # raises on a bad component
+    column = np.sum(rho, axis=k) * g.d[k]                        # remaining axes, index order
     if i1 > i2:
         column = column.T
     coords = (g.x, g.y, g.z)
@@ -406,7 +453,8 @@ def column_density_map(cloud, axis="x", *, xlim=None, ylim=None, half_width=None
 
 
 def line_cuts(obj, directions=None, center=None, *, quantity: Optional[str] = None,
-              xlim=None, half_width=None, n: int = 401, units: str = "uK"):
+              xlim=None, half_width=None, n: int = 401, units: str = "uK",
+              component: str = "total"):
     """1D cuts along straight lines through ``center``.
 
     The potential for a trap (through the minimum by default), the intensity for
@@ -423,10 +471,11 @@ def line_cuts(obj, directions=None, center=None, *, quantity: Optional[str] = No
     scale = _check_units(units)
     c = _center_for(obj, center)
     hm = (obj.harmonic() if hasattr(obj, "harmonic") else obj) if quantity == "potential" else None
+    density = _component_density(obj, quantity, component)
     units_out = {"intensity": "W/m^2", "density": "1/m^3"}.get(quantity, units)
     out = []
     for d in _directions(obj, directions):
-        h = _extent_along(obj, d) if half_width is None else float(half_width)
+        h = _extent_along(obj, d, component) if half_width is None else float(half_width)
         lo, hi = _window(xlim, 0.0, h, "xlim")
         s = np.linspace(lo, hi, int(n))
         X, Y, Z = (c[i] + s * d[i] for i in range(3))
@@ -437,7 +486,7 @@ def line_cuts(obj, directions=None, center=None, *, quantity: Optional[str] = No
         elif quantity == "intensity":
             values = np.asarray(_field_of(obj).intensity(X, Y, Z), dtype=float)
         else:
-            values = np.asarray(obj.density(X, Y, Z), dtype=float)
+            values = np.asarray(density(X, Y, Z), dtype=float)
         out.append(dict(direction=d, s=s, values=values, harmonic=harmonic,
                         quantity=quantity, units=units_out))
     return out
@@ -723,20 +772,22 @@ def plot_plane_cut(obj, normal=(0.0, 1.0, 0.0), center=None, *,
 def plot_column_density(cloud, axis="x", *, xlim=None, ylim=None, half_width=None,
                         n=(241, 241), aspect="equal", ax=None, cmap="magma", vmin=0.0,
                         vmax=None, contours: bool = False, colorbar: bool = True,
-                        title: Optional[str] = None):
+                        title: Optional[str] = None, component: str = "total"):
     """Column density of a gridded cloud along lab ``axis`` (cm^-2 on the plot),
     on the other two lab axes; ``xlim``/``ylim``/``half_width`` as in
     :func:`column_density_map`.  ``vmin``/``vmax`` (cm^-2) fix the colour scale
     so panels can share it.  Sampled once (the density is gridded).
     Returns ``(fig, ax)``."""
-    cut = column_density_map(cloud, axis, xlim=xlim, ylim=ylim, half_width=half_width, n=n)
+    cut = column_density_map(cloud, axis, xlim=xlim, ylim=ylim, half_width=half_width, n=n,
+                             component=component)
     fig, ax = _axes(ax, figsize=(4.6, 4.0))
     scale, label, _ = _MAP_STYLE["column density"]
     peak = float(np.max(cut.values)) * scale
     levels = peak * np.array([np.exp(-2.0), np.exp(-1.0)]) if contours and peak > 0 else None
-    mode = getattr(cloud, "mode", "")
+    mode = getattr(cloud, "model_label", getattr(cloud, "mode", ""))
+    part = "" if component == "total" else f" ({component})"
     default = (f"column density along {_direction_label(cut.normal)}"
-               + (f", {mode}" if mode else "") + f"  (peak {peak:.3g} cm$^{{-2}}$)")
+               + (f", {mode}" if mode else "") + part + f"  (peak {peak:.3g} cm$^{{-2}}$)")
     _draw_map(cut, ax, scale=scale, cmap=cmap, vmin=vmin, vmax=vmax, aspect=aspect,
               colorbar=colorbar, cbar_label=label,
               title=title if title is not None else default, levels=levels,
@@ -746,7 +797,8 @@ def plot_column_density(cloud, axis="x", *, xlim=None, ylim=None, half_width=Non
 
 def plot_line_cuts(obj, directions=None, center=None, *, quantity: Optional[str] = None,
                    xlim=None, ylim=None, half_width=None, n=None, units: str = "uK",
-                   harmonic: bool = True, ax=None, title: Optional[str] = None):
+                   harmonic: bool = True, ax=None, title: Optional[str] = None,
+                   component: str = "total"):
     """The potential (a trap), intensity (beams) or density (a cloud) along lines
     through ``center``, as in :func:`line_cuts`.  For a trap the harmonic
     approximation is dashed and the escape energy dotted.
@@ -761,12 +813,12 @@ def plot_line_cuts(obj, directions=None, center=None, *, quantity: Optional[str]
     c = _center_for(obj, center)
     dirs = _directions(obj, directions)
     if xlim is None and half_width is None:
-        h = max(_extent_along(obj, d) for d in dirs)
+        h = max(_extent_along(obj, d, component) for d in dirs)
     else:
-        h = _extent_along(obj, dirs[0]) if half_width is None else float(half_width)
+        h = _extent_along(obj, dirs[0], component) if half_width is None else float(half_width)
     lo, hi = _window(xlim, 0.0, h, "xlim")
     cuts = line_cuts(obj, dirs, c, quantity=quantity, xlim=(lo, hi),
-                     n=401 if n is None else int(n), units=units)
+                     n=401 if n is None else int(n), units=units, component=component)
     fig, ax = _axes(ax, figsize=(5.0, 3.4))
     pscale, label, _ = _plotted(quantity, units)
 
@@ -809,6 +861,55 @@ def plot_line_cuts(obj, directions=None, center=None, *, quantity: Optional[str]
     ax.legend(fontsize="xx-small", frameon=False)
     if title is not None:
         ax.set_title(title, fontsize="small")
+    _tidy(ax)
+    return fig, ax
+
+
+_BIMODAL_COLOURS = {"total": "#222222", "condensate": "#1f4e79", "thermal": "#8c8c8c"}
+
+
+def plot_bimodal_profile(cloud, axis="z", *, xlim=None, n: int = 401, log: bool = False,
+                         ax=None, title: Optional[str] = None):
+    """Column density (along x, the probe axis) of a finite-temperature cloud cut along
+    lab ``axis`` ("y" or "z") through the centroid, with the condensate and the
+    thermal part drawn separately -- the bimodal picture a time-of-flight fit reports.
+
+    Total thin black, condensate solid blue, thermal dashed grey; ``N_0/N`` and ``T``
+    in the title.  ``log=True`` puts the vertical axis on a log scale, which is where
+    the thermal wings are visible at all (at 30 nK they are ~2% of the peak).
+    ``xlim`` (m, displacement from the centroid) sets the range, default +-4 thermal
+    rms widths.  Returns ``(fig, ax)``.
+    """
+    if getattr(cloud, "density_thermal", None) is None:
+        raise ValueError("plot_bimodal_profile needs a finite-temperature TrapCloud "
+                         "(solve(..., T_K=...))")
+    k = _axis_index(axis)
+    if k == 0:
+        raise ValueError("the column is along x; cut along 'y' or 'z'")
+    c = np.asarray(cloud.centroid, dtype=float)
+    h = 4.0 * float(cloud.sigma_thermal[k])
+    lo, hi = _window(xlim, 0.0, h, "xlim")
+    p = np.linspace(lo, hi, int(n))
+    other = 3 - k                                    # the remaining transverse axis
+    yz = [None, None]
+    yz[k - 1] = c[k] + p
+    yz[other - 1] = np.full_like(p, c[other])
+    fig, ax = _axes(ax, figsize=(5.0, 3.4))
+    scale, label, _ = _MAP_STYLE["column density"]
+    for comp, ls, lw in (("total", "-", 1.0), ("condensate", "-", 1.6), ("thermal", "--", 1.4)):
+        col = cloud.column_density(yz[0], yz[1], component=comp) * scale
+        ax.plot(p * 1e6, col, ls, color=_BIMODAL_COLOURS[comp], lw=lw, label=comp)
+    if log:
+        ax.set_yscale("log")
+        floor = float(np.max(cloud.column_density_grid("thermal"))) * scale * 1e-3
+        ax.set_ylim(bottom=max(floor, 1e-300))
+    ax.set_xlabel(f"${_AXIS_NAMES[k]}$ from the centroid  " + r"($\mu$m)")
+    ax.set_ylabel(label)
+    ax.legend(fontsize="xx-small", frameon=False)
+    if title is None:
+        title = (f"{cloud.model_label}: N0/N = {cloud.condensate_fraction:.3f}, "
+                 f"peak thermal / total column {cloud.column_density_grid('thermal').max() / cloud.peak_column_density:.3f}")
+    ax.set_title(title, fontsize="small")
     _tidy(ax)
     return fig, ax
 

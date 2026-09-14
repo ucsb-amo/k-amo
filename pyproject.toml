@@ -23,3 +23,6 @@ license = {text = "MIT"}
 Homepage = "https://github.com/ucsb-amo/k-amo"
 [tool.pdm]
 distribution = false
+
+[tool.pytest.ini_options]
+markers = ["slow: multi-second solves on the real tweezer; run with -m slow or deselect with -m 'not slow'"]

@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from .dipole_dipole import (BECCloud, CoupledDipole, CyclingTransition,
                                 PairPotential, QuasiStaticLZModel)
     from .BEC_properties.variational import GaussianVariationalCloud
+    from .BEC_properties.thermal import IdealHarmonicBoseGas
     from .imaging import ProbeBeam, Propagator, TwoLevelResponse, UniformMixture
     from .spin import SpinField, SpinGeometry, Sequence
 
@@ -36,6 +37,7 @@ _lazy = {
     'QuasiStaticLZModel':      '.dipole_dipole',
     'CoupledDipole':           '.dipole_dipole',
     'GaussianVariationalCloud': '.BEC_properties.variational',
+    'IdealHarmonicBoseGas':     '.BEC_properties.thermal',
     'ProbeBeam':               '.imaging',
     'Propagator':              '.imaging',
     'TwoLevelResponse':        '.imaging',

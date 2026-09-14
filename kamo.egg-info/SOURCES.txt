@@ -9,9 +9,11 @@ kamo.egg-info/requires.txt
 kamo.egg-info/top_level.txt
 kamo/BEC_properties/__init__.py
 kamo/BEC_properties/bec.py
+kamo/BEC_properties/thermal.py
 kamo/BEC_properties/variational.py
 kamo/BEC_properties/tests/__init__.py
 kamo/BEC_properties/tests/test_bec.py
+kamo/BEC_properties/tests/test_thermal.py
 kamo/atom_properties/__init__.py
 kamo/atom_properties/hyperfine.py
 kamo/atom_properties/k39.py
@@ -38,10 +40,13 @@ kamo/hamiltonian/__init__.py
 kamo/hamiltonian/basis.py
 kamo/hamiltonian/builder.py
 kamo/hamiltonian/diagonalize.py
+kamo/hamiltonian/laser_model.py
 kamo/hamiltonian/model.py
+kamo/hamiltonian/perturbative.py
 kamo/hamiltonian/spectroscopy.py
 kamo/hamiltonian/state_labels.py
 kamo/hamiltonian/tests/__init__.py
+kamo/hamiltonian/tests/test_laser_model.py
 kamo/hamiltonian/tests/test_stark_polarization.py
 kamo/hamiltonian/tests/test_state_identification.py
 kamo/hamiltonian/tests/test_state_labels.py
@@ -111,6 +116,7 @@ kamo/trap/__init__.py
 kamo/trap/beams.py
 kamo/trap/cloud.py
 kamo/trap/dvr.py
+kamo/trap/finite_temperature.py
 kamo/trap/frames.py
 kamo/trap/gaussian.py
 kamo/trap/grid.py

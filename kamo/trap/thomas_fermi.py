@@ -31,9 +31,10 @@ approximation there, it is wrong by a factor ~2 in the radial size -- use the GP
 solver.  ``a < 0`` has no TF limit (use GP below collapse), ``a = 0`` neither (use
 the non-interacting solver).
 
-Finite-T seam: ``V_extra`` (J; callable ``V_extra(X, Y, Z)`` or an array on the
-grid) is added to the potential -- ``2 g n_thermal`` in a Popov/HF loop run outside
-the solver.  It is ``None`` in this iteration.
+``V_extra`` (J; callable ``V_extra(X, Y, Z)`` or an array on the grid) is added to
+the potential.  Thomas-Fermi is refused at ``T > 0`` (see
+:mod:`kamo.trap.finite_temperature`): its radius is already ~2x wrong at the
+operating point, and a Hartree-Fock cloud on top of it would inherit that.
 """
 
 from __future__ import annotations

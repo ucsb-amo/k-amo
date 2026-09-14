@@ -102,6 +102,44 @@ class TestGriddedMixture:
             propagator_for(cloud, RESPONSE, n_grid=64, L_box=1.0e-6, n_slices=10)
 
 
+@pytest.fixture(scope="module")
+def warm_cloud():
+    import warnings
+    from kamo.trap.finite_temperature import FiniteTemperatureSolver
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        return FiniteTemperatureSolver(harmonic(), a_scattering=11.33 * kc.a0, n_thermal_widths=4.5,
+                                       condensate_options=dict(points_per_scale=2.0)).solve(500.0, 30e-9)
+
+
+class TestComponents:
+    def test_component_keyword_selects_the_part(self, propagator, warm_cloud):
+        tot = GriddedMixture.for_propagator(propagator, warm_cloud, RESPONSE, SPECIES)
+        con = GriddedMixture.for_propagator(propagator, warm_cloud, RESPONSE, SPECIES, component="condensate")
+        th = GriddedMixture.for_propagator(propagator, warm_cloud, RESPONSE, SPECIES, component="thermal")
+        x = -propagator.x_edge + propagator.x_edge / propagator.n_slices
+        d_tot, d_con, d_th = (np.asarray(m.density(x, None, None)) for m in (tot, con, th))
+        # PCHIP is monotone, not linear: the parts resampled separately sum to the total to ~1e-4
+        assert d_con + d_th == pytest.approx(d_tot, rel=1e-3, abs=1e-3 * d_tot.max())
+        assert np.all(con.widths > warm_cloud.sigma_condensate)      # containment half-widths
+        assert th.widths[0] > con.widths[0]
+        assert abs(con.atom_number_error) < 0.05 and abs(tot.atom_number_error) < 0.05
+
+    def test_containment_widths_at_finite_temperature(self, warm_cloud):
+        assert effective_widths(warm_cloud)[0] > warm_cloud.widths[0]
+        assert effective_widths(warm_cloud, "rms") == pytest.approx(warm_cloud.widths)
+        prop = propagator_for(warm_cloud, RESPONSE, n_grid=64, L_box=24e-6, n_slices=20)
+        assert contained_fraction(warm_cloud, [prop.x_edge, np.inf, np.inf]) >= 1 - 1e-4
+
+    def test_cold_bridge_is_unchanged(self, propagator):
+        cloud = gridded(gaussian_cloud(), (48, 24, 24))
+        a = GriddedMixture.for_propagator(propagator, cloud, RESPONSE, SPECIES)
+        b = GriddedMixture.for_propagator(propagator, cloud, RESPONSE, SPECIES, component="total")
+        x = -propagator.x_edge + propagator.x_edge / propagator.n_slices
+        assert np.array_equal(np.asarray(a.density(x, None, None)), np.asarray(b.density(x, None, None)))
+        assert effective_widths(cloud) == pytest.approx(cloud.widths)
+
+
 class TestSpinGeometry:
     def test_trap_cloud_density_is_used(self, propagator):
         from kamo.spin import SpinGeometry

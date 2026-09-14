@@ -614,6 +614,49 @@ class Trap:
             return False
         return bool(self.trap_frequencies().is_bound and self.trap_depth_J() > 0)
 
+    def basin_half_widths(self, epsilon: float = 1e-3, n_directions: int = 256,
+                          n_radial: int = 600, pad: float = 1.15) -> np.ndarray:
+        """Lab-axis half-widths about the minimum of the region below
+        ``V_min + (1 - epsilon) x depth`` (m), from the first crossing of that energy
+        along rays from the minimum -- the ray set of :meth:`trap_depth_J` plus a cone
+        around the escape route, since the saddle (5.7 deg off the beam axis and 2.9 um
+        below the focus for the lab tweezer) is what bounds the basin.  A ray that never
+        crosses contributes its barrier top.  Padded by ``pad``; a finite-temperature
+        solver sizes its box from this and grows any face the basin still touches."""
+        m = self.minimum()
+        if not m.converged:
+            raise ValueError("the trap has no minimum")
+        depth = self.trap_depth_J()
+        if not np.isfinite(depth):
+            raise ValueError("the basin is unbounded")
+        r0 = m.position
+        cut = m.potential_J + (1.0 - float(epsilon)) * depth
+        dirs = self._ray_directions(n_directions)
+        esc = self.escape_direction
+        if esc is not None:
+            e1, e2, _ = fr.orthonormal_frame(esc)
+            ang = np.linspace(0.0, 2.0 * np.pi, 24, endpoint=False)
+            cone = [esc + r * (np.cos(a) * e1 + np.sin(a) * e2)
+                    for r in (0.02, 0.05, 0.1, 0.2) for a in ang]
+            dirs = np.concatenate([dirs, np.asarray(cone), esc[None], -esc[None]], axis=0)
+        dirs = dirs / np.linalg.norm(dirs, axis=1, keepdims=True)
+        t = self._ray_grid(n_radial, None)
+        U = np.asarray(self.potential_J(r0[0] + dirs[:, 0:1] * t, r0[1] + dirs[:, 1:2] * t,
+                                        r0[2] + dirs[:, 2:3] * t), dtype=float)
+        above = U >= cut
+        t_hit = np.empty(dirs.shape[0])
+        for i in range(dirs.shape[0]):
+            if above[i].any():
+                k = int(np.argmax(above[i]))
+                if k == 0:
+                    t_hit[i] = t[0]
+                else:                            # linear interpolation of the crossing
+                    f0, f1 = U[i, k - 1] - cut, U[i, k] - cut
+                    t_hit[i] = t[k - 1] + (t[k] - t[k - 1]) * (-f0 / (f1 - f0))
+            else:
+                t_hit[i] = t[int(np.argmax(U[i]))]
+        return float(pad) * np.max(np.abs(dirs * t_hit[:, None]), axis=0)
+
     # --------------------------------------------------- derived potentials
     def harmonic(self) -> "HarmonicTrap":
         """The quadratic expansion of this trap at its minimum."""
