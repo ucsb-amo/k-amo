@@ -138,7 +138,7 @@ class EnsembleResult:
 
 
 def run_ensemble(profile: GaussianProfile, op: OperatingPoint, theta: float, n_config: int,
-                 seed0: int = 0, variants: Sequence[str] = ("full", "far", "independent"),
+                 seed0: int = 0, variants: Sequence[str] = ("full", "nonear", "independent"),
                  n_jobs: int = 1, incident: Optional[IncidentField] = None,
                  N: Optional[int] = None, **solve_kw) -> EnsembleResult:
     """Sample and solve ``n_config`` configurations (seeds ``seed0 .. seed0 + n_config - 1``)."""
@@ -178,7 +178,7 @@ class AngleScan:
                              like_fraction=float(like_pair_fraction(th))))
         return rows
 
-    def format(self, num: str = "full", den: str = "far") -> str:
+    def format(self, num: str = "full", den: str = "nonear") -> str:
         lines = [f"excess = excitation({num}) / excitation({den}),  eta_eff = {self.eta_eff:.2f}",
                  f"{'theta':>7s} {'n':>4s} {'mean':>8s} {'sem':>7s} {'median':>8s} {'trimmed':>8s} "
                  f"{'std':>7s} {'law':>7s}"]
@@ -189,7 +189,7 @@ class AngleScan:
 
 
 def css_angle_scan(profile: GaussianProfile, op: OperatingPoint, thetas, n_config: int,
-                   seed0: int = 0, variants=("full", "far", "independent", "rg"),
+                   seed0: int = 0, variants=("full", "nonear", "independent", "rg"),
                    n_jobs: int = 1, incident=None, N=None, **solve_kw) -> AngleScan:
     """Ensembles at each CSS angle; the same seeds are reused at every angle so
     position disorder is identical across angles and only the spins change."""

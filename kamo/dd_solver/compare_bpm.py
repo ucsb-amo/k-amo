@@ -174,7 +174,7 @@ def _plane_far_field(psi_window, res_bpm, window_slice):
 
 
 def compare_at(profile: GaussianProfile, op: OperatingPoint, theta: float = 0.0,
-               n_config: int = 40, R_exc: float = 150e-9, variants=("full", "far"),
+               n_config: int = 40, R_exc: float = 150e-9, variants=("full", "nonear"),
                window: float = 6e-6, n_grid: int = 512, L_box: float = 36e-6,
                n_slices: int = 180, n_jobs: int = 1, seed0: int = 0,
                incident: Optional[IncidentField] = None, scale: float = 1.0,
@@ -229,7 +229,7 @@ def density_sweep(profile: GaussianProfile, op: OperatingPoint, scales=(6.0, 4.0
     return out
 
 
-def format_sweep(points: Sequence[ABPoint], variants=("full", "far")) -> str:
+def format_sweep(points: Sequence[ABPoint], variants=("full", "nonear")) -> str:
     """Console table of the sweep."""
     head = (f"{'scale':>6s} {'eta_eff':>8s} {'T_bpm':>7s} " + " ".join(f"{'T_' + v:>7s}" for v in variants)
             + f" {'phi_bpm':>8s} " + " ".join(f"{'phi_' + v:>8s}" for v in variants)
