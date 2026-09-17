@@ -296,13 +296,14 @@ class GridProfile:
         Refine each axis by this factor before building the CDFs.
     """
 
-    def __init__(self, cloud, axes=None, upsample: int = 1):
+    def __init__(self, cloud, axes=None, upsample: int = 1, recenter: bool = True):
         self.cloud = cloud
         self.N = float(cloud.N)
         n = np.asarray(getattr(cloud, "density_grid"), dtype=float)
         if axes is None:
             axes = self._axes_from(cloud)
         ax = [np.asarray(a, dtype=float) for a in axes]
+        self.recenter = bool(recenter)
         if upsample > 1:
             n, ax = self._refine(n, ax, int(upsample))
         if n.shape != tuple(a.size for a in ax):
@@ -311,9 +312,24 @@ class GridProfile:
         self.axes = ax
         self.density_grid = np.maximum(n, 0.0)
         self.upsample = int(upsample)
+        if self.recenter:
+            # kamo.trap's GriddedMixture recentres on the centroid by default, so
+            # the sampler must too or the two codes see clouds displaced by the
+            # gravitational sag (286 nm along z for the lab tweezer: enough to
+            # double the A/B residual, and a 1 rad tilt across an NA 0.42 mode).
+            # Added 2026-09-17 after exactly that showed up in the sweep.
+            self._build()
+            c = self.origin
+            self.axes = [a - ci for a, ci in zip(self.axes, c)]
+            self._shift = c
+        else:
+            self._shift = np.zeros(3)
         self.provenance = (f"{type(cloud).__name__} on a "
                            f"{'x'.join(str(m) for m in n.shape)} grid"
-                           + (f", upsampled x{upsample}" if upsample > 1 else ""))
+                           + (f", upsampled x{upsample}" if upsample > 1 else "")
+                           + (f", recentred by {np.round(self._shift * 1e9, 1)} nm"
+                              if self.recenter and np.any(np.abs(self._shift) > 1e-12) else ""))
+        self._interp = None
         self._build()
 
     # ------------------------------------------------------------- setup
@@ -448,6 +464,8 @@ class GridProfile:
     def _clone(self, axes, grid, N, note):
         out = object.__new__(GridProfile)
         out.cloud = self.cloud
+        out.recenter = self.recenter
+        out._shift = self._shift
         out.N = float(N)
         out.axes = axes
         out.density_grid = grid
@@ -508,7 +526,14 @@ class GridProfile:
         shape rather than an rms-matched Gaussian centred on the origin.
         """
         from kamo.trap.imaging_bridge import GriddedMixture
-        return GriddedMixture.for_propagator(propagator, self.cloud, response, species, **kw)
+        # match the sampler's framing exactly (see __init__)
+        kw.setdefault("recenter", self.recenter)
+        mix = GriddedMixture.for_propagator(propagator, self.cloud, response, species, **kw)
+        if not np.allclose(np.asarray(mix.center), self._shift, atol=1e-12):
+            raise ValueError(f"the propagator's centre {np.asarray(mix.center)} does not match "
+                             f"the sampler's {self._shift}; the two codes would see clouds "
+                             "displaced relative to each other")
+        return mix
 
     def summary(self, wavelength: Optional[float] = None) -> str:
         s = self.sigma * 1e9

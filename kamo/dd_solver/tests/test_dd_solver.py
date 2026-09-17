@@ -818,3 +818,32 @@ def test_excess_law_angular_constant():
     assert abs(np.pi ** 2 * both / (8 * np.pi ** 3) - ensemble.XI_CIRC) < 1e-12
     assert abs(np.pi ** 2 * pos / (8 * np.pi ** 3) - ensemble.XI_CIRC / 2) < 1e-12
     assert ensemble.excess_law(10.0, 0.0) == 1 + ensemble.XI_CIRC * 10.0
+
+
+def test_gridded_profile_frames_match_the_propagator(op):
+    """The sampler and kamo.imaging must see the cloud in the SAME frame.
+
+    kamo.trap's GriddedMixture recentres on the centroid by default; a sampler
+    that used the raw grid coordinates would put the atoms 286 nm off in z for
+    the lab tweezer (the gravitational sag), which is a rigid displacement
+    between the two codes and doubled the A/B residual before it was caught."""
+    from kamo.trap import Trap, Tweezer, solve as trap_solve
+    from kamo.dd_solver.cloud import GridProfile
+    trap = Trap(Tweezer(waist=3e-6, wavelength_m=1064e-9), state=(4, 0, 0.5, 1, -1),
+                B_gauss=520.583, B_direction=(0, 0, 1)).rescaled_to_frequency(1.0e3)
+    tc = trap_solve(trap, N=500, mode="gp")
+    sagged = GridProfile(tc, recenter=False)
+    assert abs(sagged.origin[2]) > 100e-9              # the sag is real and sizeable
+    centred = GridProfile(tc)                          # the default
+    assert np.allclose(centred.origin, 0.0, atol=1e-12)
+    assert np.allclose(centred.sigma, sagged.sigma)    # a rigid shift, nothing else
+    assert abs(centred.eta_eff(op.wavelength) / sagged.eta_eff(op.wavelength) - 1) < 1e-12
+    # and bpm_source refuses a propagator framed differently from the sampler
+    from kamo.imaging.response import TwoLevelResponse
+    from kamo.trap.imaging_bridge import propagator_for
+    resp = TwoLevelResponse(op.wavelength, op.linewidth_Hz, sigma0=op.sigma0 / 2)
+    prop = propagator_for(tc, resp, n_grid=128, L_box=30e-6, n_slices=40)
+    mix = centred.bpm_source(prop, resp, op.species(np.pi))
+    assert np.allclose(np.asarray(mix.center), centred._shift, atol=1e-12)
+    with pytest.raises(ValueError):
+        centred.bpm_source(prop, resp, op.species(np.pi), recenter=False)
