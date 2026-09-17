@@ -13,7 +13,7 @@ Quick start
 >>> from kamo.BEC_properties.variational import GaussianVariationalCloud
 >>> from kamo.imaging import ProbeBeam, Propagator, UniformMixture, readout
 >>>
->>> atom = Potassium39()
+>>> atom = Potassium39()          # or any kamo atom: kamo.atom("Rb87"), ...
 >>> B = 520.58
 >>> cloud = GaussianVariationalCloud.from_tweezer(
 ...     N=500., a_scattering=atom.get_scattering_length(1, -1, B) * kc.a0,
@@ -41,6 +41,13 @@ Layers
 
 Geometry convention: x is the probe propagation axis, y and z transverse, z the
 quantization axis.
+
+Species: nothing here is potassium-specific -- the atom enters only through
+:class:`.ProbeBeam` (transition frequencies, linewidth, cross section), so any
+:mod:`kamo.atom_properties.alkali` atom works.  The examples use 39K and its
+4S1/2 -> 4P3/2 states; another alkali uses its own n (Rb87: 5S1/2 -> 5P3/2).
+Scattering lengths are the exception: :mod:`kamo.scattering`, behind
+``get_scattering_length``, is 39K only.
 """
 
 from typing import TYPE_CHECKING

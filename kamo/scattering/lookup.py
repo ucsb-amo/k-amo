@@ -1,6 +1,8 @@
 """One-call scattering-length lookup for a pair of K39 ground states.
 
-This is the engine behind ``Potassium39.get_scattering_length``.
+This is the engine behind ``Potassium39.get_scattering_length``.  39K only, like
+the rest of :mod:`kamo.scattering`: a non-39K ``atom`` or a state outside the
+4S1/2 |F, mF> ladder raises (see :func:`kamo.scattering.thresholds.require_k39`).
 
 >>> from kamo.scattering.lookup import scattering_length
 >>> scattering_length((1, -1), None, 520.58)           # two atoms in |1,-1>
@@ -63,14 +65,8 @@ def kokkelmans_dir():
 
 
 def _state(s, name):
-    try:
-        F, mF = (int(s[0]), int(s[1]))
-    except (TypeError, ValueError, IndexError):
-        raise ValueError(f"{name} must be an (F, mF) pair, got {s!r}") from None
-    if (F, mF) != (s[0], s[1]) or F not in (1, 2) or abs(mF) > F:
-        raise ValueError(f"{name} = {tuple(s)} is not a K39 ground state |F, mF> "
-                         f"(F in {{1, 2}}, |mF| <= F)")
-    return F, mF
+    from .thresholds import require_k39_state
+    return require_k39_state(s, name)
 
 
 def available_pairs(method: str = "table"):
@@ -117,7 +113,7 @@ def _kokkelmans_complex(state):
 
 
 def scattering_length(state_a, state_b=None, B_gauss=0.0, method: str = "table",
-                      interp: bool = False, return_complex: bool = False):
+                      interp: bool = False, return_complex: bool = False, atom=None):
     """s-wave scattering length (a0) of the pair ``state_a + state_b`` at ``B_gauss``.
 
     Parameters
@@ -135,6 +131,9 @@ def scattering_length(state_a, state_b=None, B_gauss=0.0, method: str = "table",
         nearest point.  The other methods are continuous in B.
     return_complex : bool
         Return ``a_re - i a_im`` (``a_im > 0`` = two-body loss) instead of ``Re a``.
+    atom : optional
+        Must be 39K (the default): these are 39K data only.  Any other alkali
+        raises :class:`NotImplementedError`.
 
     Returns
     -------
@@ -145,7 +144,12 @@ def scattering_length(state_a, state_b=None, B_gauss=0.0, method: str = "table",
     ValueError
         Invalid state or method, a pair with no data for ``method``, or a field outside
         the method's range.
+    NotImplementedError
+        ``atom`` is not 39K.
     """
+    if atom is not None:
+        from .thresholds import require_k39
+        require_k39(atom, "kamo.scattering.lookup.scattering_length")
     a = _state(state_a, "state_a")
     b = a if state_b is None else _state(state_b, "state_b")
     pair = tuple(sorted((a, b)))

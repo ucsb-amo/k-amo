@@ -72,7 +72,6 @@ NLJ = Tuple[int, int, float]
 
 _LABEL_RE = re.compile(r"^(\d+)([spdfghik])(\d+)/2$")
 _L_LETTERS = "spdfghik"
-_NUCLEAR_SPIN = 1.5                      # K39
 _GAUSS_TO_TESLA = 1e-4
 
 __all__ = [
@@ -108,25 +107,34 @@ def _label_to_nlj(label: str) -> NLJ:
 
 
 def _default_atom():
-    from kamo import Potassium39
-    return Potassium39()
+    from kamo.atom_properties.alkali import default_atom
+    return default_atom()
 
 
-def substructure_spread_Hz(nlj: NLJ, B_gauss: float, I: float = _NUCLEAR_SPIN) -> float:
+def _source_of(atom) -> str:
+    return "arc" if getattr(atom, "use_portal", True) is False else "portal"
+
+
+def substructure_spread_Hz(nlj: NLJ, B_gauss: float, I: float = None, atom=None) -> float:
     """Hyperfine plus Zeeman spread (Hz) of manifold ``nlj`` at ``B_gauss``.
 
     Zeeman part: ``|g_J| J mu_B B / h`` (the half-spread, i.e. how far the
     outermost m_J sits from the manifold centroid).  Hyperfine part: the span
-    from ``F = |I - J|`` to ``F = I + J`` of ``E_F = A K / 2`` using kamo's
-    hyperfine constants (the electric-quadrupole ``B`` term is neglected).
-    This is the scale of the detuning variation that the Stark model lumps
-    into one pole.
+    from ``F = |I - J|`` to ``F = I + J`` of ``E_F = A K / 2`` using the
+    atom's hyperfine constants (the electric-quadrupole ``B`` term is
+    neglected).  This is the scale of the detuning variation that the Stark
+    model lumps into one pole.  ``atom`` defaults to kamo's default atom
+    (39K); ``I`` to the atom's nuclear spin.
     """
+    from kamo.atom_properties.alkali import electronic_g, hyperfine, nuclear_spin
+    if atom is None:
+        atom = _default_atom()
+    if I is None:
+        I = nuclear_spin(atom)
     n, l, j = nlj
-    g_j = kc.get_total_electronic_g_factor(l, j, n=n)
+    g_j = electronic_g(atom, l, j, n=n)
     zeeman = abs(g_j) * j * kc.mu_b * abs(B_gauss) * _GAUSS_TO_TESLA / kc.h
-    from kamo.atom_properties.hyperfine import hyperfine_constants
-    A = hyperfine_constants(n, l, j).A_Hz
+    A = hyperfine(atom, n, l, j).A_Hz
     F_hi, F_lo = I + j, abs(I - j)
     hfs = abs(A) / 2.0 * (F_hi * (F_hi + 1) - F_lo * (F_lo + 1))
     return float(zeeman + hfs)
@@ -225,20 +233,28 @@ class StateChannels:
 
 
 def state_channels(state, frequency_Hz: float, B_gauss: float = 0.0,
-                   source: str = "portal", spread_floor: float = 1e-4) -> StateChannels:
+                   source: str = None, spread_floor: float = 1e-4,
+                   atom=None) -> StateChannels:
     """Scalar polarizability of ``state`` at the laser frequency, channel by channel.
 
     ``state`` is anything whose first three entries are ``(n, l, j)``.  The
     substructure spread is evaluated only for channels with
     ``share >= spread_floor`` (it needs a hyperfine-constant lookup); smaller
     channels get zero, which only affects the Stark error estimate at the
-    1e-4 level.
+    1e-4 level.  ``atom`` selects the species (default kamo's default atom,
+    39K); ``source`` defaults to ``"arc"`` for an atom built with
+    ``use_portal=False`` and ``"portal"`` otherwise.
     """
+    from kamo.atom_properties.alkali import species_of
     from kamo.trap.polarizability import scalar_breakdown
 
+    if atom is None:
+        atom = _default_atom()
+    if source is None:
+        source = _source_of(atom)
     n, l, j = _nlj(state)
     f_L = float(frequency_Hz)
-    bd = scalar_breakdown(n, l, j, kc.c / f_L, source)
+    bd = scalar_breakdown(n, l, j, kc.c / f_L, source, species=species_of(atom))
     total = abs(bd.total_au)
     if total == 0.0:
         raise ValueError(f"Zero polarizability for {(n, l, j)} at {f_L:.4e} Hz.")
@@ -247,7 +263,8 @@ def state_channels(state, frequency_Hz: float, B_gauss: float = 0.0,
         share = abs(t.scalar_au) / total
         man = _label_to_nlj(t.final)
         f_c = abs(t.energy_J) / kc.h          # |transition| frequency of the channel
-        W = substructure_spread_Hz(man, B_gauss) if share >= spread_floor else 0.0
+        W = (substructure_spread_Hz(man, B_gauss, atom=atom)
+             if share >= spread_floor else 0.0)
         out.append(Channel(
             state=(n, l, j), manifold=man, final=t.final, origin=t.origin,
             d_au=float(t.d_au), alpha_au=float(t.scalar_au), share=float(share),
@@ -257,9 +274,11 @@ def state_channels(state, frequency_Hz: float, B_gauss: float = 0.0,
 
 
 def channel_weights(state, frequency_Hz: float, B_gauss: float = 0.0,
-                    source: str = "portal", spread_floor: float = 1e-4) -> List[Channel]:
+                    source: str = None, spread_floor: float = 1e-4,
+                    atom=None) -> List[Channel]:
     """The channel list of :func:`state_channels`, sorted by decreasing share."""
-    return list(state_channels(state, frequency_Hz, B_gauss, source, spread_floor).channels)
+    return list(state_channels(state, frequency_Hz, B_gauss, source, spread_floor,
+                               atom=atom).channels)
 
 
 def _unique_states(states: Iterable) -> List[NLJ]:
@@ -337,7 +356,8 @@ def light_shift_basis(states: Iterable, frequency_Hz: float, tol: float = 1e-3,
     if atom is None:
         atom = _default_atom()
     if per_state is None:
-        per_state = [state_channels(st, frequency_Hz, B_gauss=B_gauss) for st in uniq]
+        per_state = [state_channels(st, frequency_Hz, B_gauss=B_gauss, atom=atom)
+                     for st in uniq]
     own: List[NLJ] = []
     for st in uniq:
         for m in _fs_partners(st):
@@ -446,7 +466,9 @@ def choose_laser_model(states: Iterable, frequency_Hz: float,
         raise ValueError("choose_laser_model expects exactly two states.")
     f_L = float(frequency_Hz)
     uniq = _unique_states(states)
-    per_state = [state_channels(st, f_L, B_gauss=B_gauss) for st in uniq]
+    if atom is None:
+        atom = _default_atom()
+    per_state = [state_channels(st, f_L, B_gauss=B_gauss, atom=atom) for st in uniq]
     by_state = {sc.state: sc for sc in per_state}
     basis = light_shift_basis(states, f_L, tol=tol, atom=atom, B_gauss=B_gauss,
                               per_state=per_state)

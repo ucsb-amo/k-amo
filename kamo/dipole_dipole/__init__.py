@@ -25,7 +25,7 @@ Quick start
 -----------
 >>> from kamo.dipole_dipole import CyclingTransition, PairPotential, BECCloud
 >>> from kamo.dipole_dipole import QuasiStaticLZModel
->>> t = CyclingTransition.at_field(520.6)
+>>> t = CyclingTransition.at_field(520.6)        # 39K; atom= for another alkali
 >>> print(t.summary())
 >>> pot = PairPotential(t)
 >>> cloud = BECCloud(N=1e5, trap_frequencies_Hz=(150., 150., 20.), a_s_bohr=100.)

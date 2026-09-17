@@ -42,7 +42,7 @@ class GaussianBeam():
     intensity
     '''
     def __init__(self,waist,wavelength=None,power=None,n_medium=1.,include_trap_properties=False,frequency=None,
-                 peak_intensity=None):
+                 peak_intensity=None, atom=None):
         if wavelength is None and frequency is None:
             raise ValueError("Must provide either wavelength or frequency.")
         if wavelength is not None and frequency is not None:
@@ -68,11 +68,19 @@ class GaussianBeam():
         self.zR = self.rayleigh_range
 
         self.include_trap_properties = include_trap_properties
+        self.atom = atom
         if include_trap_properties:
+            # Ground-state polarizability of |F = I - 1/2, m_F = -F> of ``atom``
+            # (default 39K: |4S1/2, F=1, m_F=-1>).
             from kamo import light_shift
-            cp = light_shift.compute_polarizabilities.ComputePolarizabilities()
+            from kamo.atom_properties.alkali import default_atom
+            if atom is None:
+                atom = default_atom()
+            cp = light_shift.compute_polarizabilities.ComputePolarizabilities(atom=atom)
+            F = atom.I - 0.5
+            n0, l0, j0, F0, mF0 = atom.ground_qn(F, -F)
             self.polarizability_ground_state = \
-                float(cp.compute_complete_polarizability(4,0,1/2,1,-1,self.wavelength)[0]) \
+                float(cp.compute_complete_polarizability(n0,l0,j0,F0,mF0,self.wavelength)[0]) \
                     * c.convert_polarizability_au_to_SI
             
     def frequency(self):
@@ -186,7 +194,9 @@ class GaussianBeam():
         '''
         intensity = self.intensity(power)
         trap_depth = -c.ac_stark_shift_J(polarizability, intensity)
-        omega = np.sqrt( curvature_factor * trap_depth / c.m_K ) / trap_length
+        mass = getattr(self.atom, "mass", None)
+        mass = c.m_K if mass is None else float(mass)
+        omega = np.sqrt( curvature_factor * trap_depth / mass ) / trap_length
         return omega
 
     def trap_frequency_radial(self,power=-0.1,polarizability=0.):

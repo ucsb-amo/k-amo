@@ -1,4 +1,8 @@
-﻿"""Spectroscopic lookup utilities for K-39 multi-level structure.
+"""Spectroscopic lookup utilities for multi-level alkali structure.
+
+Species-agnostic: everything here drives an :class:`~.model.AtomicStructure`,
+which carries its own atom (39K by default, any
+:mod:`kamo.atom_properties.alkali` atom via ``atom=``).
 
 .. deprecated::
     The standalone functions in this module are kept for backward compatibility.
@@ -84,7 +88,7 @@ def scattering_rate(
     delta_hz: float = 0.0,
     weak_probe: bool = True,
 ):
-    """Total scattering rate (sâ»Â¹) for *ground_state*.
+    """Total scattering rate (s⁻¹) for *ground_state*.
 
     Wrapper around :meth:`LaserSweepResult.scattering_rate`.
     Runs a minimal 2-point laser sweep to populate a ``LaserSweepResult``;

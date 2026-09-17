@@ -1,10 +1,10 @@
-"""Basis construction for multi-manifold K39 structure calculations.
+"""Basis construction for multi-manifold alkali structure calculations.
 
 The basis is the *uncoupled* fine-structure + nuclear-spin basis
 
     |n, l, j; m_j, m_i>
 
-with the K39 nuclear spin I = 3/2.  This basis is the natural one for building
+with the atom's nuclear spin I (3/2 for the default atom, 39K).  This basis is the natural one for building
 Zeeman Hamiltonians valid at arbitrary field, and the zero-field eigenstates of
 the hyperfine Hamiltonian recover the |F, m_F> states.
 """
@@ -16,9 +16,9 @@ from typing import Iterable, List, Sequence, Tuple
 
 import numpy as np
 
-from .state_labels import StateLabelMixin
+from .state_labels import StateLabelMixin, _qn, is_coupled
 
-# K39 nuclear spin
+#: Nuclear spin used when neither an atom nor ``i_nuclear`` is given (39K).
 I_NUCLEAR = 1.5
 
 
@@ -61,17 +61,32 @@ class BasisState:
 
 
 class Manifold(StateLabelMixin):
-    """A single (n, l, j) fine-structure manifold of K39.
+    """A single (n, l, j) fine-structure manifold of one atom.
 
-    Enumerates all uncoupled sublevels |m_j, m_i> with I = 3/2.
+    Enumerates all uncoupled sublevels |m_j, m_i>. The nuclear spin and the
+    hyperfine constants (which fix the Paschen-Back label map) come from
+    ``atom``; with no atom, ``i_nuclear`` defaults to 3/2 and the hyperfine
+    data to kamo's default atom (39K).
+
+    Parameters
+    ----------
+    n, l, j : fine-structure quantum numbers.
+    i_nuclear : float, optional
+        Nuclear spin; default ``atom.I`` (or 3/2 with no atom).
+    atom : optional
+        The atom whose data the manifold uses (see
+        :mod:`kamo.atom_properties.alkali`).
     """
 
-    def __init__(self, n: int, l: int, j: float, i_nuclear: float = I_NUCLEAR):
+    def __init__(self, n: int, l: int, j: float, i_nuclear: float = None, atom=None):
         if abs(j - (l + 0.5)) > 1e-9 and abs(j - abs(l - 0.5)) > 1e-9:
             raise ValueError(f"j={j} is not compatible with l={l} (need j = l +/- 1/2).")
         self.n = int(n)
         self.l = int(l)
         self.j = float(j)
+        self.atom = atom
+        if i_nuclear is None:
+            i_nuclear = I_NUCLEAR if atom is None else atom.I
         self.i_nuclear = float(i_nuclear)
         # Lazily built by _build_label_cache()
         self._label_cache: dict | None = None      # (mj, mi) -> (F, mF)
@@ -82,6 +97,28 @@ class Manifold(StateLabelMixin):
     @property
     def nlj(self) -> Tuple[int, int, float]:
         return (self.n, self.l, self.j)
+
+    def _atom(self):
+        if self.atom is None:
+            from kamo.atom_properties.alkali import default_atom
+            self.atom = default_atom()
+        return self.atom
+
+    @property
+    def species(self) -> str:
+        """Species token of the atom this manifold belongs to (``"K39"``)."""
+        from kamo.atom_properties.alkali import species_of
+        return species_of(self._atom())
+
+    def hyperfine(self):
+        """Hyperfine constants of this manifold (``A_MHz``, ``B_MHz``, ``has_A``, ...)."""
+        from kamo.atom_properties.alkali import hyperfine
+        return hyperfine(self._atom(), self.n, self.l, self.j)
+
+    def is_coupled(self, a, b) -> bool:
+        """True if ``(a, b)`` are ``(F, m_F)`` for this manifold's nuclear spin,
+        False if ``(m_J, m_I)``; see :func:`~.state_labels.is_coupled`."""
+        return is_coupled(a, b, self.i_nuclear)
 
     @property
     def dim(self) -> int:
@@ -110,13 +147,13 @@ class Manifold(StateLabelMixin):
         m_j order, so the k-th lowest F level connects to the k-th lowest m_j.
         That is F ascending when A > 0, but reversed for the inverted K d5/2
         manifolds (A < 0). The quadrupole B term is included. The constants
-        are the 39K ones :meth:`~.builder.HamiltonianBuilder.h0` uses. With no
-        hyperfine data (all levels degenerate) it falls back to F ascending.
+        are the atom's, the same ones :meth:`~.builder.HamiltonianBuilder.h0`
+        uses. With no hyperfine data (all levels degenerate) it falls back to
+        F ascending.
         """
         if self._F_order is None:
-            from kamo.atom_properties.hyperfine import (hyperfine_constants,
-                                                        hyperfine_energy)
-            hc = hyperfine_constants(self.n, self.l, self.j)
+            from kamo.atom_properties.hyperfine import hyperfine_energy
+            hc = self.hyperfine()
             energy = {F: hyperfine_energy(F, self.i_nuclear, self.j,
                                           hc.A_MHz, hc.B_MHz) for F in self.allowed_F()}
             self._F_order = sorted(energy, key=lambda F: (round(energy[F], 12), F))
@@ -207,10 +244,10 @@ class Manifold(StateLabelMixin):
         # (label map).  With mF also given, only that one mF is kept.
         f_pairs: set | None = None
         if F is not None:
-            F_int = int(round(float(F)))
-            mF_values = ([int(round(float(mF)))] if mF is not None
-                         else range(-F_int, F_int + 1))
-            f_pairs = {self.reverse_label_map[(F_int, m)] for m in mF_values}
+            F_q = _qn(F)
+            mF_values = ([_qn(mF)] if mF is not None
+                         else [_qn(-F_q + k) for k in range(int(round(2 * F_q)) + 1)])
+            f_pairs = {self.reverse_label_map[(F_q, m)] for m in mF_values}
 
         # ---- filter all substates (all active conditions must pass = AND) ----
         result = []
@@ -269,7 +306,7 @@ class Manifold(StateLabelMixin):
             # k-th lowest-energy F <-> k-th (mj, mi) pair (mj ascending)
             for F_v, (mj_r, mi_r) in zip(valid_F, valid_pairs):
                 key_fwd = (round(mj_r, 9), mi_r)
-                key_rev = (int(round(F_v)), int(round(mF_v)))
+                key_rev = (_qn(F_v), _qn(mF_v))
                 fwd[key_fwd] = key_rev
                 rev[key_rev] = key_fwd
 
@@ -286,9 +323,8 @@ class Manifold(StateLabelMixin):
         :meth:`~.builder.HamiltonianBuilder.h0`.
         """
         if self._hyperfine_resolved is None:
-            from kamo import constants as c
-            A = c.get_hyperfine_constant(self.l, self.j, n=self.n)
-            self._hyperfine_resolved = bool(A)
+            hc = self.hyperfine()
+            self._hyperfine_resolved = bool(hc.has_A and hc.A_MHz)
         return self._hyperfine_resolved
 
     @property
@@ -319,7 +355,7 @@ class Manifold(StateLabelMixin):
 
         Returns
         -------
-        (F, mF) : (int, int)
+        (F, mF) : ints for half-integer I, half-integer floats for integer I.
         """
         key = (round(float(m_j), 9), round(float(m_i), 9))
         try:
@@ -342,7 +378,7 @@ class Manifold(StateLabelMixin):
         -------
         (mj, mi) : (float, float)
         """
-        key = (int(round(F)), int(round(mF)))
+        key = (_qn(F), _qn(mF))
         try:
             return self.reverse_label_map[key]
         except KeyError:
@@ -351,7 +387,8 @@ class Manifold(StateLabelMixin):
                 f"not found in label map for this manifold.")
 
     def __repr__(self) -> str:
-        return f"Manifold(n={self.n}, l={self.l}, j={self.j}, dim={self.dim})"
+        return (f"Manifold(n={self.n}, l={self.l}, j={self.j}, "
+                f"I={self.i_nuclear:g}, dim={self.dim})")
 
 
 class Basis(StateLabelMixin):
@@ -360,18 +397,32 @@ class Basis(StateLabelMixin):
     Parameters
     ----------
     manifolds : iterable of Manifold or (n, l, j) tuples.
+    atom : optional
+        The atom the ``(n, l, j)`` tuples are built for (nuclear spin,
+        hyperfine constants). Default: kamo's default atom (39K). Manifold
+        objects are taken as they are; all manifolds must share one nuclear
+        spin.
 
     The basis states are ordered manifold-by-manifold in the order provided.
     """
 
-    def __init__(self, manifolds: Iterable):
+    def __init__(self, manifolds: Iterable, atom=None):
+        self.atom = atom
         self.manifolds: List[Manifold] = []
         for m in manifolds:
             if isinstance(m, Manifold):
                 self.manifolds.append(m)
             else:
                 n, l, j = m
-                self.manifolds.append(Manifold(n, l, j))
+                self.manifolds.append(Manifold(n, l, j, atom=atom))
+        if not self.manifolds:
+            raise ValueError("Basis needs at least one manifold.")
+        if self.atom is None:
+            self.atom = next((m.atom for m in self.manifolds if m.atom is not None), None)
+        spins = {round(m.i_nuclear, 9) for m in self.manifolds}
+        if len(spins) > 1:
+            raise ValueError(f"Manifolds have different nuclear spins {sorted(spins)}; "
+                             "a basis holds one atom.")
 
         # Reject duplicate manifolds (would make the basis singular).
         seen = set()
@@ -509,8 +560,6 @@ class Basis(StateLabelMixin):
                 continue
             result.extend(man.states(F=F, mF=mF, mJ=mJ, mI=mI))
         return result
-
-        return np.array([s.m_f for s in self.states])
 
     def __repr__(self) -> str:
         return f"Basis(dim={self.dim}, manifolds={self.manifolds})"

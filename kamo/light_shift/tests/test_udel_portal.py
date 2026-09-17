@@ -7,6 +7,7 @@ skipped when it cannot be reached.
 
 import json
 import urllib.request
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -101,6 +102,150 @@ def test_cache_write_and_offline_fallback(tmp_path, monkeypatch):
         assert up._cached("x", offline, refresh=True) == {"a": 1}
     with pytest.raises(ConnectionError):
         up._cached("y", offline)
+
+
+# ------------------------------------------------- INTERNAL: normalisation
+
+# The Cs hyperfine table has one row whose configuration is upper case ("9D")
+# where every other row is lower case; unnormalised it parses to n = NaN.
+_HFS_ROWS = [
+    {"isotopeMassNumber": "133", "stateConfiguration": "6s", "stateTerm": "2S",
+     "stateJ": "1/2", "hyperfineTheory": 2298.2, "hyperfineTheoryRef": "theory",
+     "hyperfineExperiment": 2298.157, "hyperfineExperimentUncertainty": None,
+     "hyperfineExperimentRef": "exp"},
+    {"isotopeMassNumber": "", "stateConfiguration": "9D", "stateTerm": "2D",
+     "stateJ": "3/2", "hyperfineTheory": None, "hyperfineTheoryRef": None,
+     "hyperfineExperiment": 2.35, "hyperfineExperimentUncertainty": "0.02",
+     "hyperfineExperimentRef": "exp"},
+]
+
+
+def test_uppercase_configuration_is_normalized():
+    assert up.normalize_config("9D") == "9d"
+    assert up.normalize_config(None) == ""
+    assert up._valence_nl("9D") == (9, 2)
+    assert up.state_label("9D", "3/2") == "9d3/2"
+    rec = up._state_record(1, "9D", "2D", "3/2")
+    assert (rec["state1"], rec["config1"], rec["n1"], rec["l1"]) == ("9d3/2", "9d", 9, 2)
+
+
+def test_hyperfine_constants_normalizes_uppercase_row(tmp_path, monkeypatch):
+    monkeypatch.setenv("KAMO_CACHE_DIR", str(tmp_path))
+    path = up.cache_dir() / "Cs1_hyperfine_constants.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"data": {"hyperfineConstants": _HFS_ROWS}}))
+    df = up.hyperfine_constants("Cs1")
+    row = df[df.state == "9d3/2"].iloc[0]
+    assert (row.config, row.n, row.l, row.J, row.iso) == ("9d", 9, 2, 1.5, 133)
+    assert not df.n.isna().any()
+
+
+# ------------------------------------------------------ INTERNAL: species ids
+
+def test_element_symbol():
+    assert up.element_symbol("K1") == "K"
+    assert up.element_symbol("Cs1") == "Cs"
+    assert up.element_symbol("Ca2") == "Ca"
+    with pytest.raises(ValueError):
+        up.element_symbol("4p3/2")
+
+
+def test_species_for_element():
+    assert up.species_for_element("K") == "K1"
+    assert up.species_for_element("cs") == "Cs1"
+    assert up.species_for_element("Ca", ion_stage=1) == "Ca2"
+    with pytest.raises(ValueError):
+        up.species_for_element("K", ion_stage=-1)
+    with pytest.raises(ValueError):
+        up.species_for_element("K1")
+
+
+@pytest.mark.parametrize("species", ["Li1", "Na1", "K1", "Rb1", "Cs1"])
+def test_species_id_roundtrip(species):
+    assert up.species_for_element(up.element_symbol(species)) == species
+
+
+# ---------------------------------------------------- INTERNAL: bundled path
+
+_ACCESSORS = [up.matrix_elements, up.transition_rates, up.lifetimes, up.energies,
+              up.static_polarizabilities, up.hyperfine_constants, up.nuclear_data]
+_ALKALIS = ["Li1", "Na1", "K1", "Rb1", "Cs1"]
+
+
+@pytest.fixture
+def offline(tmp_path, monkeypatch):
+    """Empty cache, no network: only the bundled snapshot can answer."""
+    monkeypatch.setenv("KAMO_CACHE_DIR", str(tmp_path))
+
+    def dead(*args, **kwargs):
+        raise OSError("no network (test)")
+
+    monkeypatch.setattr(up, "_http", dead)
+
+
+@pytest.mark.parametrize("species", _ALKALIS)
+@pytest.mark.parametrize("accessor", _ACCESSORS, ids=lambda f: f.__name__)
+def test_bundled_accessor_needs_no_cache_or_network(offline, accessor, species):
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")        # bundled=True must not warn
+        df = accessor(species, bundled=True)
+    assert len(df) > 0
+
+
+@pytest.mark.parametrize("species", _ALKALIS)
+@pytest.mark.parametrize("accessor", _ACCESSORS, ids=lambda f: f.__name__)
+def test_offline_fallback_reaches_the_snapshot(offline, accessor, species):
+    with pytest.warns(UserWarning, match="unreachable"):
+        df = accessor(species)
+    assert len(df) > 0
+
+
+@pytest.mark.parametrize("accessor", _ACCESSORS, ids=lambda f: f.__name__)
+def test_bundled_missing_snapshot_names_species_and_path(offline, accessor):
+    with pytest.raises(KeyError) as exc:
+        accessor("Xx9", bundled=True)
+    message = str(exc.value)
+    assert "Xx9" in message and "write_snapshot" in message
+    assert str(up._SNAPSHOT_DIR.name) in message
+
+
+def test_connection_error_names_dataset_and_suggests_write_snapshot(offline):
+    with pytest.raises(ConnectionError) as exc:
+        up.matrix_elements("Xx9")
+    message = str(exc.value)
+    assert "Xx9_matrix_elements" in message and "write_snapshot('Xx9')" in message
+
+
+# --------------------------------------------------- INTERNAL: write_snapshot
+
+def test_write_snapshot_defaults_include_energies():
+    import inspect
+
+    datasets = inspect.signature(up.write_snapshot).parameters["datasets"].default
+    assert set(datasets) >= {"matrix_elements", "transition_rates", "energies",
+                             "hyperfine_constants", "nuclears"}
+    # static polarizabilities stay opt-in
+    assert "static_polarizabilities" not in datasets
+
+
+def test_write_snapshot_rejects_unknown_dataset():
+    with pytest.raises(KeyError):
+        up.write_snapshot("K1", ("not_a_dataset",))
+
+
+def test_write_snapshot_offline_raises_connection_error(offline, monkeypatch):
+    """Offline it must not fall back to the snapshot and rewrite it in place."""
+    written = []
+    monkeypatch.setattr(up.Path, "write_text",
+                        lambda self, *a, **k: written.append(self))
+    with pytest.raises(ConnectionError, match="K1"):
+        up.write_snapshot("K1", ("matrix_elements",))
+    assert not [p for p in written if up._SNAPSHOT_DIR in p.parents]
+
+
+def test_write_snapshot_offline_raises_for_unknown_species(offline):
+    with pytest.raises(ConnectionError):
+        up.write_snapshot("Xx9", ("matrix_elements",))
 
 
 # ---------------------------------------------------------------- NETWORK

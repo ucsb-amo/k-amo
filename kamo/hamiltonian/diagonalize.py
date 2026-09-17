@@ -196,6 +196,18 @@ class SweepResult(StateLabelMixin):
         return next((m for m in self.basis.manifolds
                      if m.n == n and m.l == l and abs(m.j - j) < 1e-9), None)
 
+    def _is_coupled(self, n, l, j, a, b) -> bool:
+        """Whether ``(a, b)`` are ``(F, m_F)`` for the basis's nuclear spin
+        (see :func:`~.state_labels.is_coupled`)."""
+        from .state_labels import is_coupled
+        return is_coupled(a, b, self.basis.manifolds[0].i_nuclear)
+
+    def _is_coupled(self, n, l, j, a, b) -> bool:
+        """Whether ``(a, b)`` are ``(F, m_F)`` for the basis's nuclear spin
+        (see :func:`~.state_labels.is_coupled`)."""
+        from .state_labels import is_coupled
+        return is_coupled(a, b, self.basis.manifolds[0].i_nuclear)
+
     def _mF_of_basis_row(self) -> np.ndarray:
         """``m_F = m_j + m_i`` of each uncoupled basis row (eigenvector row)."""
         mF = np.zeros(self.basis.dim)
@@ -223,7 +235,8 @@ class SweepResult(StateLabelMixin):
             var = max(float(w @ mF_row ** 2) - mean ** 2, 0.0)
             if best_var is None or var < best_var:
                 best_var, best_mean = var, mean
-        return int(round(best_mean))
+        from .state_labels import _qn
+        return _qn(best_mean)
 
     def _adiabatic_cache(self, n: int, l: int, j: float) -> dict:
         """Cached adiabatic label maps for manifold ``(n, l, j)``.
@@ -482,7 +495,7 @@ class SweepResult(StateLabelMixin):
         if man is None:
             raise KeyError(f"Manifold ({n}, {l}, {j}) not in basis.")
         try:
-            if isinstance(a, int) and isinstance(b, int):
+            if man.is_coupled(a, b):
                 return (n, l, j) + tuple(float(x) for x in man.state_for(a, b))
             return (n, l, j) + man.label_for(a, b)
         except KeyError as err:
@@ -510,8 +523,8 @@ class SweepResult(StateLabelMixin):
         list of int
         """
         if m_j is not None and m_i is not None:
-            if isinstance(m_j, int) and isinstance(m_i, int):
-                # integer args -> interpret as F, mF (low-field coupled labels)
+            if self._is_coupled(n, l, j, m_j, m_i):
+                # (F, mF) low-field coupled labels
                 return [self._tracked_index_F_mF(n, l, j, F=m_j, mF=m_i, step=step)]
             return [self._tracked_index(n, l, j, m_j, m_i, step)]
         out = []
@@ -707,8 +720,8 @@ class SweepResult(StateLabelMixin):
         -------
         ndarray or float
         """
-        if isinstance(m_j, int) and isinstance(m_i, int):
-            # integer args -> coupled-basis (F, mF) labels (low field)
+        if self._is_coupled(n, l, j, m_j, m_i):
+            # coupled-basis (F, mF) labels (low field)
             i = self._tracked_index_F_mF(n, l, j, m_j, m_i, identify_at_step)
         else:
             i = self._tracked_index(n, l, j, m_j, m_i, identify_at_step)

@@ -4,7 +4,6 @@ import numpy as np
 import arc
 
 from kamo import constants as c
-from kamo import Potassium39
 
 import time
 
@@ -14,18 +13,32 @@ class PortalDataParser():
                 atom=None,
                 portal_data:pd.DataFrame = None,
                 force_arc=False,
-                n_max=16,
-                n_min=3,
-                portal_species="K1",
+                n_max=None,
+                n_min=None,
+                portal_species=None,
                 portal_data_path=None):
-        self.N_MAX = n_max
-        self.N_MIN = n_min
-
+        """
+        Args:
+            atom: a kamo atom (default kamo's default atom, 39K).
+            n_min, n_max: the window of principal quantum numbers summed over.
+                Defaults: the lowest valence n of the atom (K: 3, for 3d) and
+                that plus 13 (K: 16).
+            portal_species: UDel portal species; default ``atom.portal_species``.
+        """
         self.arc = force_arc
 
         if atom is None:
-            atom = Potassium39()
+            from kamo.atom_properties.alkali import default_atom
+            atom = default_atom()
         self.atom = atom
+        if n_min is None:
+            from kamo.atom_properties.alkali import lowest_valence_n
+            n_min = min(lowest_valence_n(atom, l) for l in range(3))
+        self.N_MIN = n_min
+        self.N_MAX = (n_min + 13) if n_max is None else n_max
+        if portal_species is None:
+            portal_species = getattr(atom, "portal_species", "K1")
+        self.portal_species = portal_species
         self.state_energy_list = self._get_state_energy_list()
 
         if self.arc:

@@ -41,9 +41,12 @@ convert_joules_per_electronvolt = e
 #bohr magneton in J / T
 mu_b = e * hbar / (2 * m_e)
 
-# Lazy singleton for the ARC atom object.  Accessing `atom_K39` or `m_K`
-# triggers the first (and only) instantiation; subsequent accesses use the
-# cached value stored back into the module namespace.
+# The 39K atomic facts (nuclear g-factor, g_J, hyperfine constants, ...)
+# live on kamo.Potassium39 since 2026-09 (kamo.atom_properties.alkali); the
+# module-level names below are kept as deprecated aliases. `m_K` stays a
+# silent alias: it is read at import time by other packages, in worker
+# processes, so it must not warn and must not touch ARC's database (it reads
+# the class attribute).
 _arc_atom_K39 = None
 
 def _atom_K39():
@@ -59,24 +62,44 @@ def _atom_K39():
         _arc_atom_K39 = arc.Potassium39()
     return _arc_atom_K39
 
-def __getattr__(name):
-    if name in ('atom_K39', 'm_K'):
-        atom = _atom_K39()
-        val = atom if name == 'atom_K39' else atom.mass
-        # Cache in module namespace so __getattr__ is not called again
-        globals()[name] = val
-        return val
-    raise AttributeError(f"module 'kamo.constants' has no attribute {name!r}")
+_DEPRECATED_K39 = {
+    # name: (attribute of kamo.Potassium39 (class-level), description)
+    'g_I': ('gI', "the 39K nuclear g-factor"),
+    'g_L': ('gL', "the 39K orbital g-factor 1 - m_e/M"),
+    'g_J_4S': ('g_J_ground', "the measured 39K 4S_1/2 g_J"),
+}
 
-#K39 total nuclear g-factor (atomic value, diamagnetic shielding included;
-# Arimondo 1977).  Deriving it from the bare nuclear moment instead
-# (-mu/I * m_e/m_p) comes out 0.14% larger in magnitude.
-g_I = -0.00014193489
+
+def __getattr__(name):
+    if name == 'm_K':
+        val = arc.Potassium39.mass          # class attribute: no database
+    elif name == 'atom_K39':
+        val = _atom_K39()
+    elif name in _DEPRECATED_K39:
+        attr, what = _DEPRECATED_K39[name]
+        import warnings
+        warnings.warn(
+            f"kamo.constants.{name} ({what}) is deprecated; use "
+            f"kamo.Potassium39.{attr} (or the same attribute of any kamo atom).",
+            DeprecationWarning, stacklevel=2)
+        from kamo.atom_properties.k39 import Potassium39
+        return getattr(Potassium39, attr)
+    else:
+        raise AttributeError(f"module 'kamo.constants' has no attribute {name!r}")
+    globals()[name] = val    # cache so __getattr__ is not called again
+    return val
+
+
+def _warn_deprecated(func, replacement):
+    import warnings
+    warnings.warn(f"kamo.constants.{func} is deprecated; use {replacement}.",
+                  DeprecationWarning, stacklevel=3)
 
 #hyperfine constants
 def get_hyperfine_constant(l, j, iso=39, n=None):
     """Return the magnetic-dipole hyperfine A constant in Joules (A * h).
 
+    Deprecated: use ``atom.hyperfine_constants(n, l, j)`` on a kamo atom.
     Thin wrapper over :func:`kamo.atom_properties.hyperfine.hyperfine_constants`,
     which also gives B, uncertainties and the source of each number. ARC's
     hyperfine table (Arimondo 1977) is not used.
@@ -92,23 +115,20 @@ def get_hyperfine_constant(l, j, iso=39, n=None):
         float | None: A constant in Joules, or None if there is no value
         (l >= 3, or a core orbital such as 3s).
     """
+    _warn_deprecated("get_hyperfine_constant", "atom.hyperfine_constants(n, l, j)")
     from kamo.atom_properties.hyperfine import hyperfine_constants, lowest_valence_n
     hc = hyperfine_constants(lowest_valence_n(l) if n is None else n, l, j, iso=iso)
     return h * hc.A_Hz if hc.has_A else None
 
-# electron spin g-factor (CODATA; magnitude) and the K39 orbital g-factor
-# g_L = 1 - m_e/M (reduced-mass correction).
+# electron spin g-factor (CODATA; magnitude)
 g_S = abs(scon.physical_constants['electron g factor'][0])
-_M_K39 = 38.9637064864 * scon.atomic_mass    # AME2020
-g_L = 1.0 - m_e / _M_K39
 
-# measured 4S_1/2 g_J (Arimondo et al., RMP 49, 31 (1977)); smaller than g_S
-# by the relativistic and diamagnetic corrections.
-g_J_4S = 2.00229421
 
 #total electronic g-factors
 def get_total_electronic_g_factor(l, j, s=0.5, n=None):
-    """Electronic g-factor g_J (positive; H_Z = mu_B B (g_J m_j + g_I m_i)).
+    """Electronic g-factor g_J of 39K (positive; H_Z = mu_B B (g_J m_j + g_I m_i)).
+
+    Deprecated: use ``atom.g_J(l, j, n=n)`` on a kamo atom.
 
     4S_1/2 (``l = 0`` with ``n`` 4 or None) returns the measured value. Every
     other state uses the Landé formula with g_S = 2.00231930 and g_L = 1 - m_e/M:
@@ -121,7 +141,6 @@ def get_total_electronic_g_factor(l, j, s=0.5, n=None):
     0.84 MHz off at 520 G. Relativistic and QED corrections for the excited
     states are of order 1e-5 to 1e-4 and are left out.
     """
-    if l == 0 and n in (None, 4):
-        return g_J_4S
-    jj, ss, ll = j * (j + 1), s * (s + 1), l * (l + 1)
-    return (g_L * (jj - ss + ll) + g_S * (jj + ss - ll)) / (2 * jj)
+    _warn_deprecated("get_total_electronic_g_factor", "atom.g_J(l, j, n=n)")
+    from kamo.atom_properties.k39 import Potassium39
+    return Potassium39.g_J(Potassium39, l, j, n=n, s=s)

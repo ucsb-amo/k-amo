@@ -301,9 +301,14 @@ def test_builder_uses_A_and_B():
     from kamo.hamiltonian import Basis
     from kamo.hamiltonian.builder import HamiltonianBuilder
 
-    class _Atom:                    # h0 needs only the fine-structure energy
+    class _Atom:                    # h0 needs the energy, I and the hyperfine constants
+        I = 1.5
+
         def getEnergy(self, n, l, j):
             return 0.0
+
+        def hyperfine_constants(self, n, l, j):
+            return H(n, l, j)
 
     man = (4, 1, 1.5)
     E = np.linalg.eigvalsh(HamiltonianBuilder(Basis([man]), atom=_Atom()).h0())
@@ -332,7 +337,8 @@ def test_potassium39_breitRabi_has_the_full_quadrupole_term():
     assert E.shape == (2, 16) and sorted(set(F)) == [0, 1, 2, 3]
     expected = sorted(levels[f] for f in range(4) for _ in range(2 * f + 1))
     np.testing.assert_allclose(E[0], expected, atol=1.0)
-    E_arc = Potassium39.__mro__[1].breitRabi(k, 4, 1, 1.5, np.array([0.0]))[0][0]
+    import arc
+    E_arc = arc.Potassium39.breitRabi(k, 4, 1, 1.5, np.array([0.0]))[0][0]
     assert abs(E_arc.min() - levels[0]) > 1e6               # ARC: 1.8 MHz off at F'=0
     # at 500 G the m_J = +3/2 levels use the Landé g_J with g_S
     top = E[1].max()

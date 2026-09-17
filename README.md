@@ -1,0 +1,75 @@
+# kamo
+
+K team AMO functions, modeling, and simulations: atomic structure (Zeeman,
+hyperfine, Breit-Rabi), light shifts and polarizabilities, optical dipole traps
+and the clouds they hold, imaging forward models, resonant dipole-dipole physics
+and 39K scattering lengths.
+
+```python
+from kamo import Potassium39
+from kamo.hamiltonian import AtomicStructure
+
+atom = Potassium39()                                   # the default atom
+model = AtomicStructure([(4, 0, 0.5), (4, 1, 1.5)])    # 4S1/2 + 4P3/2
+res = model.magnetic_sweep(B_max=600.0)
+```
+
+## Demo notebooks
+
+- `kamo/hamiltonian/examples/structure_demo.ipynb` — manifolds, magnetic and laser sweeps, the `plot`
+  arguments (`states`, `xlim`, `plot_differential`, `coupled_labels`), state labels and the adiabatic
+  connection, reading numbers out, and using an atom other than 39K.
+- `kamo/trap/examples/trap_demo.ipynb` — beams to trap potential to condensate density.
+- `kamo/imaging/examples/pci_and_spin_readout.ipynb` — imaging response and spin readout.
+- `kamo/scattering/examples/scattering_demo.ipynb` — 39K scattering lengths and Feshbach resonances.
+
+## Other alkalis
+
+kamo is not potassium-only. `kamo.atom_properties.alkali` defines one class per
+alkali isotope on top of ARC (`Lithium6`, `Lithium7`, `Sodium`, `Potassium39`,
+`Potassium40`, `Potassium41`, `Rubidium85`, `Rubidium87`, `Caesium`), and every
+kamo entry point that needs atomic data takes `atom=`:
+
+```python
+from kamo import atom, Rubidium87
+from kamo.hamiltonian import AtomicStructure
+
+rb = atom("Rb87")                 # "87Rb", "Rb-87", "rb87" all work
+rb = Rubidium87()                 # the class directly, same thing
+
+model = AtomicStructure([(5, 0, 0.5), (5, 1, 0.5), (5, 1, 1.5)], atom=rb)
+res = model.magnetic_sweep(B_max=600.0)
+```
+
+`Potassium39` stays the default atom everywhere: omit `atom=` and you get 39K,
+so existing K code is unchanged.
+
+**What each species gets.** The `PortalAlkali` mixin supplies, per species, the
+UDel atomic-physics-portal E1 data (matrix elements, Einstein A's, lifetimes;
+`use_portal=False` falls back to ARC's own), the nuclear spin `I` and the
+shielded nuclear g-factor `gI`, the measured ground-state `g_J` (Landé for every
+other state), the ground state and lowest valence `n` of each `l`, the cycling
+transition, the mass, and with them every kamo structure method (Zeeman shifts,
+Breit-Rabi, transition frequencies, light shifts, cross sections, ...).
+
+**Hyperfine ladder.** `A` is the portal's value for the isotope where the portal
+has the state (measured where one exists, else theory), otherwise ARC's table;
+`B` always comes from ARC, since the portal has no quadrupole constants (and is
+exactly zero for J = 1/2). A state neither source knows reports `has_A = False`.
+
+**Integer nuclear spin (Li6, K40).** `I` is an integer for 6Li (I = 1) and 40K
+(I = 4), so `F` and `m_F` are *half-integers* there while `m_I` is an integer --
+the reverse of the familiar 39K/87Rb rule. kamo tells the two labelings apart by
+their values, so pass the right type: use `atom.ground_qn(F, mF)` (or
+`atom.coupled_qn`) to build state tuples rather than writing them by hand.
+
+**ARC level tables are per element, not per isotope**, so isotope shifts are
+absent: 6Li D lines come out about 10.8 GHz off, 40K and 41K about 0.1-0.2 GHz.
+Hyperfine splittings and Zeeman structure are isotope-correct; only the absolute
+fine-structure line positions of those three carry the shift.
+
+**`kamo.scattering` is 39K only.** Its potentials, measured Feshbach resonances
+and calibrated coupled-channels tables are all 39K data. `ScatteringModel`,
+`K39Thresholds`, `CoupledChannels` and `scattering_length` accept `atom=` only to
+check it, and raise `NotImplementedError` for any other species; likewise
+`get_scattering_length` exists on every alkali but raises off 39K.

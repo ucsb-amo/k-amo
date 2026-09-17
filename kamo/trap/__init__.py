@@ -11,6 +11,10 @@ Quick start
 >>> # a 3 um, 1064 nm tweezer along x; polarization and B set the light shift
 >>> tw = Tweezer(waist=3e-6, wavelength_m=1064e-9, polarization=(0, 1, 1j))
 >>> trap = Trap(tw, state=(4, 0, 0.5, 1, -1), B_gauss=520.6, B_direction=(0, 0, 1))
+>>>
+>>> # any kamo atom works -- pass atom= and that atom's own state tuple
+>>> from kamo import atom
+>>> rb_trap = Trap(tw, atom=atom("Rb87"), state=(5, 0, 0.5, 2, -2), B_gauss=520.6)
 >>> trap = trap.rescaled_to_frequency(1.0e3)     # the measured 1 kHz radial frequency
 >>> trap.frequencies_Hz, trap.sag_along_gravity, trap.depth_uK
 >>> print(trap.summary())
@@ -45,6 +49,10 @@ Modules
 
 Geometry convention: lab ``(x, y, z)`` as in :mod:`kamo.imaging` -- x the default
 propagation axis, z the default quantization axis and the vertical.
+
+Species: ``Trap(..., atom=...)`` takes any :mod:`kamo.atom_properties.alkali`
+atom (polarizabilities, mass and light shifts all come from it); the default is
+kamo's default atom, 39K, which is what the examples above use.
 """
 
 from typing import TYPE_CHECKING

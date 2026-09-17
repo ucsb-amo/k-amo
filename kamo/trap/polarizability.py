@@ -24,11 +24,14 @@ What this module adds
   and silently mix portal and ARC data.  Here ``source="portal"`` or ``"arc"``
   sets both, as :mod:`kamo.hamiltonian.builder` already does.
 * **A module-wide cache.**  The components depend only on
-  ``(n, l, j, F, lambda, source)``; changing mF, the field direction or the
-  polarization costs nothing after the first call.
-* **Lazy construction.**  Building a ``Potassium39`` opens ARC's database and,
-  on the portal path, fetches UDel-portal data over the network.  Nothing here
-  does so until a polarizability is actually requested.
+  ``(n, l, j, F, lambda, source, species)``; changing mF, the field direction
+  or the polarization costs nothing after the first call.
+* **Lazy construction.**  Building an atom opens ARC's database and, on the
+  portal path, fetches UDel-portal data over the network.  Nothing here does
+  so until a polarizability is actually requested.
+* **One calculator per species.**  ``species`` is a kamo species string
+  (``"K39"``, ``"Rb87"``, ...; see :mod:`kamo.atom_properties.alkali`); the
+  default is kamo's default atom, 39K.
 * **Provenance** (:func:`provenance`, :class:`ScalarBreakdown`): which copy of
   the portal data was read (local cache or the snapshot bundled with kamo),
   when it was fetched, and how much of ``alpha_s`` came from ARC fill-in.
@@ -56,7 +59,8 @@ from . import frames as fr
 
 SOURCES = ("portal", "arc")
 NEAR_RESONANCE = 1e-3          #: relative detuning below which the sum is not trusted
-_CP: dict = {}                 #: {source: ComputePolarizabilities}, built on first use
+_CP: dict = {}                 #: {(source, species): ComputePolarizabilities}, built on first use
+DEFAULT_SPECIES = "K39"
 
 
 def _check_source(source: str) -> str:
@@ -65,15 +69,25 @@ def _check_source(source: str) -> str:
     return source
 
 
-def compute_polarizabilities(source: str = "portal"):
-    """The shared :class:`ComputePolarizabilities` for ``source``, built on first use."""
+def _species(species) -> str:
+    """Normalized species string; ``None`` means the default (39K)."""
+    if species is None:
+        return DEFAULT_SPECIES
+    from kamo.atom_properties.alkali import normalize_species
+    return normalize_species(species)
+
+
+def compute_polarizabilities(source: str = "portal", species: str = None):
+    """The shared :class:`ComputePolarizabilities` for ``(source, species)``,
+    built on first use."""
     _check_source(source)
-    if source not in _CP:
-        from kamo.atom_properties.k39 import Potassium39
+    key = (source, _species(species))
+    if key not in _CP:
+        from kamo.atom_properties.alkali import atom as make_atom
         from kamo.light_shift.compute_polarizabilities import ComputePolarizabilities
-        atom = Potassium39(use_portal=(source == "portal"))
-        _CP[source] = ComputePolarizabilities(atom=atom, force_arc=(source == "arc"))
-    return _CP[source]
+        atom = make_atom(key[1], use_portal=(source == "portal"))
+        _CP[key] = ComputePolarizabilities(atom=atom, force_arc=(source == "arc"))
+    return _CP[key]
 
 
 def clear_caches():
@@ -87,13 +101,14 @@ def clear_caches():
 
 @lru_cache(maxsize=None)
 def hyperfine_components_au(n: int, l: int, j: float, F: float, wavelength_m: float,
-                            source: str = "portal", I: float = 1.5):
+                            source: str = "portal", I: float = 1.5, species: str = None):
     """``(alpha_s, alpha_v, alpha_t)`` in atomic units for ``|n l j F>``.
 
     Independent of mF, the field direction and the polarization -- which is why
-    it is cached here and the geometry is applied afterwards.
+    it is cached here and the geometry is applied afterwards. ``I`` must be
+    the nuclear spin of ``species`` (default 3/2, 39K).
     """
-    cp = compute_polarizabilities(source)
+    cp = compute_polarizabilities(source, species)
     a_s, a_v, a_t = cp.compute_polarizability(n, l, j, F, float(wavelength_m), I)
     return tuple(float(np.atleast_1d(x)[0]) for x in (a_s, a_v, a_t))
 
@@ -175,13 +190,13 @@ def _portal_uncertainties(species: str, initial: str) -> dict:
 
 @lru_cache(maxsize=None)
 def scalar_breakdown(n: int, l: int, j: float, wavelength_m: float,
-                     source: str = "portal") -> ScalarBreakdown:
+                     source: str = "portal", species: str = None) -> ScalarBreakdown:
     """The scalar sum of ``compute_fine_structure_polarizability``, term by term.
 
     Uses the same parser calls in the same order, so :attr:`ScalarBreakdown.total_au`
     reproduces the calculator's ``alpha_s`` (a test pins it to 1e-12).
     """
-    cp = compute_polarizabilities(source)
+    cp = compute_polarizabilities(source, species)
     pdp = cp.pdp
     E_L = kc.h * kc.c / float(wavelength_m)
     initial = pdp.quantum_numbers_to_state_label(n, l, j)
@@ -247,10 +262,27 @@ class StatePolarizability:
     source : {"portal", "arc"}
         UDel-portal matrix elements with ARC fill-in (default), or ARC only.
     nuclear_spin : float
-        I = 3/2 for K-39.
+        I of the atom; default the atom's (3/2 for the default 39K).
+    species : str, optional
+        kamo species string (``"Rb87"``); default from ``atom``, else 39K.
+    atom : optional
+        A kamo atom; supplies ``species`` and ``nuclear_spin`` when those are
+        not given. Only its species and nuclear spin are used: the
+        polarizability calculator is the shared one for that species.
     """
 
-    def __init__(self, state, source: str = "portal", nuclear_spin: float = 1.5):
+    def __init__(self, state, source: str = "portal", nuclear_spin: float = None,
+                 species: str = None, atom=None):
+        if species is None and atom is not None:
+            from kamo.atom_properties.alkali import species_of
+            species = species_of(atom)
+        self.species = _species(species)
+        if nuclear_spin is None:
+            if atom is not None:
+                nuclear_spin = float(atom.I)
+            else:
+                from kamo.atom_properties.alkali import atom_class
+                nuclear_spin = float(atom_class(self.species).I)
         try:
             n, l, j, F, mF = state
         except (TypeError, ValueError):
@@ -270,11 +302,11 @@ class StatePolarizability:
     def components_au(self, wavelength_m: float):
         n, l, j, F, _ = self.state
         return hyperfine_components_au(n, l, j, F, float(wavelength_m), self.source,
-                                       self.nuclear_spin)
+                                       self.nuclear_spin, self.species)
 
     def breakdown(self, wavelength_m: float) -> ScalarBreakdown:
         n, l, j, _, _ = self.state
-        return scalar_breakdown(n, l, j, float(wavelength_m), self.source)
+        return scalar_breakdown(n, l, j, float(wavelength_m), self.source, self.species)
 
     def alpha_au(self, wavelength_m: float, polarization, quantization_axis) -> float:
         """Total polarizability (a.u.) of this state in a beam of this
@@ -296,10 +328,13 @@ class StatePolarizability:
         return self.breakdown(wavelength_m).uncertainty_au
 
     def provenance(self) -> dict:
-        species = "K1"
-        if self.source in _CP:
-            species = getattr(_CP[self.source].atom, "portal_species", "K1")
-        return provenance(self.source, species)
+        key = (self.source, self.species)
+        if key in _CP:
+            portal_species = getattr(_CP[key].atom, "portal_species", "K1")
+        else:
+            from kamo.atom_properties.alkali import atom_class
+            portal_species = atom_class(self.species).portal_species
+        return provenance(self.source, portal_species)
 
     def describe(self, wavelength_m: float) -> str:
         """One line for a summary: the data source and its share of alpha_s."""
@@ -313,7 +348,7 @@ class StatePolarizability:
 
     def for_state(self, state) -> "StatePolarizability":
         """Another state, sharing every cache."""
-        return StatePolarizability(state, self.source, self.nuclear_spin)
+        return StatePolarizability(state, self.source, self.nuclear_spin, self.species)
 
     def _resonance_guard(self, wavelength_m: float):
         if wavelength_m in self._warned:
@@ -328,4 +363,5 @@ class StatePolarizability:
                 "kamo.imaging.response instead.", UserWarning, stacklevel=3)
 
     def __repr__(self) -> str:
-        return f"StatePolarizability({self.state}, source={self.source!r})"
+        return (f"StatePolarizability({self.state}, source={self.source!r}, "
+                f"species={self.species!r})")

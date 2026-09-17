@@ -1,5 +1,4 @@
 import numpy as np
-from kamo import Potassium39
 from kamo.light_shift.compute_polarizabilities import ComputePolarizabilities
 from kamo.light_shift.parse_portal_data import PortalDataParser
 from kamo import constants as c
@@ -10,8 +9,15 @@ class ComputeLightShift():
                 atom=None,
                 force_arc=False,
                 portal_data_parser:PortalDataParser = None):
+        """
+        Args:
+            atom: a kamo atom (default kamo's default atom, 39K).
+        """
         if atom is None:
-            atom = Potassium39(use_portal=not force_arc)
+            from kamo.atom_properties.alkali import default_atom
+            from kamo.atom_properties.k39 import Potassium39
+            atom = default_atom() if not force_arc else Potassium39(use_portal=False)
+        self.atom = atom
         if portal_data_parser == None:
             self.pdp = PortalDataParser(atom=atom,force_arc=force_arc)
         else:
@@ -29,7 +35,7 @@ class ComputeLightShift():
                             wavelength_m,
                             intensity,
                             polarization=[1,0],
-                            I=3/2):
+                            I=None):
         """
         Computes the energy shift in Hz of a given state in a beam of the given
         wavelength, intensity, and polarization.
@@ -44,7 +50,7 @@ class ComputeLightShift():
             intensity (float): The light field intensity at the position of the atom.
             polarization (list, optional): The polarization of the light relative t
             the quantization axis (+x). Defaults to [1,0].
-            I (float, optional): The nuclear spin. Defaults to 3/2.
+            I (float, optional): The nuclear spin. Defaults to the atom's.
 
         Returns:
             float: the energy shift in Hz of the state due to the incident light field. 
@@ -58,7 +64,7 @@ class ComputeLightShift():
     def compute_transition_shift(self,ni,li,ji,Fi,mFi,
                                 nf,lf,jf,Ff,mFf,
                                 wavelength_m,intensity,
-                                polarization=[1,0],I=3/2):
+                                polarization=[1,0],I=None):
         """_summary_
 
         Args:
@@ -76,7 +82,7 @@ class ComputeLightShift():
             intensity (float): The light field intensity at the position of the atom.
             polarization (list, optional): The polarization of the light relative t
             the quantization axis (+x). Defaults to [1,0].
-            I (float, optional): The nuclear spin. Defaults to 3/2.
+            I (float, optional): The nuclear spin. Defaults to the atom's.
 
         Returns:
             float: the energy shift in Hz of the transition (defined as shift_f -

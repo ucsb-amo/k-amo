@@ -6,6 +6,9 @@
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .atom_properties.k39 import Potassium39
+    from .atom_properties.alkali import (PortalAlkali, atom, Lithium6, Lithium7, Sodium,
+                                         Potassium40, Potassium41, Rubidium85,
+                                         Rubidium87, Caesium, Cesium)
     from .trap.gaussian import GaussianBeam
     from .trap import Crossed, LightSheet, Trap, TrapCloud, Tweezer, solve
     from .light_shift import ComputeLightShift, ComputePolarizabilities
@@ -19,6 +22,17 @@ if TYPE_CHECKING:
 
 _lazy = {
     'Potassium39':             '.atom_properties.k39',
+    'PortalAlkali':             '.atom_properties.alkali',
+    'atom':                     '.atom_properties.alkali',
+    'Lithium6':                 '.atom_properties.alkali',
+    'Lithium7':                 '.atom_properties.alkali',
+    'Sodium':                   '.atom_properties.alkali',
+    'Potassium40':              '.atom_properties.alkali',
+    'Potassium41':              '.atom_properties.alkali',
+    'Rubidium85':               '.atom_properties.alkali',
+    'Rubidium87':               '.atom_properties.alkali',
+    'Caesium':                  '.atom_properties.alkali',
+    'Cesium':                   '.atom_properties.alkali',
     'GaussianBeam':            '.trap.gaussian',
     'Tweezer':                 '.trap',
     'LightSheet':              '.trap',

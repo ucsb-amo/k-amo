@@ -191,7 +191,7 @@ class Trap:
 
     def __init__(self, beams, *, atom=None, state=(4, 0, 0.5, 1, -1), B_gauss=0.0,
                  B_direction=None, source: Optional[str] = None,
-                 mass: Optional[float] = None, nuclear_spin: float = 1.5,
+                 mass: Optional[float] = None, nuclear_spin: Optional[float] = None,
                  gravity: bool = True, gravity_direction=(0.0, 0.0, -1.0),
                  g: float = G_EARTH, polarizability_SI=None,
                  label: Optional[str] = None):
@@ -210,7 +210,7 @@ class Trap:
                              f"{use_portal}; give one or the other.")
         self.atom = atom
         self.source = source
-        self._sp = StatePolarizability(state, source, nuclear_spin)
+        self._sp = StatePolarizability(state, source, nuclear_spin, atom=atom)
         self.state = self._sp.state
         if mass is not None and not (np.isfinite(float(mass)) and float(mass) > 0):
             raise ValueError(f"mass must be positive; got {mass}")
