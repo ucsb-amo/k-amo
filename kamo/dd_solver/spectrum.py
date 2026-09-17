@@ -162,33 +162,66 @@ def collective_modes(config: Configuration, op: OperatingPoint, variant: str = "
 
 @dataclass
 class DetuningScan:
-    """Line shape of one configuration against the laser detuning."""
+    """Line shape against the laser detuning, over one or more configurations.
+
+    Every array is ``(n_config, n_delta)``.  The scan is averaged over
+    configurations because the near-field part of it is heavy-tailed: over eight
+    configurations at the operating detuning the near field's effect on the
+    extinction is ``1.000 +- 0.040`` while single shots range from 0.90 to 1.26,
+    so one configuration says nothing.
+    """
 
     deltas: np.ndarray
-    extinction: dict            #: variant -> (n_delta,) extinction
-    excitation: dict            #: variant -> (n_delta,) sum |beta|^2
-    radiated: dict              #: variant -> (n_delta,) beta^dag Gamma beta
+    extinction: dict            #: variant -> (n_config, n_delta)
+    excitation: dict            #: variant -> (n_config, n_delta)
+    radiated: dict              #: variant -> (n_config, n_delta)
     N: int
+    seeds: np.ndarray
+
+    @property
+    def n_config(self) -> int:
+        return int(self.seeds.size)
+
+    def mean(self, what: str, variant: str) -> np.ndarray:
+        """Configuration mean of ``'extinction'`` / ``'excitation'`` / ``'radiated'``."""
+        return getattr(self, what)[variant].mean(axis=0)
+
+    def sem(self, what: str, variant: str) -> np.ndarray:
+        a = getattr(self, what)[variant]
+        if a.shape[0] < 2:
+            return np.zeros(a.shape[1])
+        return a.std(axis=0, ddof=1) / np.sqrt(a.shape[0])
+
+    def ratio_at(self, what: str, num: str, den: str, delta: float):
+        """``(mean, sem, median)`` of the per-configuration ratio at one detuning.
+
+        The ratio is formed PER CONFIGURATION and then averaged, which is the
+        paired statistic: the configuration-to-configuration scatter cancels.
+        """
+        i = int(np.argmin(np.abs(self.deltas - delta)))
+        a = getattr(self, what)
+        r = a[num][:, i] / a[den][:, i]
+        sem = float(r.std(ddof=1) / np.sqrt(r.size)) if r.size > 1 else 0.0
+        return float(r.mean()), sem, float(np.median(r))
 
     def peak(self, variant: str) -> tuple:
-        """``(delta_peak, height)`` of the extinction."""
-        e = self.extinction[variant]
+        """``(delta_peak, height)`` of the configuration-mean extinction."""
+        e = self.mean("extinction", variant)
         i = int(np.argmax(e))
         return float(self.deltas[i]), float(e[i])
 
     def integral(self, variant: str) -> float:
-        """``Int d(delta) extinction`` over the scanned window.
+        """``Int d(delta) <extinction>`` over the scanned window.
 
-        The independent-atom value is ``pi N / 2 * |Omega|^2 / |E0|^2`` for a
-        window wide enough to contain the line.  Interactions conserve this
-        (the sum rule) but push strength into far tails, so a FINITE window sees
-        the interacting medium lose a few per cent -- which is itself the
-        measurement of how far the near field throws the strength.
+        Independent atoms give ``pi N |Omega|^2 / 2`` for a window wide enough to
+        hold the line.  Interactions conserve the total (the sum rule) but push
+        strength into far tails, so a FINITE window sees the interacting medium
+        lose a few per cent -- itself a measurement of how far the strength went.
         """
-        return float(np.trapezoid(self.extinction[variant], self.deltas))
+        return float(np.trapezoid(self.mean("extinction", variant), self.deltas))
 
     def summary(self) -> str:
-        lines = [f"DetuningScan  N = {self.N}  "
+        lines = [f"DetuningScan  N = {self.N}  n_config = {self.n_config}  "
                  f"delta in [{self.deltas.min():+.1f}, {self.deltas.max():+.1f}]"]
         for v in self.extinction:
             d, h = self.peak(v)
@@ -197,29 +230,49 @@ class DetuningScan:
         return "\n".join(lines)
 
 
-def detuning_scan(config: Configuration, op: OperatingPoint, deltas,
+def detuning_scan(config, op: OperatingPoint, deltas,
                   variants: Sequence[str] = ("full", "nonear", "independent"),
-                  incident: Optional[IncidentField] = None) -> DetuningScan:
-    """Sweep the laser across the line for a FIXED configuration.
+                  incident: Optional[IncidentField] = None,
+                  profile=None, n_config: int = 1, seed0: int = 0) -> DetuningScan:
+    """Sweep the laser across the line, averaged over configurations.
 
     Every atom is put at the same detuning, so this is a single-species cloud;
     the point is the collective line shape, not the two-species physics.
+
+    Parameters
+    ----------
+    config : Configuration
+        The first configuration, and the source of ``N`` when more are drawn.
+    profile, n_config, seed0
+        With ``n_config > 1`` and a ``profile``, draw that many configurations
+        (seeds ``seed0 ...``) and return all of them.  Use this: the near-field
+        part of the line shape is heavy-tailed and one shot is not a measurement.
     """
     inc = default_incident(op) if incident is None else incident
     deltas = np.asarray(deltas, dtype=float)
-    ext = {v: np.empty(deltas.size) for v in variants}
-    exc = {v: np.empty(deltas.size) for v in variants}
-    rad = {v: np.empty(deltas.size) for v in variants}
-    spins = np.full(config.N, 1, dtype=np.int8)
-    cfg = Configuration(config.positions, spins, config.theta)
-    for i, d in enumerate(deltas):
-        o = OperatingPoint(op.linewidth_Hz, op.wavelength, delta_up=float(d), delta_dn=float(d),
-                           B_gauss=op.B_gauss, q=op.q, strength_up=op.strength_up,
-                           strength_dn=op.strength_dn)
-        for v in variants:
-            r = solve(cfg, o, v, incident=inc, keep_matrices=(v != "independent"),
-                      checks=False, warn=False)
-            ext[v][i] = r.extinction
-            exc[v][i] = r.excitation
-            rad[v][i] = r.radiated_power
-    return DetuningScan(deltas, ext, exc, rad, config.N)
+    if n_config > 1:
+        if profile is None:
+            raise ValueError("n_config > 1 needs a profile to draw the configurations from")
+        from .cloud import sample_configuration
+        cfgs = [sample_configuration(profile, theta=0.0, seed=seed0 + i, N=config.N)
+                for i in range(n_config)]
+        seeds = np.arange(seed0, seed0 + n_config)
+    else:
+        cfgs, seeds = [config], np.array([seed0])
+    shape = (len(cfgs), deltas.size)
+    ext = {v: np.empty(shape) for v in variants}
+    exc = {v: np.empty(shape) for v in variants}
+    rad = {v: np.empty(shape) for v in variants}
+    for c, cfg0 in enumerate(cfgs):
+        cfg = Configuration(cfg0.positions, np.full(cfg0.N, 1, dtype=np.int8), cfg0.theta)
+        for i, d in enumerate(deltas):
+            o = OperatingPoint(op.linewidth_Hz, op.wavelength, delta_up=float(d),
+                               delta_dn=float(d), B_gauss=op.B_gauss, q=op.q,
+                               strength_up=op.strength_up, strength_dn=op.strength_dn)
+            for v in variants:
+                r = solve(cfg, o, v, incident=inc, keep_matrices=(v != "independent"),
+                          checks=False, warn=False)
+                ext[v][c, i] = r.extinction
+                exc[v][c, i] = r.excitation
+                rad[v][c, i] = r.radiated_power
+    return DetuningScan(deltas, ext, exc, rad, cfgs[0].N, seeds)
