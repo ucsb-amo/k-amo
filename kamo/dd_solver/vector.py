@@ -50,6 +50,12 @@ def polarizability_tensors(config: Configuration, op: OperatingPoint,
 
     ``channels='driven'`` keeps only the sigma- line (rank 1, for T8);
     ``'all'`` adds every channel listed on the operating point.
+
+    ``Channel.strength`` is RELATIVE to the driven line, so each channel's
+    absolute strength is ``f_spin * ch.strength`` -- the same ``f`` that scales
+    the driven line itself (2026-09-17).  With kamo's ``f = 0.977`` the pi and
+    sigma+ absolute strengths at the operating point are 0.652 and 0.326, not
+    0.668 and 0.334.
     """
     N = config.N
     alpha = np.zeros((N, 3, 3), dtype=complex)
@@ -60,11 +66,12 @@ def polarizability_tensors(config: Configuration, op: OperatingPoint,
         if not np.any(sel):
             continue
         d0 = op.delta_up if spin > 0 else op.delta_dn
-        a = -0.5 / (d0 + 0.5j) * proj_driven
+        f = op.strength_up if spin > 0 else op.strength_dn
+        a = -0.5 * f / (d0 + 0.5j) * proj_driven
         if channels == "all":
             for ch in op.channels(spin):
                 eq = E_Q[ch.q]
-                a = a + (-0.5 * ch.strength / (ch.detuning + 0.5j)) * np.outer(eq, np.conj(eq))
+                a = a + (-0.5 * f * ch.strength / (ch.detuning + 0.5j)) * np.outer(eq, np.conj(eq))
         alpha[sel] = a
     return alpha
 
@@ -142,8 +149,9 @@ class VectorResult:
     def single_atom_forward_amplitude(self) -> float:
         """``|beta|`` of one independent atom -- the 'atom' unit for forward amplitudes."""
         d = np.where(self.config.spins > 0, self.op.delta_up, self.op.delta_dn)
+        f = self.op.strengths(self.config.spins)
         Om = self.incident.drive(self.config.positions, self.op.e_hat)
-        return float(np.mean(np.abs(-0.5 * Om / (d + 0.5j))))
+        return float(np.mean(np.abs(-0.5 * f * Om / (d + 0.5j))))
 
 
 def solve_vector(config: Configuration, op: OperatingPoint, channels: str = "all",
@@ -195,6 +203,15 @@ def channel_effect(config: Configuration, op: OperatingPoint, incident=None) -> 
         leaves out, and what a susceptibility term would capture.
     ``fraction_off_driven``
         Share of dipole power outside the ``e_hat`` plane.
+
+    .. note::
+       ``sigma_minus_shift_atoms`` also contains the DIRECT drive of any weak
+       extra ``q = -1`` admixture lines the operating point carries (about
+       3.6e-4 of N, 0.18 atoms at N = 500, with ``from_kamo``), which is not
+       feedback.  ``excitation_ratio`` is heavy-tailed and set by one or two
+       close pairs per configuration: over 12 configurations it ranges from 0.18
+       to 1.19 with median 1.003, so quote a median or a trimmed mean, never the
+       plain mean of a handful of shots (2026-09-17).
     """
     va = solve_vector(config, op, "all", incident)
     vd = solve_vector(config, op, "driven", incident)

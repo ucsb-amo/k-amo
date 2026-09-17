@@ -29,12 +29,33 @@ S1  optical theorem, ``beta^dag Gamma beta = -Im(beta^dag Omega)``;
 S2  positivity of ``Gamma`` (optional, O(N^3)); ``sum_mu gamma_mu = N``;
 S4  reciprocity, ``M`` complex symmetric.
 
+.. note::
+   What S1 and S4 can and cannot see (established 2026-09-17).  S1 is the
+   imaginary part of ``beta^dag M beta = -beta^dag Omega / 2``, so ANY real
+   symmetric ``J`` drops out of it: flipping the sign of ``J`` alone leaves
+   S1 = 0 and S4 = 0 while changing ``sum |beta|^2`` by a factor 2.3.  S4 is a
+   symmetry statement about ``M`` and is equally blind to it.  What pins the
+   dispersive convention is the near-field limit (T4), the analytic two-atom
+   solution (T6), and the forward-amplitude form of the optical theorem,
+   ``extinction = (4 pi / k) Im[pol* . (3/2k) F(khat)] / sigma0`` (T22), which
+   ties the 3/2 prefactor, the ``-Omega/2`` right-hand side and the ``+i/2``
+   together.  S3 is an ``N = 1`` solve and therefore involves no Green tensor at
+   all: it checks the unit conventions, not the kernel.
+
 Solvers: dense LU (``scipy.linalg.lu_factor`` with ``overwrite_a``),
-``precision='mixed'`` (factor in complex64, one step of iterative refinement in
-complex128 -- the matrix is strongly diagonally dominant, cond ~ 10^1-10^2, so
-one step recovers 1e-13), Jacobi-preconditioned GMRES, and a torch/CUDA path
+``precision='mixed'`` (factor in complex64, ``refine`` steps of iterative
+refinement in complex128), Jacobi-preconditioned GMRES, and a torch/CUDA path
 (``backend='gpu'``) with the same options.  The CPU LU is the reference; every
 path must pass the same tests.
+
+``M`` is NOT diagonally dominant at the operating density: close pairs give
+``|J_ij|`` far above ``|delta + i/2| = 9.15`` and near-resonant subradiant pair
+modes push the condition number to ~10^3 already at N = 500 (measured 1653 at
+N = 2000).  One refinement step then gives a median relative error of 3e-13 with
+a worst case of 8e-10 over 30 configurations, not the 1e-13 an earlier version
+of this docstring claimed; ``refine=2`` brings every case below 1e-13.  Mixed
+precision is a ~4 % saving on a solve at N = 500 and is worth it only on the GPU
+or at N >~ 2000.
 """
 
 from __future__ import annotations
@@ -49,7 +70,8 @@ import scipy.linalg as sla
 import scipy.sparse.linalg as spla
 
 from .cloud import Configuration
-from .kernel import gamma_matrix, scalar_couplings
+from .kernel import (gamma_matrix, kernel_for_variant, scalar_couplings,
+                     scalar_couplings_multi)
 from .rg import DEFAULT_CUTOFF, RGResult, renormalize_configuration
 from .system import IncidentField, OperatingPoint, default_incident
 
@@ -97,6 +119,9 @@ class SolveResult:
     G: Optional[np.ndarray] = None
     rg: Optional[RGResult] = None
     timings: dict = field(default_factory=dict)
+    #: Diagonal decay rates actually carried by ``M`` (``None`` means all ones).
+    #: Only the brightness-tracked RG puts anything else there.
+    decay_diagonal: Optional[np.ndarray] = None
 
     # ------------------------------------------------------------ scalars
     @property
@@ -105,35 +130,64 @@ class SolveResult:
 
     @property
     def excitation(self) -> float:
-        """``sum_j |beta_j|^2`` -- the total excited-state population (photon
-        scattering events per atom, summed), the per-atom measure the near-field
-        excess law of the build specification refers to.  Independent atoms give
-        ``sum_j |Omega_j/2|^2 / (delta_j^2 + 1/4)``."""
+        """``sum_j |beta_j|^2`` -- the total excited-state POPULATION, in units of
+        ``s0 / 2``; the per-atom measure the near-field excess law refers to.
+        Independent atoms give ``sum_j |Omega_j/2|^2 / (delta_j^2 + 1/4)``.
+
+        This is NOT the photon scattering rate (corrected 2026-09-17).  The rate
+        is :attr:`radiated_power` ``= beta^dag Gamma beta``, and the two differ
+        exactly where the excess lives: a subradiant close pair
+        (``beta_i ~ -beta_j``, ``Gamma_ij ~ 1``) holds large population and
+        radiates almost nothing.  Measured on 30 configurations at the equator,
+        the excitation excess over independent atoms is 1.175 +- 0.141 while the
+        scattered-photon excess is 1.072 +- 0.032; the configuration with
+        excitation excess 5.2 scatters 1.02x the photons.  Quote this quantity
+        for excitation, saturation and light shifts, and
+        :attr:`radiated_power` for scattering, heating and loss rates."""
         return float(np.sum(np.abs(self.beta) ** 2))
 
     @property
     def radiated_power(self) -> float:
-        """``beta^dag Gamma beta`` -- the coherently RADIATED power in units of
-        ``sigma0 I``, interference included.  Equal to the extinction by the
-        optical theorem.  Physical only for the ``'full'`` kernel: the far-field-
-        only ``Gamma`` is not positive semidefinite, so for ``'far'``/``'rg'``
-        this can even be negative."""
+        """``beta^dag Gamma beta`` -- the power radiated by these dipoles into free
+        space, in units of ``sigma0 I``, interference included.  Equal to the
+        extinction by the optical theorem.
+
+        Since 2026-09-17 every kernel variant carries the EXACT radiative
+        ``Gamma`` (the decay matrix has no near-field part -- see
+        :mod:`kamo.dd_solver.kernel`), so this is the physical radiated power for
+        every variant, not only for ``'full'``.  It is positive semidefinite by
+        construction.  The brightness-tracked RG is the one exception: it
+        replaces the diagonal by phenomenological ``gamma_j``, and then this
+        contracts with those rates, which is the identity that solve obeys but
+        not a free-space radiated power."""
         if self.G is None:
             return self.extinction
-        Gb = self.G @ self.beta + self.beta
+        diag = np.ones(self.N) if self.decay_diagonal is None else self.decay_diagonal
+        Gb = self.G @ self.beta + diag * self.beta
         return float(np.real(np.vdot(self.beta, Gb)))
 
     scattered_power = radiated_power
 
     @property
     def extinction(self) -> float:
-        """``-Im(beta^dag Omega)`` -- power removed from the incident beam, same units."""
+        """``-Im(beta^dag Omega)`` -- power removed from the incident beam, same units.
+
+        With an oscillator strength below 1 this EXCEEDS :attr:`radiated_power`,
+        because a fraction ``1 - f`` of the scattering is Raman into a state that
+        is dark to the probe (see :attr:`raman_leak`)."""
         return float(-np.imag(np.vdot(self.beta, self.Omega)))
 
     @property
+    def raman_leak(self) -> float:
+        """``extinction - radiated_power``: power scattered OUT of the two-level
+        line, ``sum_j |beta_j|^2 (1/f_j - 1)``.  Zero for an ideal closed line."""
+        return self.extinction - self.radiated_power
+
+    @property
     def independent_beta(self) -> np.ndarray:
-        """``-(Omega/2) / (delta + i/2)`` with the BARE detunings."""
-        return -0.5 * self.Omega / (self.op.detunings(self.config.spins) + 0.5j)
+        """``-(f Omega/2) / (delta + i/2)`` with the BARE detunings."""
+        return (-0.5 * self.op.strengths(self.config.spins) * self.Omega
+                / (self.op.detunings(self.config.spins) + 0.5j))
 
     @property
     def independent_excitation(self) -> float:
@@ -172,7 +226,7 @@ class SolveResult:
         """Copy without the O(N^2) matrices (for ensembles)."""
         return SolveResult(self.beta, self.config, self.op, self.variant, self.detunings,
                            self.Omega, self.incident, self.checks, self.method, None, None,
-                           self.rg, self.timings)
+                           self.rg, self.timings, self.decay_diagonal)
 
     def __repr__(self):
         return (f"SolveResult(N={self.N}, variant={self.variant!r}, theta={self.config.theta:.2f}, "
@@ -184,13 +238,24 @@ class SolveResult:
 
 
 def build_matrix(positions, detunings, op: OperatingPoint, variant: str = "full",
-                 block: int = 512):
-    """``(M, J, G)`` for the given positions and per-atom detunings."""
-    kern = "far" if variant == "rg" else variant
-    J, G = scalar_couplings(positions, op.k, op.e_hat, kern, block=block)
+                 block: int = 512, strengths=None, shared=None):
+    """``(M, J, G)`` for the given positions and per-atom detunings.
+
+    With an oscillator strength ``f_j < 1`` the diagonal is ``(delta_j + i/2)/f_j``
+    and the off-diagonal kernel is unchanged: ``beta`` already carries the dipole
+    magnitude, so ``f`` enters only through ``alpha_j = -(f_j/2)/(delta_j + i/2)``.
+    """
+    if shared is None:
+        J, G = scalar_couplings(positions, op.k, op.e_hat, kernel_for_variant(variant),
+                                block=block)
+    else:
+        J, G = shared
     M = -(J - 0.5j * G)
     idx = np.arange(len(detunings))
-    M[idx, idx] = np.asarray(detunings, dtype=float) + 0.5j
+    diag = np.asarray(detunings, dtype=float) + 0.5j
+    if strengths is not None:
+        diag = diag / np.asarray(strengths, dtype=float)
+    M[idx, idx] = diag
     return M, J, G
 
 
@@ -276,10 +341,25 @@ def solve_linear(M: np.ndarray, b: np.ndarray, method: str = "lu", precision: st
 
 
 def sanity_checks(M: np.ndarray, G: np.ndarray, beta: np.ndarray, Omega: np.ndarray,
-                  positivity: bool = False, warn: bool = True) -> SanityReport:
-    """S1, S4 and optionally S2 for a solved system."""
+                  positivity: bool = False, warn: bool = True, decay_diagonal=None) -> SanityReport:
+    """S1, S4 and optionally S2 for a solved system.
+
+    S1 contracts ``beta`` with ``diag(decay_diagonal) + G``, where
+    ``decay_diagonal`` is what the PHYSICS says the per-atom extinction rate must
+    be: 1 for an ideal closed line, ``1/f_j`` with an oscillator strength below
+    1, and ``gamma_j/f_j`` for the brightness-tracked RG.  ``None`` means all
+    ones.
+
+    Two things depend on this being the expected value rather than one read back
+    off ``M`` (2026-09-17).  Reading ``2 Im diag(M)`` would make S1 an algebraic
+    identity of the linear system and therefore incapable of failing -- it would
+    no longer catch the double-linewidth bug this check exists for.  Using a
+    hard-wired 1 instead flagged every exact tracked-RG solve as a 29 %
+    "optical theorem violated".
+    """
     rep = SanityReport()
-    Gb = G @ beta + beta
+    diag_decay = 1.0 if decay_diagonal is None else np.asarray(decay_diagonal, dtype=float)
+    Gb = G @ beta + diag_decay * beta
     lhs = float(np.real(np.vdot(beta, Gb)))
     rhs = float(-np.imag(np.vdot(beta, Omega)))
     rep.optical_theorem = abs(lhs - rhs) / max(abs(lhs), 1e-300)
@@ -310,14 +390,18 @@ def solve(config: Configuration, op: OperatingPoint, variant: str = "full",
           incident: Optional[IncidentField] = None, method: str = "lu",
           precision: str = "double", backend: str = "cpu", rg_cutoff: float = DEFAULT_CUTOFF,
           rg_tracked: bool = False, checks: bool = True, positivity: bool = False,
-          keep_matrices: bool = True, warn: bool = True, block: int = 512) -> SolveResult:
+          keep_matrices: bool = True, warn: bool = True, block: int = 512,
+          _shared=None) -> SolveResult:
     """Solve the coupled-dipole system for one configuration.
 
     Parameters
     ----------
     config : Configuration
     op : OperatingPoint
-    variant : {'full', 'far', 'rg', 'independent'}
+    variant : {'full', 'far', 'nonear', 'rg', 'independent'}
+        See :mod:`kamo.dd_solver.kernel`.  ``'nonear'`` is the literature
+        near-field ablation (exact ``Gamma``, static ``1/r^3`` removed);
+        ``'far'`` keeps only the ``1/x`` coherent coupling.
     incident : IncidentField, optional
         Default: unit plane wave along +x polarized along y.
     method, precision, backend
@@ -339,14 +423,23 @@ def solve(config: Configuration, op: OperatingPoint, variant: str = "full",
     if rg is not None and rg.tracked:
         Omega = rg.drive
     t0 = time.perf_counter()
-    M, J, G = build_matrix(config.positions, det, op, variant, block=block)
+    f = op.strengths(config.spins)
+    M, J, G = build_matrix(config.positions, det, op, variant, block=block,
+                           strengths=f, shared=_shared)
+    # Elastic decay diagonal (what the dipoles radiate on the driven line) and
+    # the extinction diagonal (what they remove from the beam, larger by 1/f).
+    decay_diag = None
+    extinction_diag = 1.0 / f
     if rg is not None and rg.tracked:
         idx = np.arange(config.N)
-        M[idx, idx] = det + 0.5j * rg.gamma
+        M[idx, idx] = (det + 0.5j * rg.gamma) / f
+        decay_diag = np.asarray(rg.gamma, dtype=float)
+        extinction_diag = decay_diag / f
     t_build = time.perf_counter() - t0
     beta, info = solve_linear(M, -0.5 * Omega, method, precision, backend)
     if checks:
-        rep = sanity_checks(M, G, beta, Omega, positivity=positivity, warn=warn)
+        rep = sanity_checks(M, G, beta, Omega, positivity=positivity, warn=warn,
+                            decay_diagonal=extinction_diag)
     else:
         rep = SanityReport()
     timings = dict(rg=t_rg, build=t_build, solve=info.get("seconds", float("nan")))
@@ -354,7 +447,28 @@ def solve(config: Configuration, op: OperatingPoint, variant: str = "full",
         timings["iterations"] = info["iterations"]
     return SolveResult(beta, config, op, variant, det, Omega, inc, rep,
                        f"{method}/{precision}/{backend}",
-                       J if keep_matrices else None, G if keep_matrices else None, rg, timings)
+                       J if keep_matrices else None, G if keep_matrices else None, rg, timings,
+                       decay_diag)
+
+
+def solve_variants(config: Configuration, op: OperatingPoint, variants=("full", "far"),
+                   incident: Optional[IncidentField] = None, block: int = 512, **kw):
+    """``{variant: SolveResult}`` for one configuration, sharing the geometry pass.
+
+    Equivalent to calling :func:`solve` once per variant, and about 3x faster at
+    N = 500 because the separations, unit vectors, angular factors and ``Gamma``
+    are built once (see :func:`kamo.dd_solver.kernel.scalar_couplings_multi`).
+    ``'independent'`` is returned from the closed form with no matrix at all.
+    """
+    inc = default_incident(op) if incident is None else incident
+    kernels = [v for v in variants if v != "independent"]
+    shared = (scalar_couplings_multi(config.positions, op.k, op.e_hat, kernels, block=block)
+              if kernels else {})
+    out = {}
+    for v in variants:
+        out[v] = solve(config, op, v, incident=inc, block=block,
+                       _shared=shared.get(v), **kw)
+    return out
 
 
 def independent_solution(config: Configuration, op: OperatingPoint,
@@ -362,7 +476,7 @@ def independent_solution(config: Configuration, op: OperatingPoint,
     """``beta`` for non-interacting atoms (J = 0, Gamma_ij = delta_ij)."""
     inc = default_incident(op) if incident is None else incident
     Omega = inc.drive(config.positions, op.e_hat)
-    return -0.5 * Omega / (op.detunings(config.spins) + 0.5j)
+    return -0.5 * op.strengths(config.spins) * Omega / (op.detunings(config.spins) + 0.5j)
 
 
 def single_atom_cross_section(op: OperatingPoint, delta: float = 0.0,

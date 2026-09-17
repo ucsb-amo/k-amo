@@ -20,7 +20,7 @@ from typing import Dict, List, Optional, Sequence
 import numpy as np
 
 from .cloud import GaussianProfile, like_pair_fraction, sample_configuration
-from .solver import SolveResult, solve
+from .solver import SolveResult, solve, solve_variants
 from .stats import robust_summary
 from .system import IncidentField, OperatingPoint
 
@@ -35,11 +35,9 @@ def excess_law(eta_eff: float, theta, xi: float = XI_CIRC) -> np.ndarray:
 
 def _solve_one(profile, op, theta, seed, variants, incident, solve_kw, N):
     cfg = sample_configuration(profile, theta=theta, seed=seed, N=N)
-    out = {}
-    for v in variants:
-        r = solve(cfg, op, v, incident=incident, keep_matrices=False, warn=False, **solve_kw)
-        out[v] = r
-    return out
+    # one geometry pass for every variant of this configuration (about 3x)
+    return solve_variants(cfg, op, tuple(variants), incident=incident,
+                          keep_matrices=False, warn=False, **solve_kw)
 
 
 @dataclass

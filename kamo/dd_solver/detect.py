@@ -28,14 +28,29 @@ Phase plate: the unscattered probe (``k_perp = 0``) and any scattered mode with
 paraxial polarization mapping (the longitudinal ``E_x`` of the far field is
 dropped), unit magnification.
 
-Atom-equivalent units: the signal divided by the slope per ``S_z`` of the SAME
-signal for independent atoms at the SAME positions,
-``(signal(all up) - signal(all dn)) / N`` -- the only unit in which these
-numbers are interpretable across NA, phase-plate and detuning choices.
+Atom-equivalent units: the signal divided by the LOCAL slope per ``S_z`` of the
+same signal for independent atoms at the same positions and spins,
+``d sig / d S_z`` evaluated at the actual spin composition -- the only unit in
+which these numbers are interpretable across NA, phase-plate and detuning
+choices.  (The module used to describe a global chord
+``(sig(all up) - sig(all dn))/N``; the code has always used the local
+derivative, which is the right thing because the response is strongly
+non-linear.  Docstring corrected 2026-09-17.)
+
+**The unit fails away from balance, and now says so.**  The on-axis
+independent-atom signal of the N = 500 cloud reaches its dark-fringe minimum
+near ``S_z = +225``, so ``d sig/d S_z`` passes through zero and CHANGES SIGN
+before the all-up pole: it falls from ``-1.8e-2`` at ``S_z = -250`` through
+``-8.6e-3`` at balance to ``-2e-4`` at ``S_z = +225`` and ``+7e-4`` at ``+250``,
+a 89x range.  Dividing by it produced finite-looking nonsense (``+346 +- 11``
+atoms at ``theta = 0``).  :class:`DetectionResult` now returns NaN and warns
+when the slope is below a fraction of the balanced-cloud slope or has flipped
+sign; quote raw ``I/I0 - 1`` there instead.
 """
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import Optional
 
@@ -48,6 +63,10 @@ from .cloud import Configuration
 from .fields import far_field_amplitude
 from .solver import SolveResult, independent_solution
 from .system import IncidentField, OperatingPoint, default_incident
+
+
+class DetectionUnitWarning(UserWarning):
+    """The atom-equivalent unit is being read where its denominator is unusable."""
 
 
 @dataclass
@@ -157,15 +176,49 @@ class DetectionResult:
     slope_on_axis: float           #: local d sig / d S_z for independent atoms
     slope_disk: float
     S_z: float
+    slope_balanced_on_axis: float = float("nan")   #: the same slope at S_z = 0
+    slope_balanced_disk: float = float("nan")
+
+    #: A slope below this fraction of the balanced-cloud slope, or of the
+    #: opposite sign, makes the atom-equivalent unit meaningless.
+    SLOPE_FLOOR = 0.3
+
+    def _usable(self, slope: float, balanced: float) -> bool:
+        if not np.isfinite(slope) or slope == 0.0:
+            return False
+        if not np.isfinite(balanced) or balanced == 0.0:
+            return True
+        return (slope / balanced) >= self.SLOPE_FLOOR
+
+    def _convert(self, sig: float, indep: float, slope: float, balanced: float,
+                 what: str) -> float:
+        if not self._usable(slope, balanced):
+            warnings.warn(
+                f"detect: the {what} atom-equivalent unit is not usable here -- the local slope "
+                f"{slope:+.2e} is {slope / balanced:+.2f} of the balanced-cloud slope "
+                f"{balanced:+.2e} (sign flip or near-zero denominator). The phase-contrast "
+                "response saturates away from balance; quote the raw signal instead.",
+                DetectionUnitWarning, stacklevel=3)
+            return float("nan")
+        return (sig - indep) / slope
 
     @property
     def deviation_atoms_on_axis(self) -> float:
-        """``(sig - sig_indep) / slope``: what interactions did, in S_z units."""
-        return (self.on_axis - self.on_axis_indep) / self.slope_on_axis
+        """``(sig - sig_indep) / slope``: what interactions did, in S_z units.
+
+        NaN with a :class:`DetectionUnitWarning` where the slope is unusable."""
+        return self._convert(self.on_axis, self.on_axis_indep, self.slope_on_axis,
+                             self.slope_balanced_on_axis, "on-axis")
 
     @property
     def deviation_atoms_disk(self) -> float:
-        return (self.disk - self.disk_indep) / self.slope_disk
+        return self._convert(self.disk, self.disk_indep, self.slope_disk,
+                             self.slope_balanced_disk, "disk")
+
+    @property
+    def unit_usable_on_axis(self) -> bool:
+        """Whether the on-axis atom-equivalent unit means anything at this ``S_z``."""
+        return self._usable(self.slope_on_axis, self.slope_balanced_on_axis)
 
     @property
     def atoms_on_axis(self) -> float:
@@ -180,12 +233,19 @@ class DetectionResult:
 def independent_reference(config: Configuration, op: OperatingPoint, system: ImagingSystem,
                           incident: Optional[IncidentField] = None,
                           disk_radius: Optional[float] = None):
-    """``(sig_on_axis, sig_disk, slope_on_axis, slope_disk)`` for independent atoms.
+    """``(sig_on_axis, sig_disk, slope_on_axis, slope_disk, slope0_on_axis, slope0_disk)``.
 
     The slopes are the mean change of the signal per atom flipped from dn to up:
     ``2 Re[conj(E_img) . (E_s,up - E_s,dn) / N]`` with ``E_s,up/dn`` the
     independent-atom scattered image fields of an all-up / all-dn cloud at the
     same positions (linear in the dipoles, so this is exact).
+
+    The last two entries are the same slopes evaluated at ``S_z = 0`` (equal
+    numbers of each spin, same positions), the reference against which
+    :class:`DetectionResult` decides whether the atom-equivalent unit is usable.
+
+    The two all-one-spin image fields are computed once and every signal is a
+    linear combination of them, which is what makes the balanced reference free.
     """
     inc = default_incident(op) if incident is None else incident
     r = system_resolution(op, system) if disk_radius is None else disk_radius
@@ -199,14 +259,22 @@ def independent_reference(config: Configuration, op: OperatingPoint, system: Ima
         imp = image_field(c.positions, independent_solution(c, op, inc), op, system, inc)
         Es[spin] = imp.E - imp.probe[None, None, :]
     dE = (Es[1] - Es[-1]) / config.N
-    if system.polarizer is not None:
-        pz = np.asarray(system.polarizer, dtype=complex)[1:]
-        pz = pz / np.linalg.norm(pz)
-        dI = 2 * np.real(np.conj(im.E @ np.conj(pz)) * (dE @ np.conj(pz)))
-    else:
-        dI = 2 * np.real(np.sum(np.conj(im.E) * dE, axis=-1))
-    c = g.center
-    return (im.on_axis(), im.disk_mean(r), float(dI[c, c]), float(np.mean(dI[disk])))
+    probe = im.probe[None, None, :]
+    E_balanced = probe + 0.5 * (Es[1] + Es[-1])
+
+    def slopes(E_ref):
+        if system.polarizer is not None:
+            pz = np.asarray(system.polarizer, dtype=complex)[1:]
+            pz = pz / np.linalg.norm(pz)
+            dI = 2 * np.real(np.conj(E_ref @ np.conj(pz)) * (dE @ np.conj(pz)))
+        else:
+            dI = 2 * np.real(np.sum(np.conj(E_ref) * dE, axis=-1))
+        c = g.center
+        return float(dI[c, c]), float(np.mean(dI[disk]))
+
+    s_axis, s_disk = slopes(im.E)
+    s0_axis, s0_disk = slopes(E_balanced)
+    return (im.on_axis(), im.disk_mean(r), s_axis, s_disk, s0_axis, s0_disk)
 
 
 def system_resolution(op: OperatingPoint, system: ImagingSystem) -> float:
@@ -221,5 +289,8 @@ def detect(result: SolveResult, system: ImagingSystem, disk_radius: Optional[flo
     im = image_field(result.config.positions, result.beta, result.op, system, result.incident)
     if reference is None:
         reference = independent_reference(result.config, result.op, system, result.incident, r)
+    sig_axis, sig_disk, slope_axis, slope_disk, slope0_axis, slope0_disk = reference
     return DetectionResult(im.on_axis(), im.disk_mean(r), im.integrated(),
-                           result.forward_amplitude(), *reference, result.config.S_z)
+                           result.forward_amplitude(), sig_axis, sig_disk,
+                           slope_axis, slope_disk, result.config.S_z,
+                           slope0_axis, slope0_disk)

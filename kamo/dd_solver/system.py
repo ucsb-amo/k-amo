@@ -74,6 +74,24 @@ class OperatingPoint:
     channels_up, channels_dn : tuple of Channel
         Additional transitions from each ground state (pi, sigma+ and the weak
         hyperfine-admixture lines), used only by the vector solver.
+    strength_up, strength_dn : float
+        ABSOLUTE oscillator strength of each driven line,
+        ``f = |d_dressed|^2 / |d_stretched|^2 = Gamma_partial / Gamma``, where
+        ``Gamma = 1/tau`` is the full excited-state decay rate.  1.0 is the ideal
+        closed two-level atom.  At 520.583 G the ground states carry a 2.3-2.5 %
+        ``m_J = +1/2`` admixture, so kamo gives ``f_up = 0.9774`` and
+        ``f_dn = 0.9786``: the polarizability, and hence every absolute
+        amplitude, is 2.3 % smaller than the ideal value (added 2026-09-17).
+        This is larger than the 0.98 % sigma+ background that used to be quoted
+        as the leading correction to a scalar model.
+
+        The line is then not perfectly closed: a fraction ``1 - f`` of the
+        scattering is Raman to a state 1.3-1.5 GHz away that is dark to the
+        probe, so the extinction exceeds the elastic scattering by ``1/f``.  That
+        is why the optical theorem here reads
+        ``beta^dag (diag(1/f) + G) beta = -Im(beta^dag Omega)``.
+        At ``s0 = 0.2-0.3`` and a 5 us pulse this costs 0.07-0.11 % of the atoms,
+        so depumping during the pulse is still negligible.
     """
 
     linewidth_Hz: float
@@ -85,6 +103,8 @@ class OperatingPoint:
     channels_up: Tuple[Channel, ...] = ()
     channels_dn: Tuple[Channel, ...] = ()
     provenance: str = ""
+    strength_up: float = 1.0
+    strength_dn: float = 1.0
 
     # ------------------------------------------------------------ derived
     @property
@@ -114,7 +134,20 @@ class OperatingPoint:
 
     @property
     def condon_radius(self) -> float:
-        """``(3 / 4|delta|)^{1/3} / k`` (m), where the near-field shift equals the detuning."""
+        """``(3 / 4|delta|)^{1/3} / k`` (m): the STATIC near-field Condon radius,
+        maximised over angles (``B = 1``, pair along ``B``), without retardation.
+
+        A scale, not a prediction (clarified 2026-09-17).  With the package's own
+        retarded ``J`` the shell moves: 51.6 nm rather than 53.0 nm for a polar
+        pair, and 44.6 rather than 42.1 nm for an in-plane one.  Which pairs are
+        BRIGHT-resonant also depends on the sign of the detuning, because the
+        symmetric (superradiant) mode is shifted by ``+J``: blue detuning is
+        matched by polar pairs (``B > 0``, up to ``B = 1``) and red detuning by
+        in-plane pairs, where ``|B| <= 1/2``, so the red bright shell is smaller
+        by ``2^{-1/3}`` and encloses 0.6x the volume.  For a retarded,
+        angle- and branch-resolved radius use
+        :class:`kamo.dipole_dipole.PairPotential`.
+        """
         return (0.75 / abs(self.delta_up)) ** (1 / 3) / self.k
 
     def detunings(self, spins) -> np.ndarray:
@@ -122,13 +155,23 @@ class OperatingPoint:
         spins = np.asarray(spins)
         return np.where(spins > 0, self.delta_up, self.delta_dn).astype(float)
 
-    def polarizability_scalar(self, delta):
-        """Dimensionless two-level polarizability ``-(1/2) / (delta + i/2)``."""
-        return -0.5 / (np.asarray(delta, dtype=float) + 0.5j)
+    def strengths(self, spins) -> np.ndarray:
+        """Per-atom oscillator strength ``f_j`` from a spin array (+1 up, -1 dn)."""
+        spins = np.asarray(spins)
+        return np.where(spins > 0, self.strength_up, self.strength_dn).astype(float)
 
-    def polarizability_SI(self, delta):
+    @property
+    def mean_strength(self) -> float:
+        """``(f_up + f_dn)/2`` -- what to scale a single-species scalar model by."""
+        return 0.5 * (self.strength_up + self.strength_dn)
+
+    def polarizability_scalar(self, delta, strength=1.0):
+        """Dimensionless two-level polarizability ``-(f/2) / (delta + i/2)``."""
+        return -0.5 * np.asarray(strength, dtype=float) / (np.asarray(delta, dtype=float) + 0.5j)
+
+    def polarizability_SI(self, delta, strength=1.0):
         """The same in SI (C m^2 / V): ``(6 pi eps0 / k^3) alpha_tilde``."""
-        return 6 * np.pi * kc.epsilon0 / self.k ** 3 * self.polarizability_scalar(delta)
+        return 6 * np.pi * kc.epsilon0 / self.k ** 3 * self.polarizability_scalar(delta, strength)
 
     def channels(self, spin: int) -> Tuple[Channel, ...]:
         return self.channels_up if spin > 0 else self.channels_dn
@@ -140,7 +183,11 @@ class OperatingPoint:
         ``sigma0_scale`` rescales the cross section.  Pass
         ``abs(conj(e_hat) . polarization)**2`` (1/2 for a y-polarized Voigt probe)
         to make the scalar propagation see only the sigma- projection of the
-        incident polarization, which is what the microscopic model does.
+        incident polarization, which is what the microscopic model does, and
+        multiply by :attr:`mean_strength` as well when this operating point
+        carries an oscillator strength below 1, since
+        :class:`~kamo.imaging.response.TwoLevelResponse` is an ideal closed
+        two-level line.  :func:`kamo.dd_solver.compare_bpm.bpm_result` does both.
         """
         from kamo.imaging.response import TwoLevelResponse
         return TwoLevelResponse(self.wavelength, self.linewidth_Hz,
@@ -163,21 +210,29 @@ class OperatingPoint:
         From ``Potassium39`` (portal matrix elements, kamo hyperfine constants)
         at B = 520.583 G on 2026-09-16: Gamma/2pi = 6.0309 MHz, the two sigma-
         lines 110.235 MHz = 18.278 Gamma apart, laser at their midpoint
-        (lambda = 766.7022 nm), excited 4P3/2 m_J branches 160.9 Gamma apart.
+        (lambda = 766.70226 nm), excited 4P3/2 m_J branches 160.9 Gamma apart.
         Channel strengths are the dressed-state ratios from
         :meth:`kamo.dipole_dipole.CyclingTransition.at_field` (0.668 and 0.334
-        rather than the bare 2/3 and 1/3).
+        rather than the bare 2/3 and 1/3), RELATIVE to the driven line, whose own
+        absolute strength is ``strength_up/dn`` (0.977).
+
+        Corrected 2026-09-17: the wavelength used to be 766.70215 nm, which is
+        the ``|dn>`` LINE, not the midpoint laser this docstring describes (the
+        0.108 pm difference is exactly half the line splitting; it moves ``k`` by
+        1.4e-7 and nothing else).  The absolute oscillator strengths are new.
         """
         d = 9.139185702159367
         ch_up = (Channel(0, d - 160.928, 0.6676, "pi (m_J'=-1/2)"),
                  Channel(+1, d - 321.618, 0.3341, "sigma+ (m_J'=+1/2)"))
         ch_dn = (Channel(0, -d - 161.921, 0.6679, "pi (m_J'=-1/2)"),
                  Channel(+1, -d - 323.621, 0.3346, "sigma+ (m_J'=+1/2)"))
-        return cls(linewidth_Hz=6.030880753766402e6, wavelength=766.7021531853018e-9,
+        return cls(linewidth_Hz=6.030880753766402e6, wavelength=766.7022612592e-9,
                    delta_up=+d, delta_dn=-d, B_gauss=B_GAUSS_DEFAULT, q=-1,
                    channels_up=ch_up, channels_dn=ch_dn,
+                   strength_up=0.9774222, strength_dn=0.9786171,
                    provenance="kamo Potassium39 (portal E1, kamo hyperfine, NIST "
-                              "energies) at 520.583 G, hard-coded 2026-09-16")
+                              "energies) at 520.583 G, hard-coded 2026-09-16, "
+                              "strengths and midpoint wavelength 2026-09-17")
 
     @classmethod
     def from_kamo(cls, atom=None, B_gauss: float = B_GAUSS_DEFAULT,
@@ -202,10 +257,18 @@ class OperatingPoint:
         d_up = probe.detuning_up_Hz / lw
         d_dn = probe.detuning_dn_Hz / lw
 
-        model = AtomicStructure([(4, 0, 0.5), (4, 1, 0.5), (4, 1, 1.5)])
-        out = []
+        # Pass the caller's atom through: CyclingTransition.at_field otherwise
+        # falls back to kamo's DEFAULT atom for the channel structure while the
+        # detunings come from `atom`, a silent inconsistency for any other atom
+        # or isotope, and it opens ARC a second time (fixed 2026-09-17).
+        model = AtomicStructure([(4, 0, 0.5), (4, 1, 0.5), (4, 1, 1.5)], atom=atom)
+        out, strengths = [], []
         for g, e, d0 in ((G_UP, E_UP, d_up), (G_DN, E_DN, d_dn)):
             t = CyclingTransition.at_field(B_gauss, ground=g, excited=e, model=model)
+            # Absolute strength of the driven line: |d_dressed|^2 / |d_stretched|^2,
+            # with |d_stretched|^2 = 3 pi eps0 hbar Gamma / k^3 from the lifetime.
+            d2_stretched = 3 * np.pi * kc.epsilon0 * kc.hbar * (2 * np.pi * t.linewidth_Hz) / t.k ** 3
+            strengths.append(float(t.d_Cm ** 2 / d2_stretched))
             chans = []
             for ch in t.channels:
                 if abs(ch.detuning_Hz) < 1e-3 and ch.q == -1:
@@ -218,6 +281,7 @@ class OperatingPoint:
         return cls(linewidth_Hz=lw, wavelength=kc.c / probe.frequency_Hz,
                    delta_up=float(d_up), delta_dn=float(d_dn), B_gauss=float(B_gauss),
                    q=-1, channels_up=out[0], channels_dn=out[1],
+                   strength_up=strengths[0], strength_dn=strengths[1],
                    provenance=f"kamo Potassium39 at {B_gauss:.4f} G (portal E1 matrix "
                               "elements, kamo hyperfine constants, NIST energies)")
 
@@ -229,7 +293,9 @@ class OperatingPoint:
                  f"   (splitting {self.splitting:.3f} Gamma = "
                  f"{self.splitting * self.linewidth_Hz / 1e6:.3f} MHz)",
                  f"  Condon radius at |delta| = {abs(self.delta_up):.2f}: "
-                 f"{self.condon_radius * 1e9:.1f} nm"]
+                 f"{self.condon_radius * 1e9:.1f} nm (static, max over angles)",
+                 f"  oscillator strength f_up = {self.strength_up:.5f}, "
+                 f"f_dn = {self.strength_dn:.5f} (1 = ideal closed line)"]
         for name, chs in (("up", self.channels_up), ("dn", self.channels_dn)):
             for ch in chs:
                 lines.append(f"  |{name}> extra channel q={ch.q:+d}: delta = {ch.detuning:+9.2f} "
@@ -259,9 +325,22 @@ class IncidentField:
         """``Omega_j = conj(e_hat) . E_inc(r_j) / E0``."""
         return self.field(points) @ np.conj(np.asarray(e_hat))
 
+    def projection(self, e_hat) -> float:
+        """``|conj(e_hat) . polarization|^2`` for an arbitrary driven dipole.
+
+        1/2 for the lab's y-polarized Voigt probe on a sigma- line, 0 for the
+        same probe on a pi line.
+        """
+        return float(abs(np.conj(np.asarray(e_hat, dtype=complex)) @ self.polarization) ** 2)
+
     @property
     def sigma_projection(self) -> float:
-        """``|conj(e_hat) . polarization|^2`` for a sigma- dipole: 1/2 for y light."""
+        """``|conj(e_-1) . polarization|^2``: 1/2 for y light.
+
+        Hard-wired to ``q = -1``.  For an :class:`OperatingPoint` with a
+        different ``q`` use ``incident.projection(op.e_hat)`` -- this property
+        would return 1/2 where the true projection is 0 (noted 2026-09-17).
+        """
         return float(abs(np.conj(spherical_unit_vector(-1)) @ self.polarization) ** 2)
 
 
