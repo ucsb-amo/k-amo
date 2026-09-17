@@ -253,12 +253,11 @@ def test_T14_excess_law(op):
        factor 2.7 apart;
     2. the angular factor 1 - sin^2(theta)/2, i.e. the like-pair fraction.
 
-    The COEFFICIENT itself is recorded, not asserted against the specification's
-    xi_circ = 1/(12 pi sqrt3) = 0.01531: the measurement gives 0.0078-0.0087,
-    i.e. xi_circ / 2 to within the statistics.  The factor 2 is a convention in
-    the shell derivation (two pair modes, of which one is resonant; pair double
-    counting) that the specification does not pin down, so the package quotes the
-    measured value and flags the discrepancy rather than tuning a tolerance.
+    The COEFFICIENT is recorded, not asserted against the published xi_circ: it
+    measures at xi_circ / 2 (ensemble.XI_MEASURED).  The tempting explanation --
+    that one detuning sign only reaches half the angular distribution -- is
+    refuted by test_pair_has_two_resonances, so the factor of two stays open and
+    the measured value is what the package quotes.  See ensemble.excess_law.
     """
     xis = {}
     for scale in (1.0, 1.4):
@@ -276,7 +275,8 @@ def test_T14_excess_law(op):
         xis[scale] = stats.trimmed_mean(both, 0.1) / eta
         assert xis[scale] > 0
     assert abs(xis[1.4] / xis[1.0] - 1) < 0.35, xis   # linear in eta_eff
-    assert 0.3 * XI_C < xis[1.0] < 0.9 * XI_C, xis    # measured: xi_circ / 2
+    assert abs(xis[1.0] / ensemble.XI_MEASURED - 1) < 0.35, xis
+    assert xis[1.0] < 0.8 * XI_C, xis                 # and it is NOT the published xi
 
 
 def test_T14b_excess_angular_factor(op):
@@ -763,3 +763,58 @@ def test_from_variational_axis_order_guard(op):
     assert abs(fixed.sigma[0] - naive.sigma[2]) < 1e-12
     with pytest.raises(ValueError):
         GaussianProfile.from_variational(cloud, axes=np.full((3, 3), 0.577))
+
+
+def test_pair_has_two_resonances(op):
+    """A close pair is resonant at delta = +J through its bright mode AND at
+    delta = -J through its dark one, whenever the pair axis has a component
+    along the probe.
+
+    This is what refutes the "one detuning sign only sees half the angular
+    distribution" reading of the excess law (ensemble.excess_law), and it is
+    the same structure that makes the excess an excited-POPULATION effect rather
+    than a scattering one: the subradiant peak is ~200x taller in population."""
+    k = op.k
+    r = 0.435 / k                                     # the Condon radius
+
+    def peaks(axis):
+        pos = np.stack([np.zeros(3), np.asarray(axis, dtype=float) * r])
+        J = scalar_couplings(pos, k, op.e_hat, "full")[0][0, 1]
+        cfg = Configuration(pos, np.array([1, 1], dtype=np.int8))
+        d = np.linspace(-12, 12, 2401)
+        e = np.array([solve(cfg, OperatingPoint(op.linewidth_Hz, op.wavelength,
+                                                delta_up=float(x), delta_dn=float(x)),
+                            "full", keep_matrices=False, checks=False).excitation for x in d])
+        loc = [i for i in range(1, len(d) - 1) if e[i] > e[i - 1] and e[i] > e[i + 1]]
+        return J, [(d[i], e[i]) for i in loc]
+
+    # axis perpendicular to k: only the bright mode is driven, at delta = J
+    for axis in ([0, 0, 1.0], [0, 1.0, 0]):
+        J, pk = peaks(axis)
+        assert len(pk) == 1, (axis, pk)
+        assert abs(pk[0][0] - J) < 0.3, (axis, J, pk)
+    # axis along k: the dark mode is driven too, at delta = -J, and dominates
+    J, pk = peaks([1.0, 0, 0])
+    assert len(pk) == 2, pk
+    lo, hi = sorted(pk, key=lambda t: t[1])
+    assert abs(lo[0] - J) < 0.3 and abs(hi[0] + J) < 0.3, (J, pk)
+    assert hi[1] > 50 * lo[1], pk                     # the subradiant peak dominates
+
+
+def test_excess_law_angular_constant():
+    """The published xi_circ is pi^2 <|B|> / (2 pi)^3 with <|B|> over the whole
+    sphere, and each sign of B carries exactly half of that.  Recorded because
+    the halving is the natural (but, per test_pair_has_two_resonances, wrong)
+    explanation of why the measurement comes out at xi_circ / 2."""
+    from scipy.integrate import quad
+    B = lambda u: (3 * u ** 2 - 1) / 2            # noqa: E731
+    kink = [1 / np.sqrt(3)]                        # B changes sign at the magic angle
+    both, _ = quad(lambda u: abs(B(u)), 0, 1, points=kink)
+    pos, _ = quad(lambda u: max(B(u), 0.0), 0, 1, points=kink)
+    neg, _ = quad(lambda u: max(-B(u), 0.0), 0, 1, points=kink)
+    assert abs(both - 2 / (3 * np.sqrt(3))) < 1e-10
+    assert abs(pos - neg) < 1e-10 and abs(pos - both / 2) < 1e-10
+    # xi = pi^2 <B_res> / (2 pi)^3
+    assert abs(np.pi ** 2 * both / (8 * np.pi ** 3) - ensemble.XI_CIRC) < 1e-12
+    assert abs(np.pi ** 2 * pos / (8 * np.pi ** 3) - ensemble.XI_CIRC / 2) < 1e-12
+    assert ensemble.excess_law(10.0, 0.0) == 1 + ensemble.XI_CIRC * 10.0

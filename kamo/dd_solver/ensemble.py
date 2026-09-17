@@ -24,12 +24,63 @@ from .solver import SolveResult, solve, solve_variants
 from .stats import robust_summary
 from .system import IncidentField, OperatingPoint
 
-XI_CIRC = 1.0 / (12 * np.pi * np.sqrt(3.0))    #: 0.0153140, the sigma- tail coefficient
+XI_CIRC = 1.0 / (12 * np.pi * np.sqrt(3.0))    #: 0.0153140, the published constant
 XI_LIN = 1.0 / (6 * np.pi * np.sqrt(3.0))      #: the published linear-dipole value
+#: What this package MEASURES for the excitation excess against the 'nonear'
+#: ablation: 0.0078-0.0087 across two densities a factor 2.7 apart (test T14),
+#: i.e. XI_CIRC / 2 to within the statistics.  See :func:`excess_law`.
+XI_MEASURED = 0.0082
 
 
 def excess_law(eta_eff: float, theta, xi: float = XI_CIRC) -> np.ndarray:
-    """``1 + xi eta_eff (1 - sin^2(theta) / 2)``."""
+    """``1 + xi eta_eff (1 - sin^2(theta) / 2)``: the near-field excess of the
+    excited-state population over a near-field-free medium.
+
+    The two scalings are solid and both reproduce: the excess is linear in
+    ``eta_eff`` (same coefficient at two densities a factor 2.7 apart) and
+    follows the like-pair fraction ``cos^4(theta/2) + sin^4(theta/2)``.
+
+    The COEFFICIENT is measured, not derived, and comes out at half the
+    published ``xi_circ`` (``XI_MEASURED``).  Two candidate explanations were
+    tested and one of them is definitely wrong; the note below records what the
+    pair structure actually looks like, because it matters for anyone trying to
+    finish the derivation.
+
+    Why the obvious resonant-shell argument does not settle it (2026-09-17)
+    ----------------------------------------------------------------------
+    The textbook argument counts pairs whose near-field shift ``J = (3/4)B/x^3``
+    matches the detuning.  With ``rho(J) dJ = pi n |B|/(k^3 J^2) dJ`` neighbours
+    per atom per unit shift and a resonant Lorentzian of weight ``pi``, it gives
+    ``excess = pi^2 (n/k^3) <B_res>``, and ``<|B|> = 2/(3 sqrt3)`` over the
+    sphere reproduces ``xi_circ`` exactly.
+
+    It is tempting to conclude that a cloud at ONE detuning sign only gets half
+    of that, because the bright (symmetric) mode sits at ``delta - J`` and so
+    needs ``sign(J) = sign(delta)``: blue would take polar pairs (``B > 0``) and
+    red in-plane ones (``B < 0``), each carrying ``<|B|>/2``.  That would give
+    ``xi_circ/2``, matching the measurement.  **It is wrong.**  Only the
+    symmetric mode is driven when the pair axis is perpendicular to ``k``; as
+    soon as the axis has a component along the probe the ANTISYMMETRIC mode
+    picks up a drive, and being subradiant it is far narrower and far taller in
+    excitation.  Measured on a pair at the Condon radius:
+
+    ======================================  ==========  =======================
+    pair axis                               ``J``       excitation peaks
+    ======================================  ==========  =======================
+    along z (``B = +1``, ``k.r = 0``)       ``+8.37``   ``delta = +8.37``, 0.26
+    along y (``B = -1/2``, ``k.r = 0``)     ``-5.75``   ``delta = -5.75``, 0.26
+    along x (``B = -1/2``, ``k.r = 0.435``) ``-5.75``   ``-5.75`` (0.25) AND
+                                                        ``+5.75`` (58)
+    ======================================  ==========  =======================
+
+    So both signs of ``B`` feed a given detuning, through different modes, and
+    the subradiant channel is 200x stronger in population while contributing
+    almost nothing to the radiated power.  A correct derivation has to carry the
+    antisymmetric drive ``~ sin(k.r/2)`` against its vanishing linewidth
+    ``(1 - Gamma_12)/2``, which is a competition between two quantities that
+    both go to zero with the separation.  Until someone does that integral, quote
+    ``XI_MEASURED`` and say it is measured.
+    """
     return 1.0 + xi * eta_eff * like_pair_fraction(theta)
 
 
