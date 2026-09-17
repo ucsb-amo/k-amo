@@ -22,7 +22,7 @@ import pytest
 
 from kamo.dd_solver import (Configuration, GaussianProfile, OperatingPoint,
                             sample_configuration, solve)
-from kamo.dd_solver import detect, ensemble, fields, rg, stats, vector
+from kamo.dd_solver import detect, ensemble, fields, rg, spectrum, stats, vector
 from kamo.dd_solver.cloud import uniform_sphere_configuration
 from kamo.dd_solver.kernel import (kernel_pair, near_field_hamiltonian, scalar_couplings,
                                    gamma_matrix)
@@ -847,3 +847,193 @@ def test_gridded_profile_frames_match_the_propagator(op):
     assert np.allclose(np.asarray(mix.center), centred._shift, atol=1e-12)
     with pytest.raises(ValueError):
         centred.bpm_source(prop, resp, op.species(np.pi), recenter=False)
+
+
+# =========================== added 2026-09-17: the validation scheme ==========
+#
+# Six checks, each testing something the existing suite structurally cannot see.
+# V1 the steady state is the long-time limit of the dynamics (nothing verified this)
+# V2 oscillator-strength sum rule: interactions redistribute strength, never create it
+# V3 Lorentz reciprocity of the FIELD (S4 only checks the matrix)
+# V4 the shadow: the interference term on a plane equals -sigma0 * extinction
+# V5 R_exc biases the mean INSIDE the cloud and not at all outside it
+# V6 the RG's pair rotations preserve the trace of the resonances
+
+
+def test_V1_steady_state_is_the_long_time_limit(op, prof500):
+    """Integrate d(beta)/dt = i(M beta + Omega/2) from beta = 0 and land on solve().
+
+    The package asserts a steady state everywhere and never checked that it IS
+    one.  Three statements, in increasing strength:
+
+    1. the integration reproduces the exact closed form ``(1 - e^{iMt}) beta_ss``;
+    2. the residual decays at the rate the slowest mode sets, so the approach is
+       the physical one and not an artefact of the integrator;
+    3. a matrix with one gain mode runs away instead of converging, which is how
+       this test would have caught the pre-2026-09-17 'far' kernel.
+    """
+    from scipy.linalg import expm
+    from kamo.dd_solver.solver import build_matrix
+    cfg = sample_configuration(prof500, theta=np.pi, seed=1, N=150)
+    inc = PlaneWave(op.k)
+    det, f = op.detunings(cfg.spins), op.strengths(cfg.spins)
+    Om = inc.drive(cfg.positions, op.e_hat)
+
+    def evolve(M, t_end, dt=0.005):
+        b = np.zeros(M.shape[0], dtype=complex)
+        rhs = lambda y: 1j * (M @ y + 0.5 * Om)      # noqa: E731
+        for _ in range(int(round(t_end / dt))):
+            k1 = rhs(b); k2 = rhs(b + dt / 2 * k1)
+            k3 = rhs(b + dt / 2 * k2); k4 = rhs(b + dt * k3)
+            b = b + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
+        return b
+
+    for variant in ("full", "nonear"):
+        M, _, _ = build_matrix(cfg.positions, det, op, variant, strengths=f)
+        ss = solve(cfg, op, variant, incident=inc, keep_matrices=False).beta
+        assert np.allclose(np.linalg.solve(M, -0.5 * Om), ss, rtol=1e-10)
+        scale = np.max(np.abs(ss))
+        gamma_min = 2 * np.linalg.eigvals(M).imag.min()
+        assert gamma_min > 0, (variant, gamma_min)            # passive: no gain
+        prev = None
+        for t in (40.0, 120.0):
+            b = evolve(M, t)
+            exact = ss - expm(1j * M * t) @ ss                # (1 - e^{iMt}) beta_ss
+            # RK4 at dt = 0.005 against the exact propagator: the residual here
+            # is the integrator's truncation error, and a wrong sign or factor
+            # anywhere in the ODE would show up as O(1) instead
+            assert np.max(np.abs(b - exact)) / scale < 1e-4, (variant, t)
+            resid = np.max(np.abs(b - ss)) / scale
+            # bounded by the slowest mode's own decay, with room for its overlap
+            assert resid < np.exp(-gamma_min * t / 2) + 1e-12, (variant, t, resid)
+            if prev is not None:
+                assert resid < 0.5 * prev, (variant, resid, prev)
+            prev = resid
+    # one atom given negative damping: the same integration runs away
+    M, _, _ = build_matrix(cfg.positions, det, op, "full", strengths=f)
+    Mbad = M.copy()
+    Mbad[0, 0] = M[0, 0].real - 0.5j
+    assert np.max(np.abs(evolve(Mbad, 120.0))) > 1e3 * np.max(np.abs(ss))
+
+
+def test_V2_oscillator_strength_sum_rule(op, prof500):
+    """``sum_mu sign(gamma_mu) = N``: interactions move strength, never make it.
+
+    This is ``-1/pi`` times ``Int d(delta) Tr Im (delta I + A)^-1``.  Each mode
+    contributes ``-pi`` for any positive decay rate, whatever its shift, so the
+    total is an invariant of a passive medium.  A kernel with gain returns
+    ``N - 2 n_gain``: the pre-2026-09-17 'far' variant, reconstructed at the
+    bottom of this test, gives 278 of 400."""
+    from kamo.dd_solver.kernel import scalar_couplings
+    from kamo.dipole_dipole.green_tensor import dipole_projection
+    cfg = sample_configuration(prof500, theta=np.pi, seed=1, N=250)
+    for variant in ("full", "nonear", "far"):
+        ms = spectrum.collective_modes(cfg, op, variant)
+        assert ms.n_gain() == 0, (variant, ms.n_gain(), ms.gamma.min())
+        assert ms.sum_rule() == cfg.N, (variant, ms.sum_rule())
+    # the near field is what spreads the shifts: 4x wider than with it removed
+    wide = spectrum.collective_modes(cfg, op, "full").shift_spread()
+    narrow = spectrum.collective_modes(cfg, op, "nonear").shift_spread()
+    assert wide > 3 * narrow, (wide, narrow)
+
+    # the retired kernel, rebuilt here so the guard cannot rot
+    d = cfg.positions[:, None, :] - cfg.positions[None, :, :]
+    r = np.linalg.norm(d, axis=-1)
+    np.fill_diagonal(r, np.inf)
+    rhat = np.nan_to_num(d / r[..., None])
+    c, x = dipole_projection(op.e_hat, rhat), op.k * r
+    with np.errstate(invalid="ignore", divide="ignore"):
+        J = np.nan_to_num(-0.75 * (1 - c) * np.cos(x) / x, nan=0.0, posinf=0.0, neginf=0.0)
+        G = np.nan_to_num(1.50 * (1 - c) * np.sin(x) / x, nan=0.0, posinf=0.0, neginf=0.0)
+    np.fill_diagonal(J, 0.0)
+    np.fill_diagonal(G, 0.0)
+    Mold = -(J - 0.5j * G)
+    np.fill_diagonal(Mold, 0.5j)
+    gam_old = 2 * np.linalg.eigvals(Mold).imag
+    n_gain = int(np.sum(gam_old < 0))
+    assert n_gain > 0
+    assert abs(np.sum(np.sign(gam_old)) - (cfg.N - 2 * n_gain)) < 0.5
+
+
+def test_V3_lorentz_reciprocity_of_the_field(op, prof500):
+    """Source at A, detector at B gives the same amplitude as the swap.
+
+    S4 says the MATRIX is symmetric.  This says the physical response is, which
+    needs the solve, the drive projection and the radiated field to agree with
+    one another -- a conjugation slip in any of the three breaks it."""
+    from kamo.dd_solver.solver import build_matrix
+    cfg = sample_configuration(prof500, theta=np.pi, seed=2, N=120)
+    M, _, _ = build_matrix(cfg.positions, op.detunings(cfg.spins), op, "full",
+                           strengths=op.strengths(cfg.spins))
+    rA = np.array([-8.0e-6, 1.1e-6, -0.7e-6])
+    rB = np.array([+9.0e-6, -1.3e-6, +0.5e-6])
+
+    def response(src, det):
+        Om = fields.dipole_field_vectors(cfg.positions - src, op.k, op.e_hat) @ np.conj(op.e_hat)
+        beta = np.linalg.solve(M, -0.5 * Om)
+        direct = (fields.dipole_field_vectors((det - src)[None, :], op.k, op.e_hat)[0]
+                  @ np.conj(op.e_hat))
+        via = fields.scattered_field(det[None, :], cfg.positions, beta, op.k, op.e_hat)[0]
+        return complex(direct + via @ np.conj(op.e_hat))
+
+    ab, ba = response(rA, rB), response(rB, rA)
+    assert abs(ab - ba) / abs(ab) < 1e-12, (ab, ba)
+
+
+def test_V4_shadow_on_a_plane_equals_the_extinction(op):
+    """``Int 2 Re(E_inc^* . E_s) dA = -sigma0 * extinction`` on a downstream plane.
+
+    The optical theorem as a GEOMETRIC statement about the shadow, evaluated
+    through transmitted_plane rather than algebraically.  It converges as the
+    aperture grows because the cross term oscillates over Fresnel zones."""
+    small = GaussianProfile(60, (0.6e-6, 0.35e-6, 0.35e-6))
+    cfg = sample_configuration(small, theta=np.pi, seed=3)
+    r = solve(cfg, op, "full")
+    target = -op.sigma0 * r.extinction
+    ratios = []
+    for L, n in ((40e-6, 601), (160e-6, 1201)):
+        y = np.linspace(-L / 2, L / 2, n)
+        pf = fields.transmitted_plane(r, 12e-6, y, y)
+        Es = pf.E - pf.E_inc
+        cross = float(np.sum(2 * np.real(np.sum(np.conj(pf.E_inc) * Es, -1)))
+                      * (y[1] - y[0]) ** 2)
+        ratios.append(cross / target)
+    assert abs(ratios[-1] - 1.0) < 0.05, ratios
+    assert abs(ratios[-1] - 1.0) < abs(ratios[0] - 1.0), ratios   # converging with aperture
+
+
+def test_V5_exclusion_radius_biases_inside_and_not_outside(op, prof500):
+    """R_exc changes the coherent field INSIDE the cloud by ~10% and outside by 0.
+
+    Both halves matter.  The old docstring claimed the vanishing angular average
+    made R_exc harmless everywhere; only the 1/r^3 term averages to zero, so
+    inside the cloud the excluded sphere removes a real radiative piece.  Outside
+    it there are no atoms within R_exc of the point, so nothing is removed --
+    which is why the A/B against the propagation is done out there."""
+    res = [solve(sample_configuration(prof500, np.pi, seed=s, N=250), op, "full",
+                 keep_matrices=False) for s in range(16)]
+    radii = (0.0, 100e-9, 150e-9, 250e-9)
+    inside = np.array([fields.coherent_field(res, np.zeros((1, 3)), R_exc=R).intensity_coherent[0]
+                       for R in radii])
+    outside = np.array([fields.coherent_field(res, np.array([[9e-6, 0.0, 0.0]]),
+                                              R_exc=R).intensity_coherent[0] for R in radii])
+    assert (inside.max() - inside.min()) / inside.mean() > 0.05, inside
+    assert (outside.max() - outside.min()) / outside.mean() < 1e-12, outside
+
+
+def test_V6_rg_preserves_the_trace_of_the_resonances(op, prof500):
+    """Each RG step diagonalizes a 2x2 block, so it cannot move sum(omega).
+
+    A trace that drifts means the decimation is double counting a pair or
+    dropping one, which no other test would notice: the shift DISTRIBUTION would
+    still look plausible."""
+    for seed in range(3):
+        cfg = sample_configuration(prof500, theta=np.pi, seed=seed, N=300)
+        r = rg.renormalize_configuration(cfg, op)
+        assert r.n_steps > 100
+        drift = abs(r.omega.sum() - r.omega0.sum())
+        assert drift < 1e-9 * max(abs(r.omega0.sum()), 1.0), (seed, drift)
+    # and a single pair moves the two resonances symmetrically about their mean
+    pos = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 60e-9]])
+    one = rg.renormalize(pos, np.array([3.0, -1.0]), op.k, op.e_hat, cutoff=1e-3)
+    assert abs(one.omega.sum() - 2.0) < 1e-12

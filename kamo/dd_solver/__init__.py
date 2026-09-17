@@ -36,6 +36,10 @@ Modules
                    transmitted plane, configuration-averaged coherent field.
 :mod:`.vector`     3N x 3N solve with the pi and sigma+ channels; exact reduction check.
 :mod:`.detect`     detected-mode projection: collection NA, phase plate, atom-equivalent units.
+:mod:`.spectrum`   collective modes and the line shape: what the near field does to the
+                   medium.  Eigenvalues of the coupled-dipole matrix (collective shifts,
+                   decay rates, how many atoms each mode lives on) and the extinction
+                   against detuning, with the oscillator-strength sum rule.
 :mod:`.stats`      heavy-tail statistics: median, trimmed mean, SE with sample-size warnings.
 :mod:`.ensemble`   many configurations in parallel; CSS-angle scans and the excess law.
 :mod:`.compare_bpm` A/B against kamo.imaging's propagator on one profile and beam.
@@ -151,7 +155,7 @@ _lazy = {
     "renormalize": ".rg", "renormalize_configuration": ".rg", "RGResult": ".rg",
 }
 _lazy_modules = ("system", "cloud", "kernel", "solver", "rg", "fields", "vector", "detect",
-                 "stats", "ensemble", "compare_bpm", "benchmark")
+                 "stats", "ensemble", "compare_bpm", "benchmark", "spectrum")
 
 
 def __getattr__(name):
