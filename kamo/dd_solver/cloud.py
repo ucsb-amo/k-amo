@@ -37,6 +37,7 @@ specification's widths so its validated numbers can still be reproduced.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, replace
 from typing import Optional, Sequence
 
@@ -53,6 +54,13 @@ from .system import SPIN_DN, SPIN_UP
 F_RADIAL_HZ = 1170.0
 F_AXIAL_HZ = 93.0
 A_SCATTERING_BOHR = 11.3     # UNVERIFIED at 520.6 G; kamo's table gives 10.96 (2026-09-16)
+
+
+
+
+class SpecReferenceWarning(UserWarning):
+    """A profile was built from the build specification's doubled-kinetic ansatz,
+    which is not the ground state (added 2026-09-19)."""
 
 
 # ------------------------------------------------------------------ profile
@@ -159,7 +167,21 @@ class GaussianProfile:
                        a_bohr: float = A_SCATTERING_BOHR, mass=None) -> "GaussianProfile":
         """The build specification's profile: doubled kinetic term, ``N - 1`` in the
         interaction.  Reproduces its regression table; NOT the physical ground
-        state (see the module docstring)."""
+        state (see the module docstring).
+
+        Its kinetic term ``hbar^2/(4 m sigma^2)`` per axis is twice the correct
+        ``hbar^2/(8 m sigma^2)``, so even the non-interacting cloud comes out
+        ``2^{1/4}`` too wide (396 nm / 1.404 um at 1170 / 93 Hz instead of
+        ``sqrt(hbar / 2 m omega)`` = 333 nm / 1.181 um).  Emits
+        :class:`SpecReferenceWarning`; use :meth:`operating_point` or
+        :meth:`lab_operating_point` for physics.
+        """
+        warnings.warn("GaussianProfile.spec_reference uses the build specification's "
+                      "doubled kinetic term (cloud 2^(1/4) too wide in the "
+                      "non-interacting limit); it reproduces the spec's regression "
+                      "table and is not the ground state. Use operating_point or "
+                      "lab_operating_point for physics.",
+                      SpecReferenceWarning, stacklevel=2)
         m = float(kc.m_K if mass is None else mass)
         g = 4 * np.pi * kc.hbar ** 2 * a_bohr * kc.a0 / m
         wr, wx = 2 * np.pi * f_radial_Hz, 2 * np.pi * f_axial_Hz

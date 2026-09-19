@@ -151,6 +151,7 @@ _lazy = {
     "GaussianProfile": ".cloud", "GridProfile": ".cloud",
     "profile_from_kamo": ".cloud", "Configuration": ".cloud",
     "sample_configuration": ".cloud", "uniform_sphere_configuration": ".cloud",
+    "SpecReferenceWarning": ".cloud",
     "solve": ".solver", "SolveResult": ".solver", "SanityReport": ".solver",
     "renormalize": ".rg", "renormalize_configuration": ".rg", "RGResult": ".rg",
 }
