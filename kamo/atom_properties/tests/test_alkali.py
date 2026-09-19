@@ -435,3 +435,96 @@ def test_state_polarizability_defaults_to_39K():
     assert sp.species == "K39"
     assert sp.nuclear_spin == 1.5
     assert sp.alpha_au(1064e-9, PI_POL, Z_HAT) > 0
+
+
+# ================================================ TRANSITION ENERGY / SLOPE
+#
+# get_transition_energy / get_transition_sensitivity are the general forms of
+# the ground-state helpers and of get_transition_shift; the ground state is
+# their (4S, 4S) special case and the shift their B_ref=0 special case.
+
+_K39_G1 = (4, 0, 0.5, 1, -1)
+_K39_G2 = (4, 0, 0.5, 2, -2)
+_K39_P1 = (4, 1, 0.5, 2, -2)
+
+
+def test_transition_energy_is_the_ground_state_splitting(atoms):
+    a = atoms["K39"]
+    B = np.array([0.0, 10.0, 520.0])
+    e = a.get_transition_energy(_K39_G1, _K39_G2, B)
+    assert e.shape == B.shape
+    assert np.all(e > 0)                       # F=2 lies above F=1 in 39K
+    assert np.allclose(np.abs(e), a.get_ground_state_transition_frequency(1, -1, 2, -2, B))
+    assert e[0] == pytest.approx(461.7197, abs=1e-3)
+    # signed: reversing the states flips the sign
+    assert np.allclose(a.get_transition_energy(_K39_G2, _K39_G1, B), -e)
+    # scalar in, scalar out
+    assert isinstance(a.get_transition_energy(_K39_G1, _K39_G2, 520.0), float)
+
+
+def test_transition_energy_b_ref_is_the_transition_shift(atoms):
+    a = atoms["K39"]
+    shift = a.get_transition_energy(_K39_G1, _K39_G2, 520.0, B_ref=0.0)
+    assert shift == pytest.approx(-314.4194, abs=1e-3)
+    assert a.get_transition_shift(_K39_G1, _K39_G2, B=520.0) == pytest.approx(shift, abs=1e-6)
+    assert a.get_transition_shift(*_K39_G1, *_K39_G2, B=520.0) == pytest.approx(shift, abs=1e-6)
+    assert a.get_transition_shift(*_K39_G1, *_K39_G2, 520.0) == pytest.approx(shift, abs=1e-6)
+    # relative to a non-zero reference field, vectorized over B
+    e = a.get_transition_energy(_K39_G1, _K39_G2, np.array([500.0, 520.0]), B_ref=520.0)
+    assert e[1] == pytest.approx(0.0, abs=1e-9)
+    assert e[0] == pytest.approx(
+        a.get_transition_energy(_K39_G1, _K39_G2, 500.0)
+        - a.get_transition_energy(_K39_G1, _K39_G2, 520.0), abs=1e-6)
+
+
+def test_transition_shift_rejects_malformed_calls(atoms):
+    a = atoms["K39"]
+    with pytest.raises(TypeError):
+        a.get_transition_shift(4, 0, 0.5, 1, -1, B=10.0)
+    with pytest.raises(TypeError):
+        a.get_transition_shift(_K39_G1, _K39_G2, foo=1)
+    with pytest.raises(ValueError):
+        a.get_transition_energy((4, 0, 0.5, 1), _K39_G2, 10.0)
+
+
+def test_transition_energy_across_manifolds_is_optical(atoms):
+    a = atoms["K39"]
+    d1_mhz = a.getTransitionFrequency(4, 0, 0.5, 4, 1, 0.5) / 1e6
+    e = a.get_transition_energy(_K39_G1, _K39_P1, 0.0)
+    # D1 line plus hyperfine offsets of the two levels (< 1 GHz)
+    assert abs(e - d1_mhz) < 1000
+    assert a.get_transition_energy(_K39_G1, _K39_P1, 10.0, B_ref=0.0) == pytest.approx(
+        a.get_transition_shift(_K39_G1, _K39_P1, B=10.0), abs=1e-6)
+
+
+def test_transition_sensitivity_is_the_ground_state_slope(atoms):
+    a = atoms["K39"]
+    B = np.array([0.0, 10.0, 520.0])
+    s = a.get_transition_sensitivity(_K39_G1, _K39_G2, B)
+    assert s.shape == B.shape
+    assert np.all(np.isfinite(s))              # including B = 0
+    # the ground-state helper is the slope of the positive splitting
+    assert np.allclose(s, a.get_ground_state_transition_sensitivity(1, -1, 2, -2, B))
+    assert np.allclose(a.get_transition_sensitivity(_K39_G2, _K39_G1, B), -s)
+    # 39K (1,-1)->(2,-2) at 520 G: ~ -69 kHz/G, near the field-insensitive point
+    assert s[2] == pytest.approx(-0.06874, abs=2e-5)
+    # matches a central difference of the energy
+    e = a.get_transition_energy(_K39_G1, _K39_G2, np.array([519.0, 521.0]))
+    assert s[2] == pytest.approx((e[1] - e[0]) / 2, abs=2e-4)
+    assert isinstance(a.get_transition_sensitivity(_K39_G1, _K39_G2, 520.0), float)
+
+
+def test_transition_sensitivity_explicit_step(atoms):
+    a = atoms["K39"]
+    s_default = a.get_transition_sensitivity(_K39_G1, _K39_G2, 100.0)
+    s_fine = a.get_transition_sensitivity(_K39_G1, _K39_G2, 100.0, dB=0.02)
+    assert s_fine == pytest.approx(s_default, abs=2e-3)   # curvature term
+    with pytest.raises(ValueError):
+        a.get_transition_sensitivity(_K39_G1, _K39_G2, 100.0, dB=0.0)
+
+
+def test_integer_spin_ground_state_helpers(atoms):
+    k40 = atoms["K40"]
+    got = k40.get_ground_state_transition_frequency(4.5, -4.5, 3.5, -3.5, B=0)
+    assert got == pytest.approx(1285.7886, rel=1e-6)
+    assert np.isfinite(k40.get_ground_state_transition_sensitivity(4.5, -4.5, 3.5, -3.5, 0.0))

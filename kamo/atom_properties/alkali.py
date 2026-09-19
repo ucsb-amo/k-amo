@@ -731,23 +731,28 @@ class PortalAlkali:
 
         Returns:
             float: ground state transition sensitivity in MHz/G.
-        """        
-        dB = B * 0.001
-        # Both fields come from a single sweep (array B) instead of two calls.
-        f_B, f_B_plus_dB = self._splitting_mhz(
-            self.ground_qn(f1, mf1),
-            self.ground_qn(f2, mf2),
-            np.array([B, B + dB]),
-        )
-        return (f_B_plus_dB - f_B) / dB
-    
-    def _zeeman_hamiltonian_multi(self, states, B_gauss, B_sweep_steps=500):
+        """
+        # Ground-state special case of get_transition_sensitivity.  That one
+        # differentiates the signed E2 - E1; this function has always been the
+        # slope of the positive splitting |E2 - E1|, so flip the sign where
+        # the signed energy is negative.
+        s1, s2 = self.ground_qn(f1, mf1), self.ground_qn(f2, mf2)
+        sens = self.get_transition_sensitivity(s1, s2, B)
+        sign = np.where(self.get_transition_energy(s1, s2, B) < 0, -1.0, 1.0)
+        return sign * sens
+
+    def _zeeman_hamiltonian_multi(self, states, B_gauss, B_sweep_steps=500, dB=None):
         """Run one kamo.hamiltonian sweep covering all requested states.
 
         Parameters
         ----------
         states : list of ``(n, l, j, m_j, m_i)`` tuples
         B_gauss : scalar or 1-D array
+        B_sweep_steps : int
+            Minimum number of sweep steps up to ``max(B_gauss)`` (the step is
+            also capped at 0.01 G).  Ignored when ``dB`` is given.
+        dB : float, optional
+            Explicit sweep step in Gauss.
 
         Returns
         -------
@@ -757,7 +762,13 @@ class PortalAlkali:
         from kamo.hamiltonian import AtomicStructure
         B_arr = np.atleast_1d(np.asarray(B_gauss, dtype=float))
         B_max = max(float(np.max(B_arr)), 0.01)
-        dB = min(B_max / B_sweep_steps, 0.01)
+        if dB is None:
+            dB = min(B_max / B_sweep_steps, 0.01)
+        else:
+            dB = float(dB)
+            if dB <= 0:
+                raise ValueError(f"dB must be positive; got {dB}.")
+            B_max = max(B_max, dB)          # at least one sweep step
         if dB > 0.1:
             print(f"Sweep steps are large ({dB:1.2e} G per step). Consider increasing sampling if adiabatic state detection suffers.")
 
@@ -1003,21 +1014,33 @@ class PortalAlkali:
         energy = float(result[0]) if scalar_in else result
         return (energy, sweep) if return_sweep else energy
 
-    def _splitting_mhz(self, state1, state2, B=0):
-        """Return |E2 − E1| (MHz) versus field, vectorized over ``B`` (Gauss).
+    @staticmethod
+    def _check_state_tuples(*states):
+        """Return ``states`` as tuples, or raise if one is not a 5-tuple."""
+        out = []
+        for st in states:
+            st = tuple(st)
+            if len(st) != 5:
+                raise ValueError(
+                    "Each state must be a 5-tuple (n, l, j, a, b) where (a, b) "
+                    "are either (F, mF) ints or (m_j, m_i) half-integer floats; "
+                    f"got {st!r}.")
+            out.append(st)
+        return out
 
-        ``state1``/``state2`` are ``(n, l, j, m_j, m_i)`` tuples.  ``B`` may be a
-        scalar or 1-D array (the return matches its shape).  When both states are
-        low-n (below :attr:`hamiltonian_n_threshold`) a single magnetic sweep
-        covers both manifolds and the states are followed adiabatically; high-n
-        states fall back to per-state :meth:`get_zeeman_shift`.
+    def _transition_energy_mhz(self, state1, state2, B=0, dB=None):
+        """Signed ``E2 − E1`` (MHz) versus field, vectorized over ``B`` (Gauss).
 
-        This is the vectorized splitting engine used by
-        :meth:`get_microwave_transition_frequency` and
-        :meth:`get_magnetic_field_from_splitting`, which need array-valued ``B``
-        and MHz units that the scalar, Hz-valued
-        :meth:`get_transition_frequency` state-tuple API does not provide.
+        The engine behind :meth:`get_transition_energy` (see there for the
+        state convention and the meaning of the energy).  ``B`` may be a
+        scalar or 1-D array (the return matches its shape).  When both states
+        are low-n (below :attr:`hamiltonian_n_threshold`) a single magnetic
+        sweep covers both manifolds and the states are followed
+        adiabatically; high-n states fall back to per-state
+        :meth:`get_zeeman_shift`.  ``dB`` is the sweep step (Gauss); ``None``
+        picks the :meth:`_zeeman_hamiltonian_multi` default.
         """
+        state1, state2 = self._check_state_tuples(state1, state2)
         n1, l1, j1, m_j1, m_i1 = state1
         n2, l2, j2, m_j2, m_i2 = state2
         B_arr = np.atleast_1d(np.asarray(B, dtype=float))
@@ -1029,14 +1052,126 @@ class PortalAlkali:
             # manifolds; each requested field is read back by interpolation
             # (no per-B re-diagonalization).
             [e1_arr, e2_arr], _ = self._zeeman_hamiltonian_multi(
-                [tuple(state1), tuple(state2)], B_arr
+                [state1, state2], B_arr, dB=dB
             )
-            result = np.abs(e2_arr - e1_arr)
+            result = e2_arr - e1_arr
         else:
-            e1 = self.get_zeeman_shift(n1, l1, j1, m_j1, m_i1, B)
-            e2 = self.get_zeeman_shift(n2, l2, j2, m_j2, m_i2, B)
-            result = np.atleast_1d(np.abs(e2 - e1))
+            e1 = self.get_zeeman_shift(n1, l1, j1, m_j1, m_i1, B_arr)
+            e2 = self.get_zeeman_shift(n2, l2, j2, m_j2, m_i2, B_arr)
+            result = np.atleast_1d(e2 - e1)
 
+        return float(result[0]) if scalar_in else result
+
+    def _splitting_mhz(self, state1, state2, B=0):
+        """Return |E2 − E1| (MHz) versus field, vectorized over ``B`` (Gauss).
+
+        The unsigned form of :meth:`_transition_energy_mhz`, used by
+        :meth:`get_microwave_transition_frequency` and
+        :meth:`get_magnetic_field_from_splitting`, which need array-valued ``B``
+        and MHz units that the scalar, Hz-valued
+        :meth:`get_transition_frequency` state-tuple API does not provide.
+        """
+        return np.abs(self._transition_energy_mhz(state1, state2, B))
+
+    def get_transition_energy(self, state1, state2, B=0, B_ref=None, dB=None):
+        """Transition energy ``E2 − E1`` (MHz) between two states at field ``B``
+        (Gauss), optionally relative to its value at a reference field.
+
+        This is the general form of
+        :meth:`get_ground_state_transition_frequency` (any pair of states,
+        signed) and of :meth:`get_transition_shift` (``B_ref=0``).  ``B`` may
+        be a scalar or a 1-D array; the result has the same shape, and every
+        field is read from a single magnetic sweep.
+
+        Each state is a 5-tuple ``(n, l, j, a, b)`` in the standard ``kamo``
+        convention: ``(a, b)`` are coupled ``(F, mF)`` low-field labels when
+        both are ints, or uncoupled adiabatic ``(m_j, m_i)`` Paschen-Back
+        labels when both are half-integer floats.  Either way the state is
+        followed adiabatically through the field sweep.
+
+        The energy of each state is its full field-free energy (fine
+        structure relative to a common reference, plus hyperfine) plus its
+        Zeeman energy, so:
+
+        * within one ``(n, l, j)`` manifold the result is the hyperfine +
+          Zeeman splitting (the RF / microwave transition frequency);
+        * across manifolds it is the optical transition frequency in MHz
+          (~3.9e8 MHz for a potassium D line), hyperfine and Zeeman resolved.
+          Pass ``B_ref`` to keep only the field-dependent part.
+
+        Parameters
+        ----------
+        state1, state2 : (n, l, j, a, b) tuples
+            Lower/upper states; the result is ``E2 − E1``, signed, so it is
+            negative when ``state2`` lies below ``state1``.
+        B : float or 1-D array
+            Magnetic field(s) in Gauss (default 0).
+        B_ref : float, optional
+            Reference field in Gauss.  When given, return
+            ``f(B) − f(B_ref)`` instead of ``f(B)``; ``B_ref=0`` gives the
+            differential Zeeman shift of the transition.
+        dB : float, optional
+            Magnetic-sweep step in Gauss.  ``None`` (default) uses at least
+            500 steps up to ``max(B)`` and never coarser than 0.01 G.
+
+        Returns
+        -------
+        float or np.ndarray
+            ``E2 − E1`` in MHz, matching the shape of ``B``.
+        """
+        if B_ref is None:
+            return self._transition_energy_mhz(state1, state2, B, dB=dB)
+        B_arr = np.atleast_1d(np.asarray(B, dtype=float))
+        scalar_in = np.ndim(B) == 0
+        # One sweep serves both the requested fields and the reference.
+        e = self._transition_energy_mhz(
+            state1, state2, np.append(B_arr, float(B_ref)), dB=dB)
+        result = e[:-1] - e[-1]
+        return float(result[0]) if scalar_in else result
+
+    def get_transition_sensitivity(self, state1, state2, B, dB=None,
+                                   sweep_dB=None):
+        """Magnetic sensitivity ``d(E2 − E1)/dB`` (MHz/G) of a transition at
+        field ``B`` (Gauss).
+
+        The general form of :meth:`get_ground_state_transition_sensitivity`:
+        any pair of states in the 5-tuple convention of
+        :meth:`get_transition_energy`, and ``B`` may be a scalar or a 1-D
+        array (the result matches its shape).  The derivative is the forward
+        difference ``(f(B + dB) − f(B)) / dB`` of :meth:`get_transition_energy`,
+        signed like it: reverse the two states to flip the sign.
+
+        Parameters
+        ----------
+        state1, state2 : (n, l, j, a, b) tuples
+            The two states (see :meth:`get_transition_energy`).
+        B : float or 1-D array
+            Magnetic field(s) in Gauss.
+        dB : float or array, optional
+            Finite-difference step in Gauss.  ``None`` (default) uses
+            ``0.001 * |B|``, but at least 0.001 G (so ``B = 0`` works).
+        sweep_dB : float, optional
+            Magnetic-sweep step in Gauss (``dB`` of
+            :meth:`get_transition_energy`).
+
+        Returns
+        -------
+        float or np.ndarray
+            Sensitivity in MHz/G, matching the shape of ``B``.
+        """
+        B_arr = np.atleast_1d(np.asarray(B, dtype=float))
+        scalar_in = np.ndim(B) == 0
+        if dB is None:
+            dB_arr = np.maximum(1e-3 * np.abs(B_arr), 1e-3)
+        else:
+            dB_arr = np.broadcast_to(np.asarray(dB, dtype=float), B_arr.shape)
+            if np.any(dB_arr <= 0):
+                raise ValueError("dB must be positive.")
+        # Both fields of every pair come from a single sweep.
+        e = self._transition_energy_mhz(
+            state1, state2, np.concatenate([B_arr, B_arr + dB_arr]), dB=sweep_dB)
+        n = B_arr.size
+        result = (e[n:] - e[:n]) / dB_arr
         return float(result[0]) if scalar_in else result
 
     def get_microwave_transition_frequency(self, n, l, j, m_j1, m_i1, m_j2, m_i2, B=0):
@@ -1182,27 +1317,62 @@ class PortalAlkali:
         Returns the ground-state transition frequency |E2 − E1| (MHz) between
         (f1,m_f1) and (f2,m_f2) under external magnetic field B (in Gauss).
         B may be a scalar or 1-D array.  Both states are read from a single
-        magnetic sweep.
+        magnetic sweep.  Ground-state, unsigned special case of
+        :meth:`get_transition_energy`.
         '''
-        return self._splitting_mhz(
+        return np.abs(self.get_transition_energy(
             self.ground_qn(f1, m_f1),
-            self.ground_qn(f2, m_f2), B)
+            self.ground_qn(f2, m_f2), B))
 
-    def get_transition_shift(
-        self, n1, l1, j1, m_j1, m_i1, n2, l2, j2, m_j2, m_i2, B=0
-    ):
+    def get_transition_shift(self, *args, B=0, **kwargs):
         """Differential Zeeman shift of a transition at field B (MHz).
 
         Returns ``f(B) − f(0)`` for the transition ``state1 -> state2``, i.e.
         ``ΔE(state2, B) − ΔE(state1, B)`` with ``ΔE(state, B) = E(state, B) −
-        E(state, 0)``.  Computed via :meth:`get_transition_frequency` in
-        ``relative_mode="magnetic"`` (Hz), converted to MHz.
+        E(state, 0)``.  The ``B_ref=0`` special case of
+        :meth:`get_transition_energy`; ``B`` may be a scalar or 1-D array.
+
+        Accepts either two state 5-tuples::
+
+            atom.get_transition_shift(state1, state2, B=520)
+
+        or the original ten flat quantum numbers::
+
+            atom.get_transition_shift(n1, l1, j1, m_j1, m_i1,
+                                      n2, l2, j2, m_j2, m_i2, B=520)
+
+        In both forms ``(m_j, m_i)`` follow the standard ``kamo`` convention
+        (ints for ``(F, mF)``, half-integer floats for ``(m_j, m_i)``).
         """
-        shift_hz = self.get_transition_frequency(
-            (n1, l1, j1, m_j1, m_i1), (n2, l2, j2, m_j2, m_i2),
-            B=B, relative_mode="magnetic",
-        )
-        return shift_hz / 1e6
+        names = ("n1", "l1", "j1", "m_j1", "m_i1",
+                 "n2", "l2", "j2", "m_j2", "m_i2")
+        if len(args) == 2 and not kwargs:
+            state1, state2 = args
+        elif len(args) == 3 and not kwargs:
+            state1, state2, B = args
+        else:
+            if len(args) == 11:                 # B given positionally
+                *args, B = args
+            if any(isinstance(x, (tuple, list, np.ndarray)) for x in args):
+                raise TypeError(
+                    "get_transition_shift with state tuples takes only "
+                    f"(state1, state2, B=0); got extra {sorted(kwargs)!r}.")
+            # flat form, possibly with some quantum numbers given by keyword
+            flat = list(args)
+            for name in names[len(flat):]:
+                if name not in kwargs:
+                    raise TypeError(
+                        "get_transition_shift takes either (state1, state2) "
+                        "or the ten quantum numbers "
+                        f"{', '.join(names)}; missing {name!r}.")
+                flat.append(kwargs.pop(name))
+            if kwargs or len(flat) != 10:
+                bad = list(kwargs) or flat[10:]
+                raise TypeError(
+                    f"get_transition_shift got unexpected arguments {bad!r}.")
+            state1, state2 = tuple(flat[:5]), tuple(flat[5:])
+        # dB=0.1 G is the sweep step this method has always used.
+        return self.get_transition_energy(state1, state2, B, B_ref=0.0, dB=0.1)
     
     def get_transition_frequency(
         self,
