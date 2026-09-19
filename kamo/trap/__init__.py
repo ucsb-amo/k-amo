@@ -41,6 +41,8 @@ Modules
 :mod:`.noninteracting`, :mod:`.thomas_fermi`, :mod:`.gross_pitaevskii`  the solvers.
 :mod:`.cloud`      ``TrapCloud``: what every solver returns.
 :mod:`.imaging_bridge`  ``GriddedMixture``: any cloud through kamo.imaging.
+:mod:`.cloud_optics`  thin-screen phase, Born form factor and far field, chord optical
+                   depths and reabsorption of a gridded cloud, no Gaussian assumed.
 :mod:`.plotting`   plane cuts (any normal), line cuts, beam profiles, summaries.
 :mod:`.dvr`        the exact 1D eigensolver for one trap axis.
 :mod:`.frames`     vector validation and the polarization invariants (beta, gamma).
@@ -105,7 +107,7 @@ _lazy = {
 
 _lazy_modules = ("frames", "beams", "polarizability", "trap", "plotting", "dvr",
                  "grid", "interactions", "cloud", "thomas_fermi", "noninteracting",
-                 "gross_pitaevskii", "solvers", "imaging_bridge", "gaussian",
+                 "gross_pitaevskii", "solvers", "imaging_bridge", "cloud_optics", "gaussian",
                  "thin_lens")
 
 
