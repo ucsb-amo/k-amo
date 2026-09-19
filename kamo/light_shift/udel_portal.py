@@ -16,8 +16,14 @@ Gotchas:
   :class:`~kamo.light_shift.PortalDataParser` needs that); use
   :func:`dedupe_pairs` before summing over states directly.
 - Matrix elements are magnitudes (no sign), which is fine for polarizabilities.
-- Static polarizabilities come back only as display strings, and the portal
-  shows them in units of 10^3 a.u. for some species (e.g. K 4s: "0.29025(25)").
+- Static polarizabilities come back only as display strings. For the alkalis
+  the portal shows them in units of 10^3 a.u. without saying so, so multiply
+  :func:`static_polarizabilities` by 1000 to get a.u.: Li 2s "0.164" -> 164
+  a.u., Na 3s "0.162" -> 162, K 4s "0.29025(25)" -> 290.25, Rb 5s "0.318" ->
+  318, Cs 6s "0.400" -> 400. :func:`parse_display_value` returns the displayed
+  number unscaled; the caller applies the factor.
+- Configuration strings are normalised to lower case on ingestion (the Cs
+  hyperfine table has one "9D" row where every other row is lower case).
 
 Responses are cached as JSON under ``$KAMO_CACHE_DIR`` (default
 ``~/.cache/kamo/udel_portal``); pass ``refresh=True`` to re-fetch. If the portal
@@ -104,9 +110,13 @@ def _cached(key, fetch, refresh=False, source=GRAPHQL_URL, query=None):
             if fallback.exists():
                 warnings.warn(f"UDel portal unreachable ({err}); using {fallback}")
                 return json.loads(fallback.read_text())["data"]
+        species = key.split("_", 1)[0]
         raise ConnectionError(
-            f"Could not reach the UDel portal ({err}), and there is no cache at "
-            f"{path} and no bundled snapshot for {key!r}.") from err
+            f"Could not reach the UDel portal ({err}) and no local copy of "
+            f"{key!r} exists: no cache at {path} and no bundled snapshot at "
+            f"{_SNAPSHOT_DIR / f'{key}.json'}. Run "
+            f"udel_portal.write_snapshot({species!r}) while online to bundle "
+            f"it.") from err
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({
         "fetched_at": datetime.now(timezone.utc).isoformat(),
@@ -120,7 +130,9 @@ def _element(species, fields, key, refresh=False, bundled=False):
     if bundled:
         path = _SNAPSHOT_DIR / f"{species}_{key}.json"
         if not path.exists():
-            raise KeyError(f"No bundled snapshot {path.name}; see write_snapshot().")
+            raise KeyError(
+                f"No bundled {key!r} snapshot for species {species!r} at {path}; "
+                f"run udel_portal.write_snapshot({species!r}) while online.")
         return json.loads(path.read_text())["data"]
     query = f'query($t: String) {{ element(title: $t) {{ {fields} }} }}'
     data = _cached(f"{species}_{key}",
@@ -138,14 +150,26 @@ def _j_to_float(j):
     return float(num) / float(den) if den else float(num)
 
 
+def normalize_config(configuration):
+    """Lower-case a portal configuration string ("9D" -> "9d"); None -> ""."""
+    return (configuration or "").strip().lower()
+
+
 def state_label(configuration, j):
-    """Portal configuration + J -> kamo label, e.g. ("4p", "3/2") -> "4p3/2"."""
-    return f"{configuration}{j}"
+    """Portal configuration + J -> kamo label, e.g. ("4p", "3/2") -> "4p3/2".
+
+    The configuration is lower-cased first, so the portal's occasional "9D"
+    row yields "9d3/2" like every other row.
+    """
+    return f"{normalize_config(configuration)}{j}"
 
 
 def _valence_nl(configuration):
-    """(n, l) of a single-valence configuration like "4p"; (nan, nan) otherwise."""
-    m = re.fullmatch(r"(\d+)([a-z])", configuration or "")
+    """(n, l) of a single-valence configuration like "4p"; (nan, nan) otherwise.
+
+    The configuration is lower-cased first ("9D" -> n=9, l=2).
+    """
+    m = re.fullmatch(r"(\d+)([a-z])", normalize_config(configuration))
     if m is None or m.group(2) not in _L_LETTERS:
         return np.nan, np.nan
     return int(m.group(1)), _L_LETTERS.index(m.group(2))
@@ -154,8 +178,32 @@ def _valence_nl(configuration):
 def _state_record(i, configuration, term, j):
     """Columns describing one state of a transition row, suffixed with ``i``."""
     n, l = _valence_nl(configuration)
-    return {f"state{i}": state_label(configuration, j), f"config{i}": configuration,
+    return {f"state{i}": state_label(configuration, j),
+            f"config{i}": normalize_config(configuration),
             f"term{i}": term, f"J{i}": _j_to_float(j), f"n{i}": n, f"l{i}": l}
+
+
+# -------------------------------------------------------------------- species
+
+def element_symbol(species):
+    """Portal species title -> element symbol: "K1" -> "K", "Ca2" -> "Ca"."""
+    m = re.fullmatch(r"([A-Za-z]+)(\d*)", str(species).strip())
+    if m is None:
+        raise ValueError(f"Not a portal species title: {species!r}.")
+    return m.group(1).capitalize()
+
+
+def species_for_element(symbol, ion_stage=0):
+    """Element symbol -> portal species title: ("K", 0) -> "K1", ("Ca", 1) -> "Ca2".
+
+    ``ion_stage`` is the charge (0 for a neutral atom); the portal appends
+    ``ion_stage + 1``.
+    """
+    if int(ion_stage) < 0:
+        raise ValueError(f"ion_stage must be >= 0, got {ion_stage!r}.")
+    if not re.fullmatch(r"[A-Za-z]{1,3}", str(symbol).strip()):
+        raise ValueError(f"Not an element symbol: {symbol!r}.")
+    return f"{str(symbol).strip().capitalize()}{int(ion_stage) + 1}"
 
 
 def parse_display_value(text):
@@ -183,8 +231,11 @@ def list_species(refresh=False):
     return df.sort_values("title", ignore_index=True)
 
 
-def matrix_elements(species="K1", refresh=False):
+def matrix_elements(species="K1", refresh=False, bundled=False):
     """Reduced E1 matrix elements (a.u.) for ``species``, both directions.
+
+    ``bundled=True`` reads the snapshot shipped with kamo directly (no cache, no
+    network, no warning) and raises ``KeyError`` if that species has no snapshot.
 
     Columns: ``state1, state2`` (labels like "4p1/2"), ``config1, term1, J1``,
     ``config2, term2, J2``, ``n1, l1, n2, l2`` (NaN for multi-valence
@@ -192,7 +243,7 @@ def matrix_elements(species="K1", refresh=False):
     ``source`` ("exp" if the portal cites a measurement, else "theory"), ``ref``.
     """
     rows = _element(species, f"matrixElements {{ {_MATRIX_ELEMENT_FIELDS} }}",
-                    "matrix_elements", refresh)["matrixElements"]
+                    "matrix_elements", refresh, bundled)["matrixElements"]
     if not rows:
         raise KeyError(f"The UDel portal has no matrix elements for {species!r}.")
     records = []
@@ -235,8 +286,11 @@ def to_legacy_table(df):
     return both.drop_duplicates(subset=["Initial", "Final"], ignore_index=True)
 
 
-def transition_rates(species="K1", refresh=False):
+def transition_rates(species="K1", refresh=False, bundled=False):
     """Einstein A coefficients and upper-state lifetimes for ``species``.
+
+    ``bundled=True`` reads the snapshot shipped with kamo directly (no cache, no
+    network, no warning) and raises ``KeyError`` if that species has no snapshot.
 
     One row per decay channel ``state1 -> state2`` (state 1 is the upper,
     decaying state). Columns: the state columns of :func:`matrix_elements`,
@@ -249,7 +303,7 @@ def transition_rates(species="K1", refresh=False):
                     "stateTwoConfiguration stateTwoTerm stateTwoJ wavelength "
                     "matrixElement transitionRate transitionRateUncertainty "
                     "branchingRatio lifetime lifetimeUncertainty lifetimeRef }",
-                    "transition_rates", refresh)["transitionRates"]
+                    "transition_rates", refresh, bundled)["transitionRates"]
     if not rows:
         raise KeyError(f"The UDel portal has no transition rates for {species!r}.")
     ns = 1e-9
@@ -270,13 +324,16 @@ def transition_rates(species="K1", refresh=False):
     return pd.DataFrame(records)
 
 
-def lifetimes(species="K1", refresh=False):
+def lifetimes(species="K1", refresh=False, bundled=False):
     """Radiative lifetime of every decaying state (one row per state).
 
     Columns: ``state, config, J, n, l, tau_s, tau_unc_s, linewidth_Hz``
     (Gamma / 2 pi = 1 / (2 pi tau)), ``source`` ("exp" or "theory"), ``ref``.
+
+    ``bundled=True`` reads the snapshot shipped with kamo directly (no cache, no
+    network, no warning) and raises ``KeyError`` if that species has no snapshot.
     """
-    tr = transition_rates(species, refresh)
+    tr = transition_rates(species, refresh, bundled)
     up = tr.drop_duplicates("state1").rename(columns={
         "state1": "state", "config1": "config", "J1": "J", "n1": "n", "l1": "l",
         "tau_ref": "ref"})
@@ -325,7 +382,8 @@ def hyperfine_constants(species="K1", refresh=False, bundled=False):
         unc = r["hyperfineExperimentUncertainty"]
         records.append(dict(
             iso=iso, state=state_label(r["stateConfiguration"], r["stateJ"]),
-            config=r["stateConfiguration"], J=_j_to_float(r["stateJ"]), n=n, l=l,
+            config=normalize_config(r["stateConfiguration"]),
+            J=_j_to_float(r["stateJ"]), n=n, l=l,
             A_theory_MHz=r["hyperfineTheory"], theory_ref=r["hyperfineTheoryRef"] or "",
             A_exp_MHz=r["hyperfineExperiment"],
             A_exp_unc_MHz=float(unc) if unc else np.nan,
@@ -356,31 +414,62 @@ def nuclear_data(species="K1", refresh=False, bundled=False):
         abundance=r["naturalAbundance"], half_life=r["halfLife"]) for r in rows])
 
 
-def write_snapshot(species="K1", datasets=("matrix_elements", "transition_rates",
-                                           "hyperfine_constants", "nuclears")):
+SNAPSHOT_DATASETS = ("matrix_elements", "transition_rates", "energies",
+                     "hyperfine_constants", "nuclears")
+"""Datasets :func:`write_snapshot` bundles by default. ``static_polarizabilities``
+is available but optional (pass it explicitly)."""
+
+
+def write_snapshot(species="K1", datasets=SNAPSHOT_DATASETS):
     """Re-fetch ``datasets`` for ``species`` and copy them into the bundled
-    snapshot directory (the offline fallback shipped with kamo)."""
+    snapshot directory (the offline fallback shipped with kamo).
+
+    Requires network access: raises ``ConnectionError`` if the portal cannot be
+    reached, rather than silently bundling stale data.
+    """
     fetchers = {"matrix_elements": matrix_elements, "transition_rates": transition_rates,
                 "energies": energies, "static_polarizabilities": static_polarizabilities,
                 "hyperfine_constants": hyperfine_constants, "nuclears": nuclear_data}
+    unknown = [n for n in datasets if n not in fetchers]
+    if unknown:
+        raise KeyError(f"Unknown dataset(s) {unknown}; "
+                       f"known: {sorted(fetchers)}.")
     _SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
     written = []
     for name in datasets:
-        fetchers[name](species, refresh=True)
         src = cache_dir() / f"{species}_{name}.json"
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            fetchers[name](species, refresh=True)
+        offline = [w for w in caught if "UDel portal unreachable" in str(w.message)]
+        for w in caught:                       # don't swallow unrelated warnings
+            if w not in offline:
+                warnings.warn_explicit(w.message, w.category, w.filename, w.lineno)
+        if offline or not src.exists():
+            raise ConnectionError(
+                f"Could not fetch {name!r} for {species!r} from the UDel portal "
+                f"({offline[0].message if offline else f'no response written to {src}'}); "
+                f"the bundled snapshot was left unchanged. Retry when online.")
         dst = _SNAPSHOT_DIR / src.name
         dst.write_text(src.read_text())
         written.append(dst)
     return written
 
 
-def energies(species="K1", refresh=False):
-    """Level energies in cm^-1 above the ground state."""
+def energies(species="K1", refresh=False, bundled=False):
+    """Level energies in cm^-1 above the ground state.
+
+    ``bundled=True`` reads the snapshot shipped with kamo directly (no cache, no
+    network, no warning) and raises ``KeyError`` if that species has no snapshot.
+    """
     rows = _element(species,
                     "energies { stateConfiguration stateTerm stateJ energy "
                     "energyUncertainty isFromTheory }",
-                    "energies", refresh)["energies"]
+                    "energies", refresh, bundled)["energies"]
+    if not rows:
+        raise KeyError(f"The UDel portal has no energies for {species!r}.")
     df = pd.DataFrame(rows)
+    df["stateConfiguration"] = [normalize_config(c_) for c_ in df.stateConfiguration]
     df.insert(0, "state", [state_label(c_, j) for c_, j in
                            zip(df.stateConfiguration, df.stateJ)])
     return df.rename(columns={"stateConfiguration": "config", "stateTerm": "term",
@@ -388,16 +477,21 @@ def energies(species="K1", refresh=False):
                               "energyUncertainty": "energy_unc_cm"})
 
 
-def static_polarizabilities(species="K1", refresh=False):
+def static_polarizabilities(species="K1", refresh=False, bundled=False):
     """Static scalar/tensor polarizabilities as displayed on the portal.
 
     Values are parsed from the display strings and are in the portal's display
-    units, which are 10^3 a.u. for some species (check against a known value).
+    units, which for the alkalis are 10^3 a.u. throughout (K 4s: "0.29025(25)"
+    is 290.25 a.u.); multiply by 1000.
+
+    ``bundled=True`` reads the snapshot shipped with kamo directly (no cache, no
+    network, no warning) and raises ``KeyError`` if that species has no snapshot.
     """
     rows = _element(species,
                     "staticPolarizabilities { stateConfiguration stateJ "
                     "alpha0Display alpha2Display }",
-                    "static_polarizabilities", refresh)["staticPolarizabilities"]
+                    "static_polarizabilities", refresh,
+                    bundled)["staticPolarizabilities"]
     records = []
     for r in rows:
         a0, a0_unc = parse_display_value(r["alpha0Display"])

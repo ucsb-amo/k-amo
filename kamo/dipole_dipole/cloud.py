@@ -37,7 +37,9 @@ class BECCloud:
         s-wave scattering length in Bohr radii.  Left as a free parameter:
         Potassium39.get_scattering_length reads a network drive and is not portable.
     mass : float, optional
-        Defaults to the K-39 mass.
+        Defaults to ``atom.mass``, or to the K-39 mass with no atom.
+    atom : optional
+        Any kamo alkali; only its mass is used.  Ignored when ``mass`` is given.
     temperature_K : float, optional
         Residual thermal component.  If given, the relative-velocity scale uses it;
         otherwise the mean-field (chemical-potential) scale is used.
@@ -45,12 +47,14 @@ class BECCloud:
 
     def __init__(self, N: float, trap_frequencies_Hz: Sequence[float],
                  a_s_bohr: float = 100.0, mass: Optional[float] = None,
-                 temperature_K: Optional[float] = None):
+                 temperature_K: Optional[float] = None, atom=None):
         self.N = float(N)
         self.trap_frequencies_Hz = np.asarray(trap_frequencies_Hz, dtype=float)
         if self.trap_frequencies_Hz.shape != (3,):
             raise ValueError("trap_frequencies_Hz must have three entries.")
         self.a_s_bohr = float(a_s_bohr)
+        if mass is None:
+            mass = getattr(atom, "mass", None)
         self.mass = float(c.m_K if mass is None else mass)
         self.temperature_K = temperature_K
 

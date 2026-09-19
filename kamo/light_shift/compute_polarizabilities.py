@@ -1,6 +1,5 @@
 import numpy as np
 from kamo import constants as c
-from kamo import Potassium39
 from kamo.light_shift.parse_portal_data import PortalDataParser
 from sympy.physics import wigner
 
@@ -9,21 +8,27 @@ class ComputePolarizabilities():
                 atom=None,
                 force_arc=False,
                 portal_data_parser:PortalDataParser = None,
-                n_max=16,
-                n_min=3,
+                n_max=None,
+                n_min=None,
                 include_core=True,
-                portal_species="K1"):
+                portal_species=None):
         """
         Args:
+            atom: a kamo atom (default kamo's default atom, 39K, built with
+            ``use_portal=not force_arc``).
             include_core (bool, optional): Add the ionic-core polarizability
             (see `return_ionic_core_contribution`) to the scalar part. Defaults
             to True.
+            n_min, n_max: see :class:`PortalDataParser` (defaults from the atom).
             portal_species (str, optional): UDel portal species whose matrix
-            elements are used when `force_arc` is False. Defaults to "K1".
+            elements are used when `force_arc` is False. Defaults to the
+            atom's (``"K1"`` for potassium).
         """
 
         if atom is None:
-            atom = Potassium39(use_portal=not force_arc)
+            from kamo.atom_properties.alkali import default_atom
+            from kamo.atom_properties.k39 import Potassium39
+            atom = default_atom() if not force_arc else Potassium39(use_portal=False)
 
         self.include_core = include_core
 
@@ -116,18 +121,31 @@ class ComputePolarizabilities():
 
     def return_ionic_core_contribution(self):
         '''Returns the ionic core contribution to the polarizability in a.u.
-        Numerical value from
-        https://journals.aps.org/pra/abstract/10.1103/PhysRevA.87.052504
+        (K+: 5.457, from https://journals.aps.org/pra/abstract/10.1103/PhysRevA.87.052504;
+        the other alkali ions from Safronova, Johnson & Derevianko, PRA 60,
+        4476 (1999), via ``atom.core_polarizability_au``).
 
         Treated as static: the core's resonances are near 20 eV, so its
         frequency dependence is negligible for wavelengths above ~300 nm.'''
-        return 5.457
+        core = getattr(self.atom, "core_polarizability_au", None)
+        if core is None or not np.isfinite(core):
+            from kamo.atom_properties.alkali import CORE_POLARIZABILITY_AU
+            core = CORE_POLARIZABILITY_AU.get(getattr(self.atom, "elementName", "K")[:2].rstrip("0123456789"), 5.457)
+        return float(core)
+
+    def _nuclear_spin(self, I):
+        """``I`` as given, else the atom's nuclear spin (3/2, the historical
+        default, for a calculator built without an atom)."""
+        if I is not None:
+            return I
+        return float(getattr(getattr(self, "atom", None), "I", 1.5))
 
     def compute_polarizability(self,
                                n,l,j,F,
                                wavelength_m,
-                               I=3/2):
+                               I=None):
         """Computes the hyperfine polarizabilities for the input state for the given wavelength(s).
+        I = self._nuclear_spin(I)
 
         Args:
             n (int): the n quantum number.
@@ -167,7 +185,7 @@ class ComputePolarizabilities():
                                         n,l,j,F,mF,
                                         wavelength_m,
                                         polarization=[1,0],
-                                        I=3/2):
+                                        I=None):
         """
         Computes the total hyperfine polarizability for the input state for the
         given wavelength(s). This number is proportional to the energy shift of the
@@ -179,12 +197,13 @@ class ComputePolarizabilities():
             j (float): the J quantum number
             F (float): the F quantum number.
             wavelength_m (ndarray): the wavelength of the light field.
-            I (float, optional): the nuclear spin of the atom. Defaults to 3/2.
+            I (float, optional): the nuclear spin of the atom. Defaults to the atom's.
 
         Returns:
             float: the complete polarizability in atomic units of the given hyperfine
             state.
-        """   
+        """
+        I = self._nuclear_spin(I)   
         
         wavelength_m = self._handle_wavelength_arraylike(wavelength_m)
 

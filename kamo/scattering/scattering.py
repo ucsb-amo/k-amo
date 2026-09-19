@@ -34,10 +34,14 @@ class ScatteringModel:
         per field); "mqdt" exposes the frame transform only (a(B) raises).
     dB : float
         Threshold sweep step (Gauss).
+    atom : optional
+        Must be 39K (the default); kamo.scattering has no data for any other
+        alkali and raises :class:`NotImplementedError` for one.
     """
 
-    def __init__(self, B_max: float = 1000.0, backend="empirical", dB: float = 0.05):
-        self.thresholds = K39Thresholds(B_max_gauss=B_max, dB_gauss=dB)
+    def __init__(self, B_max: float = 1000.0, backend="empirical", dB: float = 0.05,
+                 atom=None):
+        self.thresholds = K39Thresholds(B_max_gauss=B_max, dB_gauss=dB, atom=atom)
         self.backend = self._make_backend(backend)
 
     def _make_backend(self, backend):

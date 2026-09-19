@@ -1,4 +1,4 @@
-"""High-level, easy-to-use entry point for K39 multi-manifold structure.
+"""High-level, easy-to-use entry point for alkali multi-manifold structure.
 
 Example
 -------
@@ -41,6 +41,7 @@ def make_nlj_basis(
     l: int,
     n_range: int = 0,
     l_range: int = 1,
+    atom=None,
 ) -> List[Tuple[int, int, float]]:
     """Build a list of ``(n, l, j)`` manifold tuples centred on ``(n, l)``.
 
@@ -52,8 +53,9 @@ def make_nlj_basis(
     * all physically valid ``j'`` for each ``(n', l')``
       (i.e. ``j' = l' + 1/2`` and, for ``l' > 0``, also ``j' = l' - 1/2``).
 
-    K's core orbitals (3s, 3p, and everything below) are left out: they are
-    not valence states, and ARC gives them meaningless energies.
+    Core orbitals (for K: 3s, 3p, and everything below) are left out: they
+    are not valence states, and ARC gives them meaningless energies. Which n
+    are core comes from ``atom`` (default: kamo's default atom, 39K).
 
     Parameters
     ----------
@@ -65,6 +67,8 @@ def make_nlj_basis(
         Half-width of the n window (default 0 → only ``n``).
     l_range : int, optional
         Half-width of the l window (default 1 → ``l ± 1``).
+    atom : optional
+        The atom (or atom class) whose valence shell defines the core cut.
 
     Returns
     -------
@@ -84,8 +88,11 @@ def make_nlj_basis(
     >>> make_nlj_basis(59, 0, n_range=3, l_range=2)
     # matches pairinteraction default basis for Rydberg S states
     """
-    from kamo.atom_properties.hyperfine import lowest_valence_n
-
+    from kamo.atom_properties.alkali import lowest_valence_n as _lvn
+    if atom is None:
+        from kamo.atom_properties.k39 import Potassium39
+        atom = Potassium39                      # class attributes suffice
+    lowest_valence_n = lambda l: _lvn(atom, l)  # noqa: E731
     manifolds = []
     l_lo = max(0, l - l_range)
     l_hi = l + l_range
@@ -109,15 +116,16 @@ class AtomicStructure(StateLabelMixin):
     Parameters
     ----------
     manifolds : iterable of (n, l, j) tuples (or Manifold objects).
-    atom : kamo.Potassium39, optional
-        Reuse an existing ARC atom object.
+    atom : optional
+        The atom (default kamo's default atom, 39K); see
+        :class:`~.builder.HamiltonianBuilder`.
     energy_reference_nlj : (n, l, j), optional
         Fine-structure energy reference (defaults to first manifold).
     """
 
     def __init__(self, manifolds: Iterable, atom=None,
                  energy_reference_nlj=None):
-        self.basis = Basis(manifolds)
+        self.basis = Basis(manifolds, atom=atom)
         self.builder = HamiltonianBuilder(
             self.basis, atom=atom, energy_reference_nlj=energy_reference_nlj)
 
@@ -149,7 +157,7 @@ class AtomicStructure(StateLabelMixin):
         # n=59 Rydberg S-state with ±3 n shells and l up to 2
         >>> model = AtomicStructure.around(59, 0, n_range=3, l_range=2)
         """
-        manifolds = make_nlj_basis(n, l, n_range=n_range, l_range=l_range)
+        manifolds = make_nlj_basis(n, l, n_range=n_range, l_range=l_range, atom=atom)
         return cls(manifolds, atom=atom, energy_reference_nlj=energy_reference_nlj)
 
     def __getitem__(self, key):

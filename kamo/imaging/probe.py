@@ -6,7 +6,7 @@ independent -- parking the laser a distance ``x`` from their midpoint gives
 
     Delta_up = x + S/2,    Delta_dn = x - S/2,    S = splitting,
 
-for the K-39 operating point, where ``|up>`` is the LOWER-frequency transition of the
+at the K-39 operating point, where ``|up>`` is the LOWER-frequency transition of the
 pair (so the midpoint probe is BLUE of it and RED of ``|dn>``); swap the two if the
 caller labels them the other way round.  Either way it leaves one knob.  :class:`ProbeBeam` carries that geometry so nothing downstream
 has to recompute it or get the sign wrong.
@@ -35,6 +35,17 @@ Quick start
 ...     ground_dn=(4, 0, 1/2, -1/2, +1/2), excited_dn=(4, 1, 3/2, -3/2, +1/2),
 ...     s0_incident=0.335)
 >>> probe.delta_up, probe.delta_dn
+
+``atom`` is any kamo atom, not just 39K -- only its transition frequencies,
+linewidth and cross section are used.  Pass that atom's own state tuples::
+
+>>> from kamo import atom as kamo_atom
+>>> rb = kamo_atom("Rb87")
+>>> probe = ProbeBeam.from_midpoint(
+...     rb, B_gauss=520.58,
+...     ground_up=(5, 0, 1/2, -1/2, -1/2), excited_up=(5, 1, 3/2, -3/2, -1/2),
+...     ground_dn=(5, 0, 1/2, -1/2, +1/2), excited_dn=(5, 1, 3/2, -3/2, +1/2),
+...     s0_incident=0.335)
 """
 
 from __future__ import annotations

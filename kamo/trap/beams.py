@@ -489,7 +489,7 @@ class Tweezer(Beam):
     def from_trap_frequency(cls_or_self, f_radial_Hz: float, *,
                             polarizability_SI: Optional[float] = None,
                             atom=None, state=(4, 0, 0.5, 1, -1), B_direction=None,
-                            source: Optional[str] = None, nuclear_spin: float = 1.5,
+                            source: Optional[str] = None, nuclear_spin: Optional[float] = None,
                             mass: Optional[float] = None, **kw) -> "Tweezer":
         """The tweezer whose harmonic radial frequency is ``f_radial_Hz``.
 
@@ -541,7 +541,7 @@ class Tweezer(Beam):
                                  f"{use_portal}; give one or the other.")
             bhat = fr.as_unit_real_vector((0.0, 0.0, 1.0) if B_direction is None
                                           else B_direction, "B_direction")
-            alpha = StatePolarizability(state, source, nuclear_spin).alpha_SI(
+            alpha = StatePolarizability(state, source, nuclear_spin, atom=atom).alpha_SI(
                 t.wavelength_m, t.polarization, bhat)
         else:
             alpha = float(polarizability_SI)

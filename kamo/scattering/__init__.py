@@ -3,6 +3,14 @@
 Compute the complex s-wave scattering length ``a(B) = a_re - i a_im`` (Bohr) for
 a colliding pair of K39 4S1/2 atoms vs magnetic field, for any Zeeman channel.
 
+**39K only.**  Unlike the rest of kamo (which works for every alkali in
+:mod:`kamo.atom_properties.alkali`), the potentials, measured resonances and
+coupled-channels tables here are 39K data.  The entry points take ``atom=`` only
+to check it: :class:`ScatteringModel`, :class:`~.thresholds.K39Thresholds`,
+:class:`~.coupled_channels.CoupledChannels` and
+:func:`~.lookup.scattering_length` raise ``NotImplementedError`` for any other
+species, and states outside the 4S1/2 ``|F, mF>`` ladder raise ``ValueError``.
+
 Quick start
 -----------
 >>> from kamo.scattering import ScatteringModel
@@ -38,6 +46,7 @@ if TYPE_CHECKING:
     from .calibration import calibrate
     from .resonances import find_features, locate_pole, characterize
     from .lookup import scattering_length
+    from .thresholds import require_k39
 
 _lazy = {
     "ScatteringModel":          ".scattering",
@@ -51,6 +60,7 @@ _lazy = {
     "locate_pole":              ".resonances",
     "characterize":             ".resonances",
     "scattering_length":        ".lookup",
+    "require_k39":              ".thresholds",
 }
 
 

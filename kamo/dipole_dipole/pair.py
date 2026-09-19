@@ -58,6 +58,14 @@ SYMMETRIC = +1
 ANTISYMMETRIC = -1
 
 
+def _atom_mass(atom, transition=None) -> float:
+    """Mass (kg) of ``atom``, of the transition's atom, or of 39K."""
+    if atom is None and transition is not None:
+        atom = getattr(transition, "atom", None)
+    mass = getattr(atom, "mass", None)
+    return float(c.m_K if mass is None else mass)
+
+
 class PairPotential:
     """Molecular potential curves for two atoms on a closed sigma transition.
 
@@ -65,17 +73,21 @@ class PairPotential:
     ----------
     transition : CyclingTransition
     reduced_mass : float, optional
-        Defaults to m(K39) / 2.
+        Defaults to half the mass of ``atom``, of ``transition.atom`` when it has
+        one, or of K39.
+    atom : optional
+        Any kamo alkali; only its mass is used (``atom.mass``).  Defaults to the
+        atom the transition was built for (39K unless it says otherwise).
 
     All potentials are returned as *angular frequencies* (rad/s) relative to the
     bare single-atom resonance, matching the detuning convention used everywhere in
     this package.  Multiply by hbar for an energy.
     """
 
-    def __init__(self, transition, reduced_mass: Optional[float] = None):
+    def __init__(self, transition, reduced_mass: Optional[float] = None, atom=None):
         self.transition = transition
         if reduced_mass is None:
-            reduced_mass = c.m_K / 2.0
+            reduced_mass = _atom_mass(atom, transition) / 2.0
         self.reduced_mass = float(reduced_mass)
         self._d_hat = transition.d_hat
         self.magic_angle_rad = MAGIC_ANGLE_RAD

@@ -1,17 +1,25 @@
 """Utilities for formatting and labeling quantum states.
 
-:func:`state_label` is the one formatter every K39 state label goes through
-(sweep legends, :class:`~kamo.atom_properties.k39.Potassium39`, ...).  It
+:func:`state_label` is the one formatter every kamo state label goes through
+(sweep legends, :class:`~kamo.atom_properties.alkali.PortalAlkali`, ...).  It
 converts between the uncoupled ``(m_J, m_I)`` and coupled ``(F, m_F)`` labels
 with the manifold's Paschen-Back label map
 (:attr:`~.basis.Manifold.label_map`), then prints signed fractions, e.g.
 ``$4S_{1/2}|m_J=-1/2, m_I=+3/2\\rangle$``.
+
+Which basis a pair of magnetic quantum numbers is in is read from their
+values, given the nuclear spin (:func:`is_coupled`): ``m_J`` is always a
+half-integer and ``m_I`` has the parity of ``I``, while ``F`` and ``m_F`` have
+the parity of ``I + 1/2``. For half-integer ``I`` (K39, Rb87, ...) that is the
+familiar rule "integers are ``(F, m_F)``, half-integers ``(m_J, m_I)``"; for
+integer ``I`` (Li6, K40) it is the reverse. Every label function takes
+``atom=`` to say which atom's manifold is meant; the default is kamo's
+default atom (39K).
 """
 
 from __future__ import annotations
 
 import warnings
-from functools import lru_cache
 from typing import Optional, Tuple, Union
 
 # Spectroscopic (Russell-Saunders) orbital angular-momentum letters, l=0,1,2,...
@@ -24,6 +32,61 @@ _WARNED_NO_HYPERFINE: set = set()
 def _is_integer_valued(x: float) -> bool:
     """True if ``x`` is numerically an integer (e.g. an F quantum number)."""
     return float(x) == round(float(x))
+
+
+def _qn(x: float):
+    """``x`` rounded to the nearest half-integer, as an ``int`` when it is
+    integer-valued (so ``(F, m_F)`` keys are ints for half-integer I, as
+    they always were) and a ``float`` otherwise."""
+    r = round(2 * float(x)) / 2
+    return int(r) if r == int(r) else r
+
+
+def _is_half(x: float) -> bool:
+    return int(round(2 * float(x))) % 2 == 1
+
+
+def is_coupled(a, b, I: float) -> bool:
+    """True if ``(a, b)`` are coupled ``(F, m_F)`` labels for nuclear spin ``I``,
+    False if they are uncoupled ``(m_J, m_I)``.
+
+    ``m_I`` has the parity of ``I`` and ``m_F`` the parity of ``I + 1/2``, so
+    the second number decides. Raises ``ValueError`` if the pair is neither
+    (e.g. an integer with a half-integer for half-integer I).
+    """
+    a, b, I = float(a), float(b), float(I)
+    for x in (a, b):
+        if abs(2 * x - round(2 * x)) > 1e-9:
+            raise ValueError(f"magnetic quantum numbers must be integers or "
+                             f"half-integers; got {a!r}, {b!r}.")
+    I_half = _is_half(I)
+    if _is_half(b) == I_half:                 # b has the parity of I -> m_I
+        if not _is_half(a):                   # m_J must be a half-integer
+            raise ValueError(
+                f"({a!r}, {b!r}) is neither (F, m_F) nor (m_J, m_I) for "
+                f"I = {I:g}: m_J must be a half-integer.")
+        return False
+    if _is_half(a) != _is_half(b):            # F and m_F share a parity
+        kind = "integers" if I_half else "half-integers"
+        mi = "a half-integer" if I_half else "an integer"
+        raise ValueError(
+            f"({a!r}, {b!r}) is neither (F, m_F) nor (m_J, m_I) for I = {I:g}: "
+            f"F and m_F must both be {kind}, or m_J a half-integer with m_I {mi}.")
+    return True
+
+
+def _atom_of(obj):
+    """The atom an object was built for (``obj.atom``, ``obj.builder.atom`` or
+    ``obj.basis.atom``), or None."""
+    for path in (("atom",), ("builder", "atom"), ("basis", "atom")):
+        cur = obj
+        for name in path:
+            cur = getattr(cur, name, None)
+            if cur is None:
+                break
+        if cur is not None:
+            return cur
+    return None
 
 
 def _frac(x: float, signed: bool = True) -> str:
@@ -41,11 +104,26 @@ def _frac(x: float, signed: bool = True) -> str:
     return mag
 
 
-@lru_cache(maxsize=None)
-def _manifold(n: int, l: int, j: float):
-    """Shared :class:`~.basis.Manifold` ``(n, l, j)`` (validates ``j`` against ``l``)."""
+_MANIFOLDS: dict = {}
+
+
+def _manifold(n: int, l: int, j: float, atom=None):
+    """Shared :class:`~.basis.Manifold` ``(n, l, j)`` of ``atom`` (validates
+    ``j`` against ``l``). One cached manifold per species and ``(n, l, j)``;
+    ``atom=None`` means kamo's default atom."""
     from .basis import Manifold          # basis imports this module
-    return Manifold(n, l, j)
+    from kamo.atom_properties.alkali import default_atom, species_of
+    if atom is None:
+        atom = default_atom()
+    key = (int(n), int(l), round(float(j), 9), species_of(atom))
+    if key not in _MANIFOLDS:
+        _MANIFOLDS[key] = Manifold(n, l, j, atom=atom)
+    return _MANIFOLDS[key]
+
+
+def clear_manifold_cache():
+    """Forget every cached manifold (tests, or after changing an atom's data)."""
+    _MANIFOLDS.clear()
 
 
 def _term(n: int, l: int, j: float, tex: bool) -> str:
@@ -61,15 +139,19 @@ def _ket(names: Tuple[str, ...], values: Tuple[str, ...], tex: bool) -> str:
 
 
 def state_label(*state, basis: Optional[str] = None, math: bool = True,
-                term: bool = True, tex: bool = True) -> str:
-    r"""Label a K39 state, converting between coupled and uncoupled numbers.
+                term: bool = True, tex: bool = True, atom=None) -> str:
+    r"""Label a state, converting between coupled and uncoupled numbers.
 
     Parameters
     ----------
     *state : (n, l, j) or (n, l, j, a) or (n, l, j, a, b)
         Positional quantum numbers, or a single 3/4/5-tuple.  The basis of
-        ``a, b`` is read from their values: integers are the coupled
-        ``(F, m_F)``, half-integers the uncoupled ``(m_J, m_I)``.
+        ``a, b`` is read from their values with :func:`is_coupled`: for
+        half-integer nuclear spin, integers are the coupled ``(F, m_F)`` and
+        half-integers the uncoupled ``(m_J, m_I)``.
+    atom : optional
+        The atom whose manifold (nuclear spin, hyperfine order) the labels
+        refer to; default kamo's default atom (39K).
 
         * ``(n, l, j)`` -- bare term symbol.
         * ``(n, l, j, F)`` or ``(n, l, j, m_J)`` -- one-number ket.
@@ -130,6 +212,8 @@ def state_label(*state, basis: Optional[str] = None, math: bool = True,
         if basis is not None:
             raise ValueError("basis conversion needs both magnetic quantum "
                              "numbers (a 5-number state).")
+        # One number: F when it is an integer, m_J otherwise. (For integer I
+        # both F and m_J are half-integers; a lone half-integer reads as m_J.)
         a = state[3]
         if _is_integer_valued(a):
             ket = _ket(("F",), (_frac(a, signed=False),), tex)
@@ -137,15 +221,11 @@ def state_label(*state, basis: Optional[str] = None, math: bool = True,
             ket = _ket(("m_J",), (_frac(a),), tex)
     elif len(state) == 5:
         a, b = state[3], state[4]
-        coupled_in = _is_integer_valued(a)
-        if coupled_in != _is_integer_valued(b):
-            raise ValueError(
-                "both magnetic quantum numbers must be integers (F, m_F) or "
-                f"half-integers (m_J, m_I); got {a!r}, {b!r}.")
-        man = _manifold(n, l, j)
+        man = _manifold(n, l, j, atom=atom)
+        coupled_in = is_coupled(a, b, man.i_nuclear)
         try:
             if coupled_in:
-                F, mF = int(round(a)), int(round(b))
+                F, mF = _qn(a), _qn(b)
                 m_j, m_i = man.state_for(F, mF)
             else:
                 m_j, m_i = float(a), float(b)
@@ -221,7 +301,7 @@ def coupled_label(n: int, l: int, j: float, F: int, m_F: int) -> str:
     str
         Human-readable label, e.g. ``"|4,0,1/2; F=1, m_F=-1>"``.
     """
-    return f"|{n},{l},{_frac(j, signed=False)}; F={int(F)}, m_F={_frac(m_F)}>"
+    return f"|{n},{l},{_frac(j, signed=False)}; F={_frac(F, signed=False)}, m_F={_frac(m_F)}>"
 
 
 def both_labels(n: int, l: int, j: float, m_j: float, m_i: float,
@@ -248,7 +328,7 @@ def both_labels(n: int, l: int, j: float, m_j: float, m_i: float,
     """
     uncoup = uncoupled_label(n, l, j, m_j, m_i)
     if F is not None and m_F is not None:
-        return f"{uncoup} (F={int(F)}, m_F={_frac(m_F)})"
+        return f"{uncoup} (F={_frac(F, signed=False)}, m_F={_frac(m_F)})"
     return uncoup
 
 
@@ -326,11 +406,16 @@ class StateLabelMixin:
         model.state_label(4, 1, 1.5, 2, -2, basis="uncoupled")
         model.format_state(4, 0, 0.5, -0.5, 1.5)
 
-    Each method simply forwards to the corresponding module-level function
-    in :mod:`kamo.hamiltonian.state_labels`; ``self`` is unused.
+    Each method forwards to the corresponding module-level function in
+    :mod:`kamo.hamiltonian.state_labels`. :meth:`state_label` passes the
+    object's atom (``self.atom``, ``self.builder.atom`` or ``self.basis.atom``)
+    unless ``atom=`` is given.
     """
 
-    state_label = staticmethod(state_label)
+    def state_label(self, *state, **kwargs) -> str:
+        if kwargs.get("atom") is None:
+            kwargs["atom"] = _atom_of(self)
+        return state_label(*state, **kwargs)
     rs_state_label = staticmethod(rs_state_label)
     uncoupled_label = staticmethod(uncoupled_label)
     coupled_label = staticmethod(coupled_label)

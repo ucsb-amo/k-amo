@@ -23,6 +23,44 @@ import numpy as np
 # K39 electronic ground manifold 4S1/2
 GROUND = (4, 0, 0.5)
 
+#: Species tokens this package accepts (a kamo Potassium39 or a plain ARC one).
+K39_SPECIES = ("K39", "Potassium39")
+
+
+def require_k39(atom=None, what="kamo.scattering"):
+    """Return the 39K atom to compute with, or raise if ``atom`` is not 39K.
+
+    Everything in :mod:`kamo.scattering` -- the K2 singlet/triplet potentials,
+    the measured Feshbach resonances, the calibrated coupled-channels tables --
+    is 39K data, so the package is 39K only by design.  ``atom=None`` takes
+    kamo's default atom (39K) and checks it too.
+    """
+    from kamo.atom_properties.alkali import default_atom, species_of
+    if atom is None:
+        atom = default_atom()
+    species = species_of(atom)
+    if species not in K39_SPECIES:
+        raise NotImplementedError(
+            f"{what} is 39K only: its potentials, Feshbach resonances and "
+            f"coupled-channels tables are all 39K data, but {species} was "
+            "given.  There are no scattering-length data for other alkalis in "
+            "kamo (kamo.hamiltonian and kamo.trap are species-agnostic).")
+    return atom
+
+
+def require_k39_state(state, name="state"):
+    """Return ``(F, mF)`` as ints, or raise if it is not a 39K 4S1/2 sublevel
+    (``F`` in {1, 2}, ``|mF| <= F``)."""
+    try:
+        F, mF = int(state[0]), int(state[1])
+    except (TypeError, ValueError, IndexError):
+        raise ValueError(f"{name} must be an (F, mF) pair, got {state!r}") from None
+    if (F, mF) != (state[0], state[1]) or F not in (1, 2) or abs(mF) > F:
+        raise ValueError(f"{name} = {tuple(state)} is not a K39 4S1/2 ground state "
+                         "|F, mF> (F in {1, 2}, |mF| <= F); kamo.scattering is "
+                         "39K only.")
+    return F, mF
+
 
 class K39Thresholds:
     """Zeeman-state energies E(F, mF; B) for the K39 ground manifold.
@@ -34,20 +72,25 @@ class K39Thresholds:
         ``[0, B_max_gauss]``.
     dB_gauss : float
         Sweep step (Gauss); default 0.05 for smooth interpolation.
+    atom : optional
+        Must be 39K (the default); any other alkali raises
+        :class:`NotImplementedError` -- see :func:`require_k39`.
     """
 
-    def __init__(self, B_max_gauss: float = 1000.0, dB_gauss: float = 0.05):
+    def __init__(self, B_max_gauss: float = 1000.0, dB_gauss: float = 0.05, atom=None):
         from kamo.hamiltonian import AtomicStructure
+        self.atom = require_k39(atom, "kamo.scattering.K39Thresholds")
         self.B_max = float(B_max_gauss)
         self.dB = float(dB_gauss)
-        self.model = AtomicStructure([GROUND])
+        self.model = AtomicStructure([GROUND], atom=self.atom)
         self._sweep = self.model.magnetic_sweep(B_max=self.B_max, dB=self.dB)
 
     # -- single-atom energies ----------------------------------------------
     def energy(self, F: int, mF: int, B_gauss) -> "float | np.ndarray":
         """Energy (Hz) of ``|F, mF>`` at field ``B_gauss`` (scalar or array)."""
+        F, mF = require_k39_state((F, mF), "state")
         n, l, j = GROUND
-        return self._sweep.get_energy(n, l, j, int(F), int(mF), at=B_gauss)
+        return self._sweep.get_energy(n, l, j, F, mF, at=B_gauss)
 
     def pair_threshold(self, state_a: Tuple[int, int],
                        state_b: Tuple[int, int], B_gauss) -> "float | np.ndarray":

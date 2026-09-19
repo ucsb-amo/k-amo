@@ -17,6 +17,17 @@ closed two-level treatment is excellent.  The ground state is only about 97.5% p
 (residual hyperfine flip-flop admixture of mJ = +1/2, mI = -3/2), which opens a weak
 pi channel near -9 MHz -- inside a +/-10 linewidth window -- but at a relative
 strength of about 8e-5.
+
+Other alkalis
+-------------
+Nothing here is potassium-specific: pass ``atom=`` to
+:meth:`CyclingTransition.at_field` (any :mod:`kamo.atom_properties.alkali` atom)
+and the default manifolds, the default sigma-minus pair and the fine-structure
+splitting all come from that atom's valence shell -- nS1/2 + nP1/2 + nP3/2, and
+|nS1/2; mJ = -1/2, mI> -> |nP3/2; mJ = -3/2, mI> with the spectator mI of
+smallest magnitude the nuclear spin allows (-1/2 for half-integer I, -1 for
+integer I, i.e. Li6 and K40).  The module-level GROUND_STATE, EXCITED_STATE and
+DEFAULT_MANIFOLDS keep their 39K values for callers that import them.
 """
 
 from __future__ import annotations
@@ -29,14 +40,79 @@ import numpy as np
 from kamo import constants as c
 from .green_tensor import spherical_unit_vector
 
-# Default states for the k-team high-field cycling transition.
+# Default states for the k-team high-field cycling transition (39K).  Kept for
+# callers that import them; with an ``atom`` the same states are built from that
+# atom's valence shell by default_states() / default_manifolds().
 GROUND_STATE = (4, 0, 0.5, -0.5, -0.5)
 EXCITED_STATE = (4, 1, 1.5, -1.5, -0.5)
 DEFAULT_MANIFOLDS = [(4, 0, 0.5), (4, 1, 0.5), (4, 1, 1.5)]
 
 # 4P3/2 - 4P1/2 splitting, released by a fine-structure-changing collision.
-# Computed from ARC at construction; this is only the fallback.
+# Computed from the atom at construction; this is only the 39K fallback.
 _K39_FINE_STRUCTURE_HZ = 1.7301e12
+
+
+def _ground_n(atom) -> int:
+    """Principal quantum number of ``atom``'s ground state (39K: 4)."""
+    ground = getattr(atom, "ground_state", None)
+    if ground is not None:
+        return int(ground[0])
+    return int(atom.groundStateN)
+
+
+def _spectator_m_i(atom) -> float:
+    """Spectator nuclear projection of the default sigma-minus pair.
+
+    The transition is closed for any m_I, so take the negative m_I of smallest
+    magnitude the atom's nuclear spin allows: -1/2 for half-integer I (39K,
+    Rb87, Cs133, ...) and -1 for integer I (Li6, K40), which also has the m_I
+    parity kamo's uncoupled state tuples require.
+    """
+    from kamo.atom_properties.alkali import nuclear_spin
+    return -0.5 if round(2 * nuclear_spin(atom)) % 2 else -1.0
+
+
+def default_manifolds(atom=None) -> list:
+    """``[nS1/2, nP1/2, nP3/2]`` of ``atom``'s valence shell.
+
+    ``atom=None`` gives :data:`DEFAULT_MANIFOLDS` (39K: 4S1/2 + 4P1/2 + 4P3/2).
+    """
+    if atom is None:
+        return list(DEFAULT_MANIFOLDS)
+    n0 = _ground_n(atom)
+    return [(n0, 0, 0.5), (n0, 1, 0.5), (n0, 1, 1.5)]
+
+
+def default_states(atom=None):
+    """``(ground, excited)`` of ``atom``'s default sigma-minus pair,
+    |nS1/2; mJ = -1/2, mI> -> |nP3/2; mJ = -3/2, mI> with the spectator mI of
+    :func:`_spectator_m_i`.
+
+    ``atom=None`` gives (:data:`GROUND_STATE`, :data:`EXCITED_STATE`).
+    """
+    if atom is None:
+        return GROUND_STATE, EXCITED_STATE
+    n0 = _ground_n(atom)
+    m_i = _spectator_m_i(atom)
+    return (n0, 0, 0.5, -0.5, m_i), (n0, 1, 1.5, -1.5, m_i)
+
+
+def fine_structure_hz(atom, n, l=1) -> float:
+    """``(n l 3/2) - (n l 1/2)`` splitting of ``atom``, in Hz.
+
+    The atom's transition frequency where it has one, else its tabulated levels
+    (``getEnergy(n, l, 3/2) - getEnergy(n, l, 1/2)``, eV -> Hz), else the 39K
+    literal :data:`_K39_FINE_STRUCTURE_HZ`.
+    """
+    try:
+        return abs(float(atom.getTransitionFrequency(n, l, 0.5, n, l, 1.5)))
+    except Exception:
+        pass
+    try:
+        de_eV = atom.getEnergy(n, l, 1.5) - atom.getEnergy(n, l, 0.5)
+        return abs(float(de_eV) * c.e / c.h)
+    except Exception:
+        return _K39_FINE_STRUCTURE_HZ
 
 
 @dataclass
@@ -77,12 +153,15 @@ class CyclingTransition:
         Paschen-Back assumption.
     channels : list of CompetingChannel
     fine_structure_Hz : float
-        4P3/2 - 4P1/2 splitting, the energy released by an FCC event.
+        nP3/2 - nP1/2 splitting (39K: 4P), the energy released by an FCC event.
+    atom : optional
+        The atom the parameters were extracted for (``None`` when the object is
+        built by hand); :meth:`at_field` always fills it in.
     """
 
     def __init__(self, B_gauss, ground, excited, q, f0_Hz, d_Cm, Gamma,
                  wavelength_m, ground_purity, excited_purity, channels,
-                 fine_structure_Hz):
+                 fine_structure_Hz, atom=None):
         self.B_gauss = float(B_gauss)
         self.ground = tuple(ground)
         self.excited = tuple(excited)
@@ -95,36 +174,50 @@ class CyclingTransition:
         self.excited_purity = float(excited_purity)
         self.channels = list(channels)
         self.fine_structure_Hz = float(fine_structure_Hz)
+        self.atom = atom
 
     # ------------------------------------------------------------------ build
     @classmethod
     def at_field(cls, B_gauss: float = 520.6,
-                 ground: tuple = GROUND_STATE,
-                 excited: tuple = EXCITED_STATE,
+                 ground: Optional[tuple] = None,
+                 excited: Optional[tuple] = None,
                  q: int = -1,
                  manifolds: Optional[list] = None,
-                 model=None) -> "CyclingTransition":
+                 model=None,
+                 atom=None) -> "CyclingTransition":
         """Diagonalise H0 + Zeeman at B_gauss and extract the two-level parameters.
 
         Parameters
         ----------
         B_gauss : float
             Static field in Gauss.
-        ground, excited : 5-tuple
-            (n, l, j, m_j, m_i) of the driven states.
+        ground, excited : 5-tuple, optional
+            (n, l, j, m_j, m_i) of the driven states.  Default: the atom's
+            sigma-minus pair (:func:`default_states`; 39K: GROUND_STATE ->
+            EXCITED_STATE).
         q : int
             Spherical component driven (-1 = sigma-minus).
         manifolds : list of (n, l, j), optional
-            Basis for the diagonalisation.  Defaults to 4S1/2 + 4P1/2 + 4P3/2.
+            Basis for the diagonalisation.  Defaults to the atom's
+            nS1/2 + nP1/2 + nP3/2 (39K: 4S1/2 + 4P1/2 + 4P3/2).
         model : AtomicStructure, optional
             Reuse an existing structure (avoids re-opening the ARC database).
+            Its atom is the one used, in preference to ``atom``.
+        atom : optional
+            Any kamo alkali (:mod:`kamo.atom_properties.alkali`); default 39K.
+            Fixes the default manifolds, the default states and the
+            fine-structure splitting.
         """
         from kamo.hamiltonian import AtomicStructure
 
         if model is None:
-            model = AtomicStructure(manifolds or DEFAULT_MANIFOLDS)
+            model = AtomicStructure(manifolds or default_manifolds(atom), atom=atom)
         basis = model.basis
         atom = model.builder.atom
+        if ground is None:
+            ground = default_states(atom)[0]
+        if excited is None:
+            excited = default_states(atom)[1]
 
         E, V = model.solve(B_gauss=B_gauss)
 
@@ -186,13 +279,10 @@ class CyclingTransition:
         Gamma = 1.0 / atom.getStateLifetime(n_e, l_e, j_e)
         lam = atom.getTransitionWavelength(ground[0], ground[1], ground[2],
                                            n_e, l_e, j_e)
-        try:
-            fs = abs(atom.getTransitionFrequency(n_e, l_e, 0.5, n_e, l_e, 1.5))
-        except Exception:
-            fs = _K39_FINE_STRUCTURE_HZ
+        fs = fine_structure_hz(atom, n_e, l_e)
 
         return cls(B_gauss, ground, excited, q, f0, d_Cm, Gamma, abs(lam),
-                   g_pur, e_pur, channels, fs)
+                   g_pur, e_pur, channels, fs, atom=atom)
 
     # -------------------------------------------------------------- properties
     @property
@@ -301,7 +391,9 @@ class CyclingTransition:
         lines.append("  lambda      = %.4f nm  (k = %.4e 1/m)"
                      % (self.wavelength_m * 1e9, self.k))
         lines.append("  I_sat       = %.4f mW/cm^2" % (self.I_sat / 10.0))
-        lines.append("  4P3/2-4P1/2 = %.4f THz" % (self.fine_structure_Hz / 1e12))
+        n_e = int(self.excited[0])
+        lines.append("  %dP3/2-%dP1/2 = %.4f THz"
+                     % (n_e, n_e, self.fine_structure_Hz / 1e12))
         lines.append("  competing channels:")
         lines.append("    %-8s %-16s %16s %12s %13s"
                      % ("pol", "(mJ, mI)", "detuning (MHz)", "|d| (e*a0)", "|d|^2 ratio"))

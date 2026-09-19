@@ -141,12 +141,13 @@ def channel_polarizability_components(j: float, jf: float, d_au: float,
 
 
 def residual_polarizability_au(nlj: NLJ, f_laser_Hz: float, present: Iterable[NLJ],
-                               B_gauss: float = 0.0) -> Tuple[float, float, float]:
+                               B_gauss: float = 0.0, atom=None) -> Tuple[float, float, float]:
     """``(alpha_s, alpha_v, alpha_t)`` in a.u. of manifold ``nlj`` from the channels
-    whose final manifold is *not* in ``present``, plus the ionic core (scalar)."""
+    whose final manifold is *not* in ``present``, plus the ionic core (scalar).
+    ``atom`` selects the species (default kamo's default atom, 39K)."""
     from .laser_model import state_channels
     present = set(present)
-    sc = state_channels(nlj, f_laser_Hz, B_gauss=B_gauss)
+    sc = state_channels(nlj, f_laser_Hz, B_gauss=B_gauss, atom=atom)
     a_s, a_v, a_t = sc.core_au, 0.0, 0.0
     for ch in sc.channels:
         if ch.manifold in present:
@@ -245,7 +246,8 @@ def perturbative_stark_operator(builder, beam, polarization="pi", B_gauss: float
         present = [man.nlj for man, _ in slices]
         for man, _ in slices:
             residual_au[man.nlj] = residual_polarizability_au(man.nlj, f_L, present,
-                                                              B_gauss=B_gauss)
+                                                              B_gauss=B_gauss,
+                                                              atom=builder.atom)
         S_res = builder.laser_stark_operator(
             beam, polarizabilities=_ResidualPolarizabilities(residual_au),
             polarization=polarization)

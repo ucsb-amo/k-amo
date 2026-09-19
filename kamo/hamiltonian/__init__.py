@@ -1,4 +1,9 @@
-"""kamo.hamiltonian — multi-manifold basis construction & diagonalization for K39.
+"""kamo.hamiltonian — multi-manifold basis construction & diagonalization.
+
+Species-agnostic: every entry point takes ``atom=`` (any alkali from
+:mod:`kamo.atom_properties.alkali`, e.g. ``atom("Rb87")``) and reads the nuclear
+spin, g-factors, hyperfine constants and levels from it.  The default is kamo's
+default atom, 39K, so existing K39 code is unchanged.
 
 Build a basis from any number of (n, l, j) fine-structure manifolds, assemble
 Hamiltonian terms (fine + hyperfine, paramagnetic Zeeman, optional diamagnetic,
@@ -8,15 +13,25 @@ through avoided crossings.
 
 Quick start
 -----------
+A worked tour (manifolds, magnetic and laser sweeps, the plot arguments,
+state labels and the adiabatic connection, other atoms) is the notebook
+``kamo/hamiltonian/examples/structure_demo.ipynb``.
+
 >>> from kamo.hamiltonian import AtomicStructure
->>> model = AtomicStructure([(4, 0, 0.5), (4, 1, 0.5), (4, 1, 1.5)])
+>>> model = AtomicStructure([(4, 0, 0.5), (4, 1, 0.5), (4, 1, 1.5)])   # 39K
 >>> res = model.magnetic_sweep(B_max=600.0)     # 0.1 G steps by default
+
+Another alkali is the same call with its own manifolds and ``atom=``::
+
+>>> from kamo import atom
+>>> rb = atom("Rb87")
+>>> model = AtomicStructure([(5, 0, 0.5), (5, 1, 0.5), (5, 1, 1.5)], atom=rb)
 
 Light shifts: three laser models, ``"rwa"`` (non-perturbative, rotating frame),
 ``"perturbative"`` (second-order sum over the exact field eigenstates, both
 rotating terms; ``perturbative.py``) and ``"stark"`` (fine-structure
 polarizabilities).  ``"auto"`` is the default everywhere: ``choose_laser_model``
-picks between the first two for a transition (``Potassium39``), ``choose_sweep_model``
+picks between the first two for a transition (any kamo atom), ``choose_sweep_model``
 for a whole-basis sweep (``sweep_intensity``, ``laser_sweep``), and
 ``light_shift_basis`` builds the basis from the channels that carry the
 polarizability at the laser wavelength (see ``laser_model.py``).
@@ -37,6 +52,7 @@ from .perturbative import (perturbative_stark_operator, sweep_intensity_perturba
                            choose_sweep_model, SweepModelChoice)
 from .state_labels import (state_label, uncoupled_label, coupled_label,
                            both_labels, format_state, rs_state_label,
+                           is_coupled, clear_manifold_cache,
                            StateLabelMixin)
 from .spectroscopy import (
     field_from_splitting,
@@ -75,6 +91,8 @@ __all__ = [
     "MagneticSweepResult",
     "LaserSweepResult",
     "state_label",
+    "is_coupled",
+    "clear_manifold_cache",
     "uncoupled_label",
     "coupled_label",
     "both_labels",

@@ -1,3 +1,5 @@
+"""Dead legacy helper: one-off concatenation of the UDel portal's K CSV dumps from hard-coded lab paths, superseded by :mod:`kamo.light_shift.udel_portal`; nothing in kamo calls it."""
+
 import os
 import pandas as pd
 

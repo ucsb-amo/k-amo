@@ -1,4 +1,4 @@
-"""Hamiltonian construction for multi-manifold K39 structure calculations.
+"""Hamiltonian construction for multi-manifold alkali structure calculations.
 
 All operators are returned as dense Hermitian ``numpy`` arrays in the uncoupled
 |n l j; m_j m_i> basis (see :mod:`kamo.hamiltonian.basis`).  **Energies are in
@@ -147,8 +147,11 @@ class HamiltonianBuilder:
     Parameters
     ----------
     basis : Basis
-    atom : kamo.Potassium39, optional
-        Reuse an existing ARC atom object (avoids re-opening the ARC database).
+    atom : optional
+        The atom (a :class:`~kamo.atom_properties.alkali.PortalAlkali`, or any
+        ARC atom) supplying energies, matrix elements, nuclear spin,
+        g-factors and hyperfine constants. Default: the basis's atom, else
+        kamo's default atom (39K). Its nuclear spin must match the basis.
     energy_reference_nlj : (n, l, j), optional
         Fine-structure energies are reported relative to this manifold so that
         matrix entries stay small.  Defaults to the first manifold in the basis.
@@ -157,10 +160,18 @@ class HamiltonianBuilder:
     def __init__(self, basis: Basis, atom=None, energy_reference_nlj=None):
         self.basis = basis
         if atom is None:
-            from kamo import Potassium39
-            atom = Potassium39()
+            atom = getattr(basis, "atom", None)
+        if atom is None:
+            from kamo.atom_properties.alkali import default_atom
+            atom = default_atom()
         self.atom = atom
         self.I = basis.manifolds[0].i_nuclear
+        I_atom = getattr(atom, "I", None)
+        if I_atom is not None and abs(float(I_atom) - self.I) > 1e-9:
+            raise ValueError(
+                f"Basis was built for nuclear spin I = {self.I:g} but the atom "
+                f"{type(atom).__name__} has I = {float(I_atom):g}. Pass the atom "
+                "to Basis / AtomicStructure so its manifolds match.")
 
         if energy_reference_nlj is None:
             m0 = basis.manifolds[0]
@@ -173,24 +184,25 @@ class HamiltonianBuilder:
     def h0(self, include_quadrupole: bool = True) -> np.ndarray:
         """Field-free Hamiltonian (Hz): fine structure + hyperfine ``A (I.J)``.
 
-        A and B come from :func:`kamo.atom_properties.hyperfine.hyperfine_constants`
-        (39K): the measured value unless theory is at least twice as precise,
-        with n*^3 extrapolation beyond both. A manifold with no A at all
-        (l >= 3, core orbitals) gets none, with a warning.
+        A and B come from the atom (:func:`kamo.atom_properties.alkali.hyperfine`;
+        for 39K :func:`kamo.atom_properties.hyperfine.hyperfine_constants`, the
+        measured value unless theory is at least twice as precise, with n*^3
+        extrapolation beyond both). A manifold with no A at all (l >= 3, core
+        orbitals) gets none, with a warning.
 
         Parameters
         ----------
         include_quadrupole : bool
             Add the electric-quadrupole ``B`` term (j > 1/2 manifolds).
         """
-        from kamo.atom_properties.hyperfine import hyperfine_constants
+        from kamo.atom_properties.alkali import hyperfine
 
         dim = self.basis.dim
         H = np.zeros((dim, dim), dtype=float)
 
         for man, sl in self.basis.manifold_slices():
             e_fine = self.atom.getEnergy(man.n, man.l, man.j) * _EV_TO_HZ - self._e_ref_hz
-            hfs = hyperfine_constants(man.n, man.l, man.j)
+            hfs = hyperfine(self.atom, man.n, man.l, man.j)
             if not hfs.has_A:
                 warnings.warn(f"No hyperfine A constant for manifold {man.nlj}; "
                               "leaving its hyperfine structure out.")
@@ -243,11 +255,13 @@ class HamiltonianBuilder:
 
         H = mu_B B (g_J m_j + g_I m_i)/h, diagonal in the uncoupled basis.
         """
+        from kamo.atom_properties.alkali import electronic_g, nuclear_g
         dim = self.basis.dim
         diag = np.zeros(dim, dtype=float)
+        g_i = nuclear_g(self.atom)
         for s in self.basis:
-            g_j = c.get_total_electronic_g_factor(s.l, s.j, n=s.n)
-            val = c.mu_b * (g_j * s.m_j + c.g_I * s.m_i) / c.h  # Hz per Tesla
+            g_j = electronic_g(self.atom, s.l, s.j, n=s.n)
+            val = c.mu_b * (g_j * s.m_j + g_i * s.m_i) / c.h  # Hz per Tesla
             diag[s.index] = val * _GAUSS_TO_TESLA               # Hz per Gauss
         return np.diag(diag)
 
@@ -526,7 +540,8 @@ class HamiltonianBuilder:
             # built with use_portal=False (or is a plain ARC atom).
             polarizabilities = ComputePolarizabilities(
                 atom=self.atom,
-                force_arc=not getattr(self.atom, "use_portal", False))
+                force_arc=not getattr(self.atom, "use_portal", False),
+                portal_species=getattr(self.atom, "portal_species", "K1"))
 
         pol = self._resolve_polarization(polarization)
         beta, gamma = _polarization_geometry(pol)

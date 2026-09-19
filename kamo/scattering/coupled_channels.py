@@ -186,9 +186,10 @@ class CoupledChannels:
                  r_fine: float = 30.0, h_max: float = 0.4,
                  potentials: str = 'tiemann',
                  delta_S: Optional[float] = None, delta_T: Optional[float] = None,
-                 C12_S=None, C12_T=None, thresholds: Optional[K39Thresholds] = None):
+                 C12_S=None, C12_T=None, thresholds: Optional[K39Thresholds] = None,
+                 atom=None):
         self.th = thresholds if thresholds is not None else K39Thresholds(
-            B_max_gauss=B_max, dB_gauss=dB)
+            B_max_gauss=B_max, dB_gauss=dB, atom=atom)
         self.mu = _pot.MU_AU
         self.C6 = _pot.C6_AU
         self.r_in, self.r_out, self.h = r_in, r_out, h
