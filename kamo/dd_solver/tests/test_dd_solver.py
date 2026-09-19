@@ -23,12 +23,16 @@ import pytest
 from kamo.dd_solver import (Configuration, GaussianProfile, OperatingPoint,
                             sample_configuration, solve)
 from kamo.dd_solver import detect, ensemble, fields, rg, spectrum, stats, vector
-from kamo.dd_solver.cloud import uniform_sphere_configuration
+from kamo.dd_solver.cloud import SpecReferenceWarning, uniform_sphere_configuration
 from kamo.dd_solver.kernel import (kernel_pair, near_field_hamiltonian, scalar_couplings,
                                    gamma_matrix)
 from kamo.dd_solver.solver import (SanityWarning, independent_solution,
                                    single_atom_cross_section)
 from kamo.dd_solver.system import GaussianBeam, PlaneWave
+
+# spec_reference is used deliberately below to reproduce the build spec's numbers;
+# test_noninteracting_limit checks that it warns.
+pytestmark = pytest.mark.filterwarnings("ignore::kamo.dd_solver.cloud.SpecReferenceWarning")
 
 XI_L = 1 / (6 * np.pi * np.sqrt(3.0))
 XI_C = 1 / (12 * np.pi * np.sqrt(3.0))
@@ -213,9 +217,22 @@ def test_T12_gp_regression():
         assert abs(q.sigma[1] * 1e9 / sr_t - 1) < 0.01
         assert abs(q.sigma[0] * 1e6 / sx_t - 1) < 0.01
         assert abs(q.eta_eff(lam) / eta_t - 1) < 0.01
-        # the non-interacting limit of the correct functional is the textbook one
+
+
+def test_noninteracting_limit():
+    """With no interactions the Gaussian ansatz is exact: rms width sqrt(hbar/2 m omega)
+    on every axis (333.0 nm / 1.181 um at 1170 / 93 Hz).  The build spec's doubled
+    kinetic term gives 2^{1/4} wider, and spec_reference must say so (2026-09-19)."""
+    import kamo.constants as kc
+    m, hb = kc.m_K, kc.hbar
+    wr, wx = 2 * np.pi * 1170.0, 2 * np.pi * 93.0
+    exact = np.array([np.sqrt(hb / (2 * m * wx)), *[np.sqrt(hb / (2 * m * wr))] * 2])
+    assert abs(exact[1] * 1e9 - 333.0) < 0.05 and abs(exact[0] * 1e6 - 1.181) < 5e-4
     p0 = GaussianProfile.operating_point(1, a_bohr=0.0)
-    assert abs(p0.sigma[1] / np.sqrt(hb / (2 * m * wr)) - 1) < 1e-6
+    np.testing.assert_allclose(p0.sigma, exact, rtol=1e-6)
+    with pytest.warns(SpecReferenceWarning):
+        q0 = GaussianProfile.spec_reference(1)          # N - 1 = 0: no interaction
+    np.testing.assert_allclose(q0.sigma, 2 ** 0.25 * exact, rtol=1e-5)
 
 
 def test_T13_xi_tail(op):

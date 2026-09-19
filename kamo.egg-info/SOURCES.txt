@@ -34,6 +34,7 @@ kamo/dd_solver/fields.py
 kamo/dd_solver/kernel.py
 kamo/dd_solver/rg.py
 kamo/dd_solver/solver.py
+kamo/dd_solver/spectrum.py
 kamo/dd_solver/stats.py
 kamo/dd_solver/system.py
 kamo/dd_solver/vector.py
@@ -163,6 +164,7 @@ kamo/spin/tests/test_spin.py
 kamo/trap/__init__.py
 kamo/trap/beams.py
 kamo/trap/cloud.py
+kamo/trap/cloud_optics.py
 kamo/trap/dvr.py
 kamo/trap/finite_temperature.py
 kamo/trap/frames.py
@@ -182,6 +184,7 @@ kamo/trap/examples/__init__.py
 kamo/trap/examples/trap_demo.ipynb
 kamo/trap/tests/__init__.py
 kamo/trap/tests/test_beams.py
+kamo/trap/tests/test_cloud_optics.py
 kamo/trap/tests/test_dvr.py
 kamo/trap/tests/test_frames.py
 kamo/trap/tests/test_gaussian.py
