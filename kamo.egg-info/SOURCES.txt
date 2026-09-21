@@ -73,6 +73,7 @@ kamo/hamiltonian/tests/test_state_labels.py
 kamo/imaging/__init__.py
 kamo/imaging/_backend.py
 kamo/imaging/bpm.py
+kamo/imaging/cross_sections.py
 kamo/imaging/farfield.py
 kamo/imaging/grid.py
 kamo/imaging/plotting.py
@@ -82,6 +83,7 @@ kamo/imaging/response.py
 kamo/imaging/examples/__init__.py
 kamo/imaging/examples/pci_and_spin_readout.ipynb
 kamo/imaging/tests/__init__.py
+kamo/imaging/tests/test_cross_sections.py
 kamo/imaging/tests/test_imaging.py
 kamo/light_shift/__init__.py
 kamo/light_shift/compute_light_shift.py
