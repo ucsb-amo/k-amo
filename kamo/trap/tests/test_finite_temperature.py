@@ -532,3 +532,64 @@ class TestOperatingPoint:
         T = temperature_from_condensate_fraction(tweezer_trap(), N, 0.90, solver=tweezer_30nK.solver,
                                                  bracket_K=(28e-9, 48e-9), rtol=2e-2)
         assert 30e-9 < T < 46e-9
+
+
+# ---------------------------------------------------------------- thermodynamics, energy cap
+
+def _exact_harmonic_thermo(N, T_K, w):
+    """Exact ideal-gas (N_0, E - N E_0, S / k) in a harmonic trap by direct level sums."""
+    from scipy.optimize import brentq
+    kT = kc.kB * T_K
+    n_max = [int(40 * kT / (kc.hbar * wi)) + 2 for wi in w]
+    e = [kc.hbar * wi * np.arange(n) for wi, n in zip(w, n_max)]
+    E = (e[0][:, None, None] + e[1][None, :, None] + e[2][None, None, :]).ravel()
+    E = np.sort(E[E < 40 * kT])
+
+    def count(x):                                   # x = -mu / kT > 0, measured from E_0
+        return np.sum(1.0 / np.expm1(E / kT + x)) - N
+
+    x = brentq(count, 1e-12, 50.0, xtol=1e-14)
+    f = 1.0 / np.expm1(E / kT + x)
+    return f[0], float(np.sum(f * E)), float(np.sum(np.log1p(f) + f * np.log1p(1.0 / f)))
+
+
+def test_energy_and_entropy_match_the_exact_ideal_harmonic_sums():
+    trap = harmonic()
+    w = 2 * np.pi * np.asarray(F_LAB)
+    solver = ideal_solver(trap)
+    E_0 = 0.5 * kc.hbar * float(np.sum(w))
+    for T in (60e-9, 100e-9):
+        c = solver.solve(N, T)
+        _, E_ex, S_ex = _exact_harmonic_thermo(N, T, w)
+        r = c.info
+        assert r.energy_J - N * E_0 == pytest.approx(E_ex, rel=0.02)
+        # the exact sum includes the condensate mode's own entropy, ~ln(N_0); the model has none
+        assert r.entropy_kB == pytest.approx(S_ex, rel=0.02, abs=2 * np.log(N))
+        assert c.energy_per_atom == pytest.approx(r.energy_per_atom_J)
+
+
+def test_energy_and_entropy_obey_dE_equals_T_dS():
+    solver = ideal_solver(harmonic())
+    T, dT = 80e-9, 2e-9
+    lo, hi = solver.solve(N, T - dT).info, solver.solve(N, T + dT).info
+    assert (hi.energy_J - lo.energy_J) / (kc.kB * (hi.entropy_kB - lo.entropy_kB)) == pytest.approx(T, rel=0.02)
+
+
+def test_eta_cap_is_inert_at_the_operating_point_and_bounds_a_deep_trap():
+    trap = tweezer_trap()
+    s = FiniteTemperatureSolver(trap, a_scattering=0.0, condensate="noninteracting")
+    depth = trap.trap_depth_J()
+    T_op = 30.4e-9
+    assert s._cut(T_op) == ((1 - s.basin_epsilon) * depth, False)            # eta 6.8 < 14: untouched
+    cut, capped = s._cut(depth / kc.kB / 40.0)                               # eta = 40
+    assert capped and cut == pytest.approx(14.0 * depth / 40.0)
+    deep = trap.rescaled(9.0)
+    sd = FiniteTemperatureSolver(deep, a_scattering=0.0, condensate="noninteracting")
+    T = 100e-9
+    half_capped = sd._thermal_half_widths(T, deep.trap_frequencies())
+    half_basin = deep.basin_half_widths(epsilon=sd.basin_epsilon)
+    assert np.all(half_capped < 0.5 * half_basin)                            # the box that made it unsolvable
+    assert FiniteTemperatureSolver(deep, a_scattering=0.0, condensate="noninteracting",
+                                   eta_cap=None)._cut(T)[1] is False
+    with pytest.raises(ValueError, match="eta_cap"):
+        FiniteTemperatureSolver(deep, eta_cap=2.0)

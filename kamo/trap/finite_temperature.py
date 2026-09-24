@@ -94,6 +94,29 @@ models warn and need no spectrum.  ``mode="thomas-fermi"`` is refused at T > 0 (
 radius is already 2x wrong at this operating point); the bimodal fit model the lab uses
 is :class:`~kamo.BEC_properties.thermal.IdealHarmonicBoseGas`.
 
+The energy cap (2026-09-19)
+---------------------------
+In a deep trap the basin below the escape saddle is enormous next to the cloud (the
+8.9x-squeezed lab tweezer: 4.3 uK deep, basin +-120 um along the beam, cloud a few um),
+and a box holding it at the condensate's spacing needs 2e8 points.  The distribution is
+therefore cut at ``min(V_esc, V_min + eta_cap kT)``.  For a 3D harmonic Boltzmann gas the
+fraction of atoms above ``eta kT`` is ``Gamma(3, eta) / 2``: 9e-5 at the default
+``eta_cap = 14``, under the 1e-4 containment gate.  The cap binds only for ``eta > 14``
+(the 1 kHz lab tweezer below 21 nK), where the true truncation is smaller still;
+``result.energy_cap_bound`` says whether it did, and ``result.eta`` is always the true
+``U / kT``.
+
+Energy and entropy (2026-09-19)
+-------------------------------
+``result.energy_J`` and ``result.entropy_kB`` (and the per-atom views) are the totals of
+the same state: the condensate's GP energy, plus ``sum_n f_n E_n^HF`` over the discrete
+levels and the matching phase-space integral of ``p^2 / 2m + V_eff`` over the tail; the
+entropy is ``sum [(1 + f) ln(1 + f) - f ln f]`` over the same thermal states (the
+condensate mode carries none).  The condensate-thermal interaction ``2 g n_0 n_th`` is
+counted once, through the HF energies; thermal-thermal ``g n_th^2`` is dropped, like
+everywhere else in the one-way model.  These are what connect two traps: entropy is
+conserved by a slow ramp, energy is what a sudden one changes.
+
 What is reported
 ----------------
 :class:`FiniteTemperatureResult` carries the loop history, ``eta``, the whole-cloud
@@ -244,6 +267,31 @@ class _TailCache:
     def total(self, mu) -> float:
         """``N_tail(mu)``."""
         return float(np.sum(self._sum(mu), dtype=np.float64)) * self.pref * self.dV
+
+    def thermodynamics(self, mu):
+        """``(E_tail (J), S_tail / k_B)`` at ``mu``: the phase-space integrals of the HF
+        single-particle energy ``p^2 / 2m + V_eff`` and of the per-state entropy over the
+        same window as :meth:`total`.  One 32-step pass, not cached (called once a solve)."""
+        d = (self.V_eff - mu) / self.kT
+        span, _ = _capped_span(self._s_lo, self._span, d)
+        E_acc, S_acc = 0.0, 0.0
+        with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+            for x, w in zip(_GL_X, _GL_W):
+                s = self._s_lo + span * x
+                arg = s * s + d
+                if self.statistics == "bose":
+                    f = 1.0 / np.expm1(arg)
+                    ent = np.log1p(f) + f * np.log1p(1.0 / f)       # (1 + f) ln(1 + f) - f ln f
+                else:
+                    f = np.exp(-arg)
+                    ent = f * (1.0 + arg)                            # f (1 - ln f)
+                ok = (span > 0) & np.isfinite(f) & (f > 0)
+                wt = w * span * s * s
+                E_acc = E_acc + np.where(ok, wt * f * (s * s * self.kT + self.V_eff), 0.0)
+                S_acc = S_acc + np.where(ok & np.isfinite(ent), wt * ent, 0.0)
+        scale = self.pref * self.dV
+        return (float(np.sum(E_acc, dtype=np.float64)) * scale,
+                float(np.sum(S_acc, dtype=np.float64)) * scale)
 
     def total_untruncated(self, mu) -> float:
         """``N_tail`` on the same nodes with the escape truncation lifted (the
@@ -527,12 +575,17 @@ class ProductSpectrum:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             specs = ni.axis_spectra(n_grid_max=int(axis_n_grid_max))
-            cloud = ni.solve()
+            try:
+                cloud = ni.solve()
+            except ConvergenceError:             # the 3D block eigensolver stalls on some deep,
+                cloud = None                     # high-aspect traps (the 8.9x-squeezed lab tweezer)
         tf = trap.trap_frequencies()
         mn = trap.minimum()
         r0 = mn.position
-        E3, psi3, g3 = cloud.info.energies_3d, cloud.info.psi_3d, cloud.grid
         ladders = [_dvr_ladder(s) for s in specs]
+        if cloud is None:
+            return cls._from_trap_separable(trap, specs, ladders, tf, mn)
+        E3, psi3, g3 = cloud.info.energies_3d, cloud.info.psi_3d, cloud.grid
         E_0 = float(E3[0])
         # the 1D box of a long axis auto-grows (to +-540 um for the lab tweezer) and is
         # capped at axis_n_grid_max points; the sinc-DVR ladder is exact while the
@@ -557,6 +610,30 @@ class ProductSpectrum:
             cal.bo_prediction = float(np.sqrt(arg)) if arg > 0 else np.nan
         return cls(E_0, ladders, tf.axes, r0, trap.mass, harmonic=False, calibration=cal,
                    separability_index=cloud.info.separability_index)
+
+    @classmethod
+    def _from_trap_separable(cls, trap, specs, ladders, tf, mn) -> "ProductSpectrum":
+        """The fallback when the 3D calibration solve does not converge: the separable
+        ground energy as the anchor, and the soft axis rescaled by the Born-Oppenheimer
+        factor (predicted 0.9406 against a fitted 0.9377 for the 1 kHz lab tweezer, and
+        closer to 1 the deeper the trap, which is where this path is taken)."""
+        E_0_sep = mn.potential_J + float(sum(s.bound_energies[0] - s.V_min for s in specs))
+        factors, bo = np.ones(3), np.nan
+        V0 = getattr(trap, "light_potential_J", None)
+        if V0 is not None:
+            depth = -float(np.asarray(V0(*mn.position)))
+            soft = int(np.argmin([lad.eps[1] if lad.n_bound > 1 else np.inf for lad in ladders]))
+            arg = 1.0 - kc.hbar * float(np.sum(np.delete(tf.omega, soft))) / (2.0 * depth)
+            if arg > 0:
+                bo = float(np.sqrt(arg))
+                factors[soft] = bo
+        warnings.warn("the 3D calibration solve did not converge; using the separable ground "
+                      f"energy and the Born-Oppenheimer factor {bo:.4f} on the soft axis instead "
+                      "of fitted ones.", ModelValidityWarning, stacklevel=4)
+        cal = Calibration(factors, np.full(3, -1), np.full(3, np.nan),
+                          {k: "3D solve did not converge" for k in range(3)}, bo, E_0_sep, 0)
+        return cls(E_0_sep, ladders, tf.axes, mn.position, trap.mass, harmonic=False,
+                   calibration=cal, separability_index=np.nan)
 
     @staticmethod
     def _calibrate(ladders, tf, r0, E3, psi3, g3, overlap_gate) -> Calibration:
@@ -630,7 +707,13 @@ class FiniteTemperatureResult:
     seam_count_ratio: float = np.nan       #: discrete / Weyl count at E_cut (0.87 for the lab tweezer)
     quantum_fraction: float = np.nan       #: N_discrete / N_th
     min_level_margin: float = np.nan       #: min_n (E_n - mu) / kT over the discrete levels
-    eta: float = np.nan                    #: (V_esc - V_min) / kT
+    eta: float = np.nan                    #: (V_esc - V_min) / kT, the true depth even when the cap bound
+    eta_cap: float = np.nan                #: the solver's eta_cap (NaN: off)
+    energy_cap_bound: bool = False         #: was the distribution cut at eta_cap kT instead of the saddle
+    energy_J: float = np.nan               #: total energy of the N atoms (absolute, J); see the module docstring
+    entropy_kB: float = np.nan             #: total entropy / k_B
+    energy_condensate_J: float = np.nan    #: the condensate's share of energy_J
+    N_atoms: float = np.nan                #: N of the solve, for the per-atom views
     truncation_fraction: float = np.nan    #: 1 - N_th / N_th(untruncated tail), whole cloud; a lower bound
     tail_fraction: float = np.nan          #: N_tail / N_th
     passes: int = 0
@@ -657,6 +740,14 @@ class FiniteTemperatureResult:
     @property
     def T_nK(self) -> float:
         return self.T_K * 1e9
+
+    @property
+    def energy_per_atom_J(self) -> float:
+        return self.energy_J / self.N_atoms
+
+    @property
+    def entropy_per_atom_kB(self) -> float:
+        return self.entropy_kB / self.N_atoms
 
     @property
     def trustworthy(self) -> bool:
@@ -713,7 +804,9 @@ class _SolveContext:
     g: float
     mass: float
     V_min: float
-    V_esc: float
+    V_esc: float               #: where the distribution is cut: the saddle, or V_min + eta_cap kT
+    depth: float               #: the true escape depth (J; inf for a HarmonicTrap)
+    capped: bool               #: did eta_cap bind
     hw_max: float
     grid: TrapGrid
     V: np.ndarray
@@ -771,6 +864,9 @@ class FiniteTemperatureSolver:
     n_thermal_widths : float
         HarmonicTrap box half-width in thermal (or ground-state) rms widths (6: +-4
         leaves 6e-5 per axis outside, at the containment gate).
+    eta_cap : float or None
+        Cut the distribution at ``min(V_esc, V_min + eta_cap kT)`` (14: 9e-5 of a harmonic
+        Boltzmann gas lies above it).  What lets a deep trap fit on a grid; None: off.
     n_max_total : int
         Point budget for the shared grid; above it a ValueError names the geometry.
         The box grows like ``T^{3/2}`` for a HarmonicTrap (the lab-frequency trap
@@ -795,6 +891,7 @@ class FiniteTemperatureSolver:
                  axis_n_grid_max: int = 2401, basin_epsilon: float = BASIN_EPSILON,
                  mean_field_feedback: bool = False, max_passes: int = 8, mixing: float = 1.0,
                  tol: float = 1e-4, n_thermal_widths: float = 6.0, n_max_total: int = 4_000_000,
+                 eta_cap: Optional[float] = 14.0,
                  grid: Optional[TrapGrid] = None, n_condensate_min: float = N_CONDENSATE_MIN,
                  condensate_options: Optional[dict] = None, strict: bool = True):
         if condensate not in CONDENSATE_MODELS:
@@ -823,12 +920,18 @@ class FiniteTemperatureSolver:
         self.tol = float(tol)
         self.n_thermal_widths = float(n_thermal_widths)
         self.n_max_total = int(n_max_total)
+        if eta_cap is not None and not eta_cap >= 5.0:
+            raise ValueError("eta_cap must be >= 5 (or None): below that the cap itself truncates "
+                             "the cloud by more than 10%")
+        self.eta_cap = None if eta_cap is None else float(eta_cap)
         self.grid = grid
         self.n_condensate_min = float(n_condensate_min)
         self.condensate_options = dict(condensate_options or {})
         self.strict = bool(strict)
         self._spectrum: Optional[ProductSpectrum] = None
-        self._grid_cache = None                 # (grid, V, basin, V_esc)
+        self._grid_cache = None                 # (grid, V, basin, V_esc, cut key)
+        self._E_cond = np.nan                   # energy of the last condensate solve (J)
+        self._shifts = np.empty(0)              # level shifts of the converged state
         self._ideal: Optional[_IdealGroundState] = None
         self._psi_last = None                   # (grid, psi) of the last condensate solve
         self._fallbacks = 0
@@ -853,11 +956,25 @@ class FiniteTemperatureSolver:
     def _thermal_half_widths(self, T_K: float, tf) -> np.ndarray:
         """Half-widths of the box the thermal cloud needs: the basin of a bounded trap,
         ``n_thermal_widths`` thermal (or ground-state) rms widths of a HarmonicTrap."""
-        if np.isfinite(self.trap.trap_depth_J()):
-            return self.trap.basin_half_widths(epsilon=self.basin_epsilon)
+        depth = self.trap.trap_depth_J()
+        if np.isfinite(depth):
+            cut, capped = self._cut(T_K)
+            return self.trap.basin_half_widths(epsilon=(1.0 - cut / depth) if capped
+                                               else self.basin_epsilon)
         kT = kc.kB * float(T_K)
         var = np.maximum(kT / (tf.mass * tf.omega ** 2), kc.hbar / (2.0 * tf.mass * tf.omega))
         return self.n_thermal_widths * np.sqrt((tf.axes ** 2).T @ var)
+
+    def _cut(self, T_K: float):
+        """``(energy above V_min where the distribution is cut (J), did eta_cap bind)``."""
+        depth = float(self.trap.trap_depth_J())
+        if not np.isfinite(depth):
+            return np.inf, False
+        full = (1.0 - self.basin_epsilon) * depth
+        if self.eta_cap is None:
+            return full, False
+        cap = self.eta_cap * kc.kB * float(T_K)
+        return (cap, True) if cap < full else (full, False)
 
     def grid_for(self, N: float, T_K: float) -> TrapGrid:
         """The shared grid: the GP spacing on a box holding both the condensate and the
@@ -875,14 +992,14 @@ class FiniteTemperatureSolver:
         dx = base.d
         if not np.isfinite(trap.trap_depth_J()):    # a HarmonicTrap: the basin is the whole box
             grid = self._grid_from(mn.position, half, dx)
-            self._grid_cache = (grid,) + self._potential(grid, strict=False)
+            self._grid_cache = (grid,) + self._potential(grid, T_K, strict=False)
             return grid
         for _ in range(5):                       # grow any face the basin still touches
             grid = self._grid_from(mn.position, half, dx)
-            V, basin, V_esc = self._potential(grid, strict=False)
+            V, basin, V_esc, key = self._potential(grid, T_K, strict=False)
             faces = touched_axes(basin)
             if not faces.any():
-                self._grid_cache = (grid, V, basin, V_esc)
+                self._grid_cache = (grid, V, basin, V_esc, key)
                 return grid
             half = half * np.where(faces, 1.3, 1.0)
         raise ConvergenceError("the basin of the trap still touches a face of the shared grid "
@@ -901,18 +1018,25 @@ class FiniteTemperatureSolver:
                              "n_thermal_widths (HarmonicTrap), or pin grid=.")
         return TrapGrid.around(r0, half, n)
 
-    def _potential(self, grid, strict: bool = True):
+    def _potential(self, grid, T_K: float, strict: bool = True):
+        """``(V, basin, V_cut, key)`` on ``grid``; the cut depends on T through eta_cap."""
         trap = self.trap
         mn = trap.minimum()
         V = np.broadcast_to(np.asarray(trap.potential_J(grid.X, grid.Y, grid.Z), dtype=float),
                             grid.shape).copy()
-        V_esc = mn.potential_J + float(trap.trap_depth_J())
-        basin = basin_mask(V, grid, mn.position, V_esc, epsilon=self.basin_epsilon)
+        cut, capped = self._cut(T_K)
+        key = (capped, float(cut) if capped else 0.0)
+        if capped:                               # well below the saddle: no leak to guard against
+            V_esc = mn.potential_J + cut
+            basin = basin_mask(V, grid, mn.position, V_esc)
+        else:
+            V_esc = mn.potential_J + float(trap.trap_depth_J())
+            basin = basin_mask(V, grid, mn.position, V_esc, epsilon=self.basin_epsilon)
         if strict and np.isfinite(V_esc) and touched_axes(basin).any():
             raise ConvergenceError("the basin of the trap touches a face of the given grid: the "
                                    "box does not hold the whole region below the escape energy "
                                    "(or the mask leaked through the saddle; raise basin_epsilon).")
-        return V, basin, V_esc
+        return V, basin, V_esc, key
 
     def _ideal_ground_state(self, grid) -> _IdealGroundState:
         """The GP solver's ``a = 0`` ground state on this grid; cached per grid."""
@@ -932,9 +1056,12 @@ class FiniteTemperatureSolver:
             raise TrapTooShallowError("the trap has no bound minimum to hold a cloud")
         a = self._scattering_length()
         grid = self.grid_for(N, T_K)
-        if self._grid_cache is None or self._grid_cache[0] is not grid:
-            self._grid_cache = (grid,) + self._potential(grid)
-        _, V, basin, V_esc = self._grid_cache
+        cut, capped = self._cut(T_K)
+        key = (capped, float(cut) if capped else 0.0)
+        if (self._grid_cache is None or self._grid_cache[0] is not grid
+                or self._grid_cache[4] != key):
+            self._grid_cache = (grid,) + self._potential(grid, T_K)
+        _, V, basin, V_esc, _ = self._grid_cache
         if self._psi_last is not None and self._psi_last[0] is not grid:
             self._psi_last = None                   # a new box: the warm start does not transfer
         ideal = self._ideal_ground_state(grid)
@@ -950,7 +1077,8 @@ class FiniteTemperatureSolver:
             spec, E_0 = None, ideal.energy_J
             E_cut, E_top, E_lev, excited = np.nan, np.nan, np.empty(0), np.empty(0, dtype=int)
         return _SolveContext(N=N, T_K=T_K, kT=kc.kB * T_K, a=a, g=ia.coupling_g(a, trap.mass),
-                             mass=trap.mass, V_min=mn.potential_J, V_esc=V_esc, hw_max=hw_max,
+                             mass=trap.mass, V_min=mn.potential_J, V_esc=V_esc,
+                             depth=float(trap.trap_depth_J()), capped=capped, hw_max=hw_max,
                              grid=grid, V=V, basin=basin, Vb=V[basin], spec=spec, E_0=E_0,
                              E_cut=E_cut, E_top=E_top, E_lev=E_lev, excited=excited, ideal=ideal)
 
@@ -985,6 +1113,7 @@ class FiniteTemperatureSolver:
         if N_0 < self.n_condensate_min:
             ideal = ctx.ideal
             mu_GP = ideal.energy_J + ctx.g * N_0 * ideal.inverse_volume
+            self._E_cond = N_0 * (ideal.energy_J + 0.5 * ctx.g * N_0 * ideal.inverse_volume)
             return ideal.density, mu_GP, None, "ideal-ground-state"
         V_extra = 2.0 * ctx.g * n_th if (self.mean_field_feedback and n_th is not None) else None
         psi0 = self._psi_last[1] if self._psi_last is not None else None
@@ -994,6 +1123,7 @@ class FiniteTemperatureSolver:
         if psi0 is not None and not c.info.warm_start:
             self._fallbacks += 1
         self._psi_last = (ctx.grid, c.info.psi)
+        self._E_cond = N_0 * c.energy_per_atom
         return c.density_grid / N_0, c.chemical_potential, c.info, self.condensate
 
     def _R(self, ctx: _SolveContext, N_0: float, mu_GP: float, shifts, tail: _TailCache) -> float:
@@ -1093,6 +1223,9 @@ class FiniteTemperatureSolver:
                 raise ConvergenceError("R(N_0) is not increasing at the root for this attractive "
                                        "cloud; the equilibrium is not unique here.")
         mu = ctx.mu_of(N_0, mu_GP)
+        self._shifts = shifts
+        if ctx.g == 0.0 or not np.isfinite(self._E_cond):    # no condensate solve ran
+            self._E_cond = N_0 * ideal.energy_J
         result.condensate_model = label
         result.mu_J, result.mu_GP_J = mu, mu_GP
         result.warm_start_fallbacks = self._fallbacks
@@ -1109,7 +1242,22 @@ class FiniteTemperatureSolver:
         tail_total = tail.total(mu)
         N_th = disc_total + tail_total
         result.E_0_J, result.E_cut_J, result.n_discrete = ctx.E_0, ctx.E_cut, int(ctx.excited.size)
-        result.eta = (ctx.V_esc - ctx.V_min) / ctx.kT
+        result.eta = (ctx.depth if np.isfinite(ctx.depth) else np.inf) / ctx.kT
+        result.eta_cap = np.nan if self.eta_cap is None else self.eta_cap
+        result.energy_cap_bound, result.N_atoms = ctx.capped, ctx.N
+        E_tail, S_tail = tail.thermodynamics(mu)
+        if self.thermal == "boltzmann" or ctx.excited.size == 0:
+            E_disc = S_disc = 0.0
+        else:
+            e_n = ctx.E_exc + self._shifts
+            with np.errstate(over="ignore"):
+                f_n = 1.0 / np.expm1((e_n - mu) / ctx.kT)
+            pos = f_n > 0
+            E_disc = float(np.sum(f_n * e_n))
+            S_disc = float(np.sum(np.log1p(f_n[pos]) + f_n[pos] * np.log1p(1.0 / f_n[pos])))
+        E_cond = 0.0 if self.thermal == "boltzmann" else float(self._E_cond)
+        result.energy_condensate_J = E_cond
+        result.energy_J, result.entropy_kB = E_cond + E_disc + E_tail, S_disc + S_tail
         result.quantum_fraction = disc_total / N_th if N_th > 0 else np.nan
         result.tail_fraction = tail_total / N_th if N_th > 0 else np.nan
         result.truncation_fraction = (0.0 if not np.isfinite(ctx.V_esc)
@@ -1180,7 +1328,7 @@ class FiniteTemperatureSolver:
         if not T_K > 0:
             raise ValueError("T_K must be > 0 here; solve(..., T_K=0) uses the ground-state solvers")
         ctx = self._prepare(N, T_K)
-        self._fallbacks = 0
+        self._fallbacks, self._E_cond, self._shifts = 0, np.nan, np.empty(0)
         result = FiniteTemperatureResult(T_K=T_K, thermal_model=self.thermal,
                                          condensate_model=self.condensate,
                                          mean_field_feedback=self.mean_field_feedback,
@@ -1193,7 +1341,8 @@ class FiniteTemperatureSolver:
         self._warn(result)
         result.wall_time_s = time.perf_counter() - t_start
         return TrapCloud(ctx.grid, n_0 + n_th, N, self.trap, mode=self.condensate,
-                         chemical_potential_J=mu, V_min_J=ctx.V_min, energy_per_atom_J=float("nan"),
+                         chemical_potential_J=mu, V_min_J=ctx.V_min,
+                         energy_per_atom_J=result.energy_J / N,
                          a_scattering=ctx.a, info=result, T_K=T_K, density_condensate=n_0,
                          density_thermal=n_th)
 

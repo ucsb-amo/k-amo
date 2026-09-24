@@ -181,11 +181,13 @@ kamo/trap/thin_lens.py
 kamo/trap/thomas_fermi.py
 kamo/trap/trap.py
 kamo/trap/examples/__init__.py
+kamo/trap/examples/_add_finite_temperature_cells.py
 kamo/trap/examples/trap_demo.ipynb
 kamo/trap/tests/__init__.py
 kamo/trap/tests/test_beams.py
 kamo/trap/tests/test_cloud_optics.py
 kamo/trap/tests/test_dvr.py
+kamo/trap/tests/test_finite_temperature.py
 kamo/trap/tests/test_frames.py
 kamo/trap/tests/test_gaussian.py
 kamo/trap/tests/test_gp.py
