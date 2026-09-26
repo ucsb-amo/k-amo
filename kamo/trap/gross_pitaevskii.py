@@ -48,8 +48,10 @@ fp32 error grows like ``sqrt(n) eps``; this solver is a fixed-point iteration
 whose residual floors near ``eps``, so fp32 caps it around 1e-6, above the 1e-8
 gate.  ``allow_single=True`` accepts that.
 
-Finite-T seam: ``V_extra`` (J; callable or array on the grid) is added to the
-potential -- ``2 g n_thermal`` in a Popov/HF loop run outside the solver.
+``V_extra`` (J; callable or array on the grid) is added to the potential: the
+finite-temperature solver in :mod:`kamo.trap.finite_temperature` passes
+``2 g n_thermal`` through it (with ``mean_field_feedback``) on a pinned grid, and
+warm-starts each pass with ``psi0=``.
 """
 
 from __future__ import annotations
@@ -95,6 +97,8 @@ class GPResult:
     edge_fraction: float = float("nan") #: face density / peak density
     backend: str = "numpy"
     precision: str = "double"
+    warm_start: bool = False            #: started from a given psi0 (imaginary time skipped)
+    psi: Optional[np.ndarray] = field(default=None, repr=False)  #: the normalized order parameter on the grid
 
 
 def _fast_even(n: int) -> int:
@@ -151,6 +155,12 @@ class GrossPitaevskiiSolver:
     strict : bool
         Raise :class:`~kamo.trap.cloud.ConvergenceError` if the gate is missed
         (default); otherwise warn.
+
+    ``solve(N, V_extra, psi0=...)`` warm-starts from a previous order parameter on
+    the pinned ``grid`` (an array, or a TrapCloud from this solver): imaginary time
+    is skipped and the polish runs from ``psi0``, 2.5-3x faster when the change
+    since is small (a new ``V_extra`` or ``N`` in a Hartree-Fock loop).  If the polish
+    misses the gate from there, the solve restarts cold once and warns.
     """
 
     def __init__(self, trap, *, a_scattering: Optional[float] = None,
@@ -179,10 +189,22 @@ class GrossPitaevskiiSolver:
         self.strict = bool(strict)
 
     # -------------------------------------------------------------- solve
-    def solve(self, N: float, V_extra=None) -> TrapCloud:
+    def solve(self, N: float, V_extra=None, *, psi0=None) -> TrapCloud:
         N = float(N)
         if not N > 0:
             raise ValueError(f"N must be positive; got {N}")
+        if psi0 is not None:
+            if self.grid is None:
+                raise ValueError("psi0 needs a pinned grid: pass grid= to the solver")
+            if hasattr(psi0, "density_grid"):                 # a TrapCloud
+                info0 = getattr(psi0, "info", None)
+                start = getattr(info0, "psi", None)
+                if start is None:
+                    start = np.sqrt(np.clip(psi0.density_grid, 0.0, None) / psi0.N)
+                psi0 = start
+            psi0 = np.asarray(psi0)
+            if psi0.shape != self.grid.shape:
+                raise ValueError(f"psi0 shape {psi0.shape} != grid {self.grid.shape}")
         trap = self.trap
         m = trap.mass
         a = ia.trap_scattering_length(trap, self.a_scattering)
@@ -210,31 +232,28 @@ class GrossPitaevskiiSolver:
         w_k = var.widths                                   # 1/e density radii, principal axes
 
         if self.grid is not None:
-            psi, info = self._run(self.grid, N, a, m, r0, V_min, V_esc, tf, w_k, V_extra)
             grid = self.grid
+            if psi0 is not None:
+                try:
+                    psi, info = self._run(grid, N, a, m, r0, V_min, V_esc, tf, w_k, V_extra,
+                                          psi0=psi0)
+                    ok = info.residual < self.residual_tol
+                except ConvergenceError:
+                    ok = False
+                if not ok:
+                    warnings.warn("the warm start did not reach residual_tol; restarting from "
+                                  "the variational Gaussian.", UserWarning, stacklevel=2)
+                    psi0 = None
+            if psi0 is None:
+                psi, info = self._run(grid, N, a, m, r0, V_min, V_esc, tf, w_k, V_extra)
             if info.edge_fraction >= 1e-8:
                 warnings.warn(f"the condensate reaches the face of the given grid "
                               f"({info.edge_fraction:.1e} of its peak).", UserWarning,
                               stacklevel=2)
         else:
-            sig_lab = np.sqrt((tf.axes ** 2).T @ (w_k / np.sqrt(2.0)) ** 2)
-            if a > 0:
-                xi = 1.0 / np.sqrt(8.0 * np.pi * var.peak_density * a)
-                R_lab = np.sqrt((tf.axes ** 2).T @ var.tf_radii ** 2)
-            else:
-                xi, R_lab = np.inf, np.zeros(3)
-            dx = np.minimum(xi, sig_lab) / self.points_per_scale
-            half = self.box_factor * np.maximum(4.0 * sig_lab, R_lab)
+            dx, half = self._spacing_and_half_widths(var, a, tf)
             for growth in range(self.max_growth + 1):
-                n = []
-                for h, d in zip(half, dx):
-                    k = _fast_even(np.ceil(2.0 * h / d))
-                    if k > self.n_max:
-                        warnings.warn(f"grid capped at n_max = {self.n_max} points per axis "
-                                      f"(wanted {k}).", UserWarning, stacklevel=2)
-                        k = self.n_max - self.n_max % 2
-                    n.append(k)
-                grid = TrapGrid.around(r0, half, n)
+                grid = self._grid_from(r0, half, dx)
                 psi, info = self._run(grid, N, a, m, r0, V_min, V_esc, tf, w_k, V_extra)
                 info.box_growths = growth
                 if info.edge_fraction < 1e-8:
@@ -252,8 +271,52 @@ class GrossPitaevskiiSolver:
                          V_min_J=V_min, energy_per_atom_J=V_min + E, a_scattering=a,
                          info=info)
 
+    # -------------------------------------------------------- grid sizing
+    def _spacing_and_half_widths(self, var, a, tf):
+        """``(dx, half)`` per lab axis (m): ``min(xi, sigma) / points_per_scale`` and
+        ``box_factor * max(4 sigma, R_TF)`` from the variational cloud."""
+        w_k = var.widths
+        sig_lab = np.sqrt((tf.axes ** 2).T @ (w_k / np.sqrt(2.0)) ** 2)
+        if a > 0:
+            xi = 1.0 / np.sqrt(8.0 * np.pi * var.peak_density * a)
+            R_lab = np.sqrt((tf.axes ** 2).T @ var.tf_radii ** 2)
+        else:
+            xi, R_lab = np.inf, np.zeros(3)
+        dx = np.minimum(xi, sig_lab) / self.points_per_scale
+        half = self.box_factor * np.maximum(4.0 * sig_lab, R_lab)
+        return dx, half
+
+    def _grid_from(self, r0, half, dx) -> TrapGrid:
+        n = []
+        for h, d in zip(half, dx):
+            k = _fast_even(np.ceil(2.0 * h / d))
+            if k > self.n_max:
+                warnings.warn(f"grid capped at n_max = {self.n_max} points per axis "
+                              f"(wanted {k}).", UserWarning, stacklevel=3)
+                k = self.n_max - self.n_max % 2
+            n.append(k)
+        return TrapGrid.around(r0, half, n)
+
+    def grid_for(self, N: float, *, half_widths=None) -> TrapGrid:
+        """The grid ``solve(N)`` would start from (before any box growth): the GP
+        spacing rule, on ``half_widths`` (m, lab axes) if given -- e.g. a box that
+        must also hold a thermal cloud -- else the GP's own box."""
+        trap = self.trap
+        a = ia.trap_scattering_length(trap, self.a_scattering)
+        mn, tf = trap.minimum(), trap.trap_frequencies()
+        if not (mn.converged and tf.is_bound):
+            raise TrapTooShallowError("the trap has no bound minimum to size a grid from")
+        var = GaussianVariationalCloud(float(N), tf.omega, a, mass=trap.mass)
+        if var.collapsed:
+            raise CollapseError(f"N = {N:.0f} at a = {a / kc.a0:+.2f} a0 collapses "
+                                "(no Gaussian minimum to size a grid from)")
+        dx, half = self._spacing_and_half_widths(var, a, tf)
+        if half_widths is not None:
+            half = np.broadcast_to(np.asarray(half_widths, dtype=float), (3,))
+        return self._grid_from(mn.position, half, dx)
+
     # ----------------------------------------------------------- the core
-    def _run(self, grid: TrapGrid, N, a, m, r0, V_min, V_esc, tf, w_k, V_extra):
+    def _run(self, grid: TrapGrid, N, a, m, r0, V_min, V_esc, tf, w_k, V_extra, psi0=None):
         bk, hbar = self.backend, kc.hbar
         V = np.broadcast_to(np.asarray(self.trap.potential_J(grid.X, grid.Y, grid.Z),
                                        dtype=float), grid.shape)
@@ -272,10 +335,13 @@ class GrossPitaevskiiSolver:
         dV = grid.dV
 
         D = (grid.X - r0[0], grid.Y - r0[1], grid.Z - r0[2])
-        p = [tf.axes[k, 0] * D[0] + tf.axes[k, 1] * D[1] + tf.axes[k, 2] * D[2] for k in range(3)]
-        psi0 = np.broadcast_to(np.exp(-sum(p[k] ** 2 / (2.0 * w_k[k] ** 2) for k in range(3))),
-                               grid.shape)
-        psi0 = psi0 / np.sqrt(np.sum(psi0 ** 2) * dV)
+        warm = psi0 is not None
+        if not warm:
+            p = [tf.axes[k, 0] * D[0] + tf.axes[k, 1] * D[1] + tf.axes[k, 2] * D[2]
+                 for k in range(3)]
+            psi0 = np.broadcast_to(np.exp(-sum(p[k] ** 2 / (2.0 * w_k[k] ** 2) for k in range(3))),
+                                   grid.shape)
+        psi0 = psi0 / np.sqrt(np.sum(np.abs(psi0) ** 2) * dV)
 
         psi, Vd, Kd = bk.complex(psi0), bk.real(Vs), bk.real(K)
 
@@ -288,12 +354,15 @@ class GrossPitaevskiiSolver:
         def H_apply(f, Veff):
             return bk.ifftn(Kd * bk.fftn(f)) + Veff * f
 
-        info = GPResult(grid_shape=grid.shape, backend=bk.name, precision=bk.precision)
+        info = GPResult(grid_shape=grid.shape, backend=bk.name, precision=bk.precision,
+                        warm_start=warm)
 
-        # ---- imaginary time: get close
+        # ---- imaginary time: get close (skipped from a warm start: the polish
+        # converges from anywhere nearby, and the stage's mu-change test does not
+        # recognize an already-converged state, so running it is a 1.4x pessimization)
         dtau = hbar / E_scale if self.dtau is None else float(self.dtau)
         peak0 = bk.fmax(bk.abs2(psi))
-        for _ in range(self.n_anneal):
+        for _ in range(self.n_anneal if not warm else 0):
             kin = bk.exp(-Kd * (dtau / hbar))
             half_step = dtau / (2.0 * hbar)
             mu_prev, steps, mu = None, 0, float("nan")
@@ -399,6 +468,7 @@ class GrossPitaevskiiSolver:
         info.potential_J = float(np.sum(Vs * rho) * dV)
         info.interaction_J = float(0.5 * gN * np.sum(rho * rho) * dV)
         info.edge_fraction = grid.face_max(rho) / float(rho.max())
+        info.psi = psi_h
         if V_extra is None and hasattr(self.trap, "gradient"):
             gx, gy, gz = self.trap.gradient(grid.X, grid.Y, grid.Z)
             r_grad = float(np.sum(rho * np.where(basin, D[0] * gx + D[1] * gy + D[2] * gz, 0.0))

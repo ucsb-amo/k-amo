@@ -25,11 +25,14 @@ gravity pulls downhill cannot host a lower, spurious state.
 Diagnostics (:class:`NonInteractingResult`): the 3D energies, the gap
 ``E1 - E0`` (what the GP solver's step count scales with), the separability
 index ``max |V - V_separable| / hbar omega_max`` over the cloud, the residual,
-and the eigenfunctions themselves -- the finite-temperature seam: a thermal
-density is ``sum_n exp(-E_n / kT) |psi_n|^2 / Z``, and these are the ``psi_n``.
-:meth:`NonInteractingSolver.axis_spectra` adds the 1D sinc-DVR spectrum along
-each principal axis (bound-state count, anharmonicity, the escape lip) -- the
-gaussian_well notebook, per axis, on demand.
+and the eigenfunctions themselves.  The finite-temperature solver
+(:mod:`kamo.trap.finite_temperature`) does *not* sum a Bose factor over these:
+the trap holds ~300 bound states and the block iteration cannot deliver them
+(64 states fail on a 40^3 box).  It uses the 4-state solve to anchor and
+calibrate a separable product basis built from
+:meth:`NonInteractingSolver.axis_spectra` -- the 1D sinc-DVR spectrum along
+each principal axis (bound-state count, anharmonicity, the escape lip; the
+gaussian_well notebook, per axis, on demand) -- and a semiclassical tail above.
 """
 
 from __future__ import annotations

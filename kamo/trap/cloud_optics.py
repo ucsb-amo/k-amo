@@ -44,7 +44,15 @@ def stretched(cloud, scale_x: float):
     out._peak = None if cloud._peak is None else cloud._peak / s
     out._N_grid, out.centroid, var = out.grid.moments(out.density_grid)
     out.sigma = np.sqrt(var)
-    out._interp = out._column = out._density_fn = None
+    # the components stretch with the total; the per-component caches restart empty
+    # (they are dicts since the finite-temperature components were added, not None)
+    if getattr(cloud, "density_thermal", None) is None:
+        out.density_condensate = out.density_grid
+    else:
+        out.density_condensate = cloud.density_condensate / s
+        out.density_thermal = cloud.density_thermal / s
+    out._interp, out._column, out._column_interp = {}, {}, {}
+    out._density_fn = None
     return out
 
 

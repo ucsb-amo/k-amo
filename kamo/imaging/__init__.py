@@ -38,6 +38,8 @@ Layers
 :mod:`.bpm`       split-step propagation; susceptibility sources.
 :mod:`.readout`   refocus, far field, phase contrast, signal inversion.
 :mod:`.farfield`  the incoherent channel: reabsorption and Born form factors.
+:mod:`.fringe`    fringe-effective intensity: what a Ramsey phase reports for a
+                  distribution of intensities over atoms (per-atom list or 3D record).
 
 Geometry convention: x is the probe propagation axis, y and z transverse, z the
 quantization axis.
@@ -71,7 +73,7 @@ _lazy = {
     "Sky":                   ".farfield",
 }
 
-_lazy_modules = ("response", "probe", "grid", "bpm", "readout", "farfield", "plotting")
+_lazy_modules = ("response", "probe", "grid", "bpm", "readout", "farfield", "fringe", "plotting")
 
 
 def __getattr__(name):

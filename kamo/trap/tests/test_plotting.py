@@ -178,6 +178,59 @@ def cloud():
     return ThomasFermiSolver(ht, a_scattering=100 * kc.a0, n_per_axis=48).solve(2000.0)
 
 
+@pytest.fixture(scope="module")
+def warm_cloud():
+    import warnings
+    from kamo.trap.finite_temperature import FiniteTemperatureSolver
+    from kamo.trap.trap import HarmonicTrap
+    w = 2 * np.pi * np.array([300.0, 400.0, 500.0])
+    trap_h = HarmonicTrap((0, 0, 0), 0.0, np.diag(M * w ** 2), M)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        return FiniteTemperatureSolver(trap_h, a_scattering=50 * kc.a0, n_thermal_widths=4.5,
+                                       condensate_options=dict(points_per_scale=2.0)).solve(500.0, 30e-9)
+
+
+def trap_of(cloud):
+    return cloud.trap
+
+
+class TestComponents:
+    def test_component_selects_a_part(self, warm_cloud):
+        hw = (4e-6, 2e-6)                          # one window for all three components
+        tot = tp.plane_cut(warm_cloud, normal=(0, 1, 0), n=(41, 41), half_width=hw)
+        con = tp.plane_cut(warm_cloud, normal=(0, 1, 0), n=(41, 41), half_width=hw, component="condensate")
+        th = tp.plane_cut(warm_cloud, normal=(0, 1, 0), n=(41, 41), half_width=hw, component="thermal")
+        assert con.values + th.values == pytest.approx(tot.values, rel=1e-6, abs=1e-6 * tot.values.max())
+        cm = tp.column_density_map(warm_cloud, "x", n=(41, 41), component="thermal")
+        assert cm.values.max() < tp.column_density_map(warm_cloud, "x", n=(41, 41)).values.max()
+        cuts = tp.line_cuts(warm_cloud, directions=(0, 0, 1), component="thermal", n=51)
+        peak = cuts[0]["values"].max()                # the thermal cloud is a shell around the
+        assert 0.0 < peak <= 1.001 * warm_cloud.peak_density_thermal   # condensate: cut <= grid max
+
+    def test_default_window_shows_the_condensate(self, warm_cloud):
+        h = tp._extent_along(warm_cloud, (1, 0, 0))
+        assert h == pytest.approx(4.0 * tp._window_sigma(warm_cloud, "total")[0])
+        assert h < 4.0 * warm_cloud.sigma_thermal[0]
+        assert tp._extent_along(warm_cloud, (1, 0, 0), "thermal") > h
+        with pytest.raises(ValueError, match="density only"):
+            tp.plane_cut(trap_of(warm_cloud), component="thermal")
+
+    def test_component_on_a_cold_cloud_raises(self, cloud):
+        with pytest.raises(ValueError, match="T = 0"):
+            tp.plane_cut(cloud, component="thermal")
+        with pytest.raises(ValueError, match="component"):
+            tp.plane_cut(cloud, component="wings")
+
+    def test_bimodal_profile_builds(self, warm_cloud, cloud):
+        fig, ax = tp.plot_bimodal_profile(warm_cloud, "z", log=True)
+        assert len(ax.get_lines()) == 3 and ax.get_yscale() == "log"
+        fig2, ax2 = tp.plot_column_density(warm_cloud, "x", component="condensate", n=(41, 41))
+        assert "condensate" in ax2.get_title()
+        with pytest.raises(ValueError, match="finite-temperature"):
+            tp.plot_bimodal_profile(cloud)
+
+
 class TestWindows:
     def test_limits_are_lab_coordinates_either_end_defaulting(self, trap):
         z0 = trap.minimum().position[2]

@@ -1,8 +1,9 @@
 """Tests for kamo.trap.solvers, the solve() front door, and the package exports.
 
 INTERNAL only: mode aliases, dispatch to the three solvers, the finite-T
-placeholder, solve_all / comparison_table, and that ``from kamo import
-Tweezer, Trap, solve`` works.  Harmonic traps with explicit mass and a.
+wiring (the solver itself is tested in test_finite_temperature.py), solve_all /
+comparison_table, and that ``from kamo import Tweezer, Trap, solve`` works.
+Harmonic traps with explicit mass and a.
 
 Run: pytest kamo/trap/tests -q
 """
@@ -42,9 +43,27 @@ class TestModes:
         with pytest.raises(ValueError, match="unknown mode"):
             canonical_mode("hartree")
 
-    def test_finite_temperature_names_its_seams(self):
-        with pytest.raises(NotImplementedError, match="hartree-fock"):
-            solve(harmonic(), 1000.0, "gp", a_scattering=A, T_K=50e-9)
+    def test_finite_temperature_is_wired_up(self):
+        import warnings
+        from kamo.trap.finite_temperature import FiniteTemperatureResult
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            cloud = solve(harmonic(), 300.0, "gp", a_scattering=A, T_K=30e-9, n_thermal_widths=4.5,
+                          condensate_options=dict(points_per_scale=2.0))
+        assert isinstance(cloud, TrapCloud) and isinstance(cloud.info, FiniteTemperatureResult)
+        assert 0.0 < cloud.condensate_fraction < 1.0 and cloud.T_K == 30e-9
+
+    def test_temperature_is_not_a_mode(self):
+        with pytest.raises(ValueError, match="T_K"):
+            canonical_mode("hartree-fock")
+        with pytest.raises(ValueError, match="thomas-fermi"):
+            solve(harmonic(), 1000.0, "tf", a_scattering=A, T_K=50e-9)
+        with pytest.raises(ValueError, match="T_K"):
+            solve(harmonic(), 1000.0, "gp", a_scattering=A, T_K=-1.0)
+        with pytest.raises(ValueError, match="T_K > 0"):
+            solve(harmonic(), 1000.0, "gp", a_scattering=A, condensate_options={})
+        with pytest.raises(TypeError):                      # a GP option at the top level at T > 0
+            solve(harmonic(), 1000.0, "gp", a_scattering=A, T_K=50e-9, points_per_scale=2.0)
 
     def test_noninteracting_takes_no_V_extra(self):
         with pytest.raises(ValueError, match="V_extra"):

@@ -24,6 +24,18 @@ gravitational sag moves a tweezer cloud ~0.3 um off the focus, cosmetic for the
 physics but it keeps ``refocus`` and the far field symmetric and lets a GP cloud
 and a Gaussian one be compared directly.  :class:`kamo.spin.SpinGeometry`
 follows the same convention.
+
+Finite temperature: a cloud from ``solve(..., T_K=...)`` is imaged as its total
+density by default; ``component="condensate"`` or ``"thermal"`` on
+:class:`GriddedMixture` / :class:`GriddedDensity` / :func:`propagator_for` images
+one part (not an experiment the probe can do, but how a lensing signal is
+attributed).  The thermal cloud is truncated at the escape saddle, ~30 um along the
+beam for the lab tweezer, and the rms width under-contains it: ``3 x widths[0]``
+holds 99.05% of a 100 nK cloud, below the 1 - 1e-4 gate.  So at ``T_K > 0``
+:func:`effective_widths` defaults to ``"containment"`` and :func:`propagator_for`
+grows the axial span until the gate is met.  ``cloud.widths`` itself stays the
+total rms width; for a spin geometry sized on the condensate alone pass
+``SpinGeometry.from_propagator(prop, cloud, widths=cloud.widths_condensate)``.
 """
 
 from __future__ import annotations
@@ -40,15 +52,17 @@ from kamo.imaging.bpm import Propagator, SusceptibilitySource
 
 # --------------------------------------------------------------- widths
 
-def contained_fraction(cloud, half_widths, center=None) -> float:
-    """Fraction of a gridded cloud's atoms inside ``center +- half_widths``."""
+def contained_fraction(cloud, half_widths, center=None, *, component: str = "total") -> float:
+    """Fraction of a gridded cloud's atoms (of one ``component``) inside
+    ``center +- half_widths``."""
     g = cloud.grid
     c = np.asarray(cloud.centroid if center is None else center, dtype=float)
     h = np.broadcast_to(np.asarray(half_widths, dtype=float), (3,))
     inside = ((np.abs(g.x - c[0]) <= h[0])[:, None, None]
               & (np.abs(g.y - c[1]) <= h[1])[None, :, None]
               & (np.abs(g.z - c[2]) <= h[2])[None, None, :])
-    return float(np.sum(cloud.density_grid * inside) / np.sum(cloud.density_grid))
+    rho = _component_grid(cloud, component)
+    return float(np.sum(rho * inside) / np.sum(rho))
 
 
 def containment_half_widths(cloud, frac: float = 1.0 - 1e-6) -> np.ndarray:
@@ -66,14 +80,18 @@ def containment_half_widths(cloud, frac: float = 1.0 - 1e-6) -> np.ndarray:
     return out
 
 
-def effective_widths(cloud, kind: str = "rms") -> np.ndarray:
+def effective_widths(cloud, kind: Optional[str] = None) -> np.ndarray:
     """Widths standing in for a Gaussian's 1/e radii (m).
 
-    ``"rms"`` (default): ``sqrt(2 <x_i^2>)``, what ``cloud.widths`` returns.
+    ``"rms"``: ``sqrt(2 <x_i^2>)``, what ``cloud.widths`` returns.
     ``"peak"``: the rms aspect ratio, scaled so ``N / (pi^1.5 prod w)`` is the
     peak density -- *not* for box sizing (see the module docstring).
     ``"containment"``: :func:`containment_half_widths` (1 - 1e-6 of the atoms).
+    ``None`` (default): ``"rms"`` for a ground-state cloud, ``"containment"`` for a
+    finite-temperature one (the thermal cloud has a hard edge the rms misses).
     """
+    if kind is None:
+        kind = "containment" if getattr(cloud, "density_thermal", None) is not None else "rms"
     w = np.asarray(cloud.widths, dtype=float)
     if kind == "rms":
         return w
@@ -108,13 +126,14 @@ class GriddedDensity:
     """
 
     def __init__(self, cloud, x_slices, transverse_axis, backend=None,
-                 density_scale: float = 1.0, recenter: bool = True):
+                 density_scale: float = 1.0, recenter: bool = True, component: str = "total"):
         self.cloud = cloud
+        self.component = component
         self._bk = as_backend(backend)
         self.center = np.asarray(cloud.centroid if recenter else np.zeros(3), dtype=float)
         g = cloud.grid
         self._x = np.asarray(x_slices, dtype=float)
-        rho = cloud.density_grid * float(density_scale)
+        rho = _component_grid(cloud, component) * float(density_scale)
         planes = PchipInterpolator(g.x, rho, axis=0, extrapolate=False)(self._x + self.center[0])
         planes = np.clip(np.nan_to_num(planes, nan=0.0), 0.0, None)
         ax = np.asarray(transverse_axis, dtype=float)
@@ -123,7 +142,8 @@ class GriddedDensity:
         d_opt = float(ax[1] - ax[0])
         dx = float(self._x[1] - self._x[0]) if self._x.size > 1 else 1.0
         total = sum(float(np.sum(Wy @ p @ Wz.T)) for p in planes) * dx * d_opt ** 2
-        self.atom_number_error = total / (cloud.N * float(density_scale)) - 1.0
+        N_part = _component_number(cloud, component)
+        self.atom_number_error = total / (N_part * float(density_scale)) - 1.0
         self._planes = [self._bk.real(p) for p in planes]
         self._Wy, self._WzT = self._bk.real(Wy), self._bk.real(Wz.T)
         self._dx = dx
@@ -148,16 +168,18 @@ class GriddedMixture(SusceptibilitySource):
 
     def __init__(self, cloud, response, species: Sequence[Tuple[float, float]], *,
                  x_slices, transverse_axis, backend=None, density_scale: float = 1.0,
-                 recenter: bool = True):
+                 recenter: bool = True, component: str = "total"):
         self.cloud = cloud
         self.response = response
         self.species = tuple((float(f), float(d)) for f, d in species)
         if not self.species:
             raise ValueError("species must list (fraction, delta) pairs: without them the "
                              "propagator falls back to an opaque chi() and the GPU refuses it.")
-        self.widths = np.asarray(cloud.widths, dtype=float)
+        self.component = component
+        self.widths = np.asarray(_component_widths(cloud, component), dtype=float)
         self._density = GriddedDensity(cloud, x_slices, transverse_axis, backend=backend,
-                                       density_scale=density_scale, recenter=recenter)
+                                       density_scale=density_scale, recenter=recenter,
+                                       component=component)
         self.center = self._density.center
         self.atom_number_error = self._density.atom_number_error
 
@@ -183,15 +205,54 @@ class GriddedMixture(SusceptibilitySource):
         return total
 
 
+def _component_grid(cloud, component: str):
+    if component == "total":
+        return cloud.density_grid
+    if not hasattr(cloud, "component_density_grid"):
+        raise ValueError(f"component={component!r} needs a TrapCloud with components")
+    return cloud.component_density_grid(component)
+
+
+def _component_number(cloud, component: str) -> float:
+    if component == "total":
+        return float(cloud.N)
+    return float(cloud.N_0 if component == "condensate" else cloud.N_th)
+
+
+def _component_widths(cloud, component: str):
+    """Widths the mixture reports: containment half-widths of the imaged component at
+    T > 0 (a truncated thermal cloud has a hard edge the rms misses), rms otherwise."""
+    if getattr(cloud, "density_thermal", None) is None:
+        return cloud.widths
+    if component == "total":
+        return containment_half_widths(cloud)
+    rho = cloud.component_density_grid(component)
+    proxy = type("_Part", (), {})()
+    proxy.grid, proxy.density_grid, proxy.centroid = cloud.grid, rho, cloud.grid.moments(rho)[1]
+    return containment_half_widths(proxy)
+
+
 def propagator_for(cloud, response, *, n_grid: int = 768, L_box: float = 36.0e-6,
-                   x_span_w: float = 3.0, n_slices: int = 180, backend=None) -> Propagator:
+                   x_span_w: float = 3.0, n_slices: int = 180, backend=None,
+                   component: str = "total") -> Propagator:
     """:meth:`Propagator.for_cloud` for a gridded cloud, with the containment checks
-    its Gaussian sizing does not make."""
-    prop = Propagator.for_cloud(response, cloud, n_grid=n_grid, L_box=L_box,
-                                x_span_w=x_span_w, n_slices=n_slices, backend=backend)
+    its Gaussian sizing does not make.  For a finite-temperature cloud the axial
+    span grows (1.3x, up to four times) until the box holds ``1 - 1e-4`` of the
+    ``component`` imaged; a transverse shortfall only warns."""
+    has_grid = hasattr(cloud, "density_grid")
+    grow = has_grid and getattr(cloud, "density_thermal", None) is not None
+    for _ in range(5):
+        prop = Propagator.for_cloud(response, cloud, n_grid=n_grid, L_box=L_box,
+                                    x_span_w=x_span_w, n_slices=n_slices, backend=backend)
+        if not grow or contained_fraction(cloud, [prop.x_edge, np.inf, np.inf],
+                                          component=component) >= 1.0 - 1e-4:
+            break
+        x_span_w *= 1.3                          # a longer box at the same slice thickness
+        n_slices = int(np.ceil(n_slices * 1.3))
     w = np.asarray(cloud.widths, dtype=float)
-    if hasattr(cloud, "density_grid"):
-        frac = contained_fraction(cloud, [prop.x_edge, 0.5 * L_box, 0.5 * L_box])
+    if has_grid:
+        frac = contained_fraction(cloud, [prop.x_edge, 0.5 * L_box, 0.5 * L_box],
+                                  component=component)
         if frac < 1.0 - 1e-4:
             warnings.warn(f"the propagation box holds only {frac:.6f} of the atoms; raise "
                           "x_span_w or L_box.", UserWarning, stacklevel=2)

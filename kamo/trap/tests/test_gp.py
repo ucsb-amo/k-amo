@@ -57,6 +57,34 @@ def interacting():
     return solve(harmonic(), N_H, A_H, points_per_scale=3.0)
 
 
+class TestWarmStart:
+    def test_warm_start_reproduces_the_cold_solve(self, interacting):
+        s = GrossPitaevskiiSolver(harmonic(), a_scattering=A_H, grid=interacting.grid)
+        warm = s.solve(N_H, psi0=interacting)
+        assert warm.info.warm_start and not warm.info.stages
+        assert warm.chemical_potential_offset == pytest.approx(interacting.chemical_potential_offset,
+                                                               rel=1e-9)
+        assert warm.info.polish_iterations <= 3
+        moved = s.solve(0.9 * N_H, psi0=interacting.info.psi)
+        cold = GrossPitaevskiiSolver(harmonic(), a_scattering=A_H, grid=interacting.grid).solve(0.9 * N_H)
+        assert moved.chemical_potential_offset == pytest.approx(cold.chemical_potential_offset, rel=1e-8)
+
+    def test_psi0_needs_a_pinned_grid_of_the_right_shape(self, interacting):
+        with pytest.raises(ValueError, match="grid"):
+            GrossPitaevskiiSolver(harmonic(), a_scattering=A_H).solve(N_H, psi0=interacting)
+        with pytest.raises(ValueError, match="shape"):
+            GrossPitaevskiiSolver(harmonic(), a_scattering=A_H, grid=interacting.grid).solve(
+                N_H, psi0=np.ones((2, 2, 2)))
+
+    def test_grid_for_matches_the_solver_box(self):
+        s = GrossPitaevskiiSolver(harmonic(), a_scattering=A_H, points_per_scale=3.0)
+        g = s.grid_for(N_H)
+        cloud = s.solve(N_H)
+        assert g.shape == cloud.grid.shape and g.half_widths == pytest.approx(cloud.grid.half_widths)
+        wide = s.grid_for(N_H, half_widths=2.0 * g.half_widths)
+        assert wide.d == pytest.approx(g.d, rel=0.05)
+
+
 class TestLimits:
     def test_noninteracting_limit_is_the_oscillator(self):
         cloud = solve(harmonic(), N_H, 0.0, points_per_scale=3.0)

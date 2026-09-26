@@ -84,3 +84,13 @@ def test_stretched_holds_the_column(cloud):
     assert thin.peak_column_density == pytest.approx(cloud.peak_column_density, rel=1e-12)
     assert thin.widths[0] == pytest.approx(0.1 * cloud.widths[0], rel=1e-9)
     assert thin.peak_density == pytest.approx(10 * cloud.peak_density, rel=1e-12)
+
+
+def test_stretched_carries_the_finite_temperature_components(cloud):
+    n_c, n_t = 0.7 * cloud.density_grid, 0.3 * cloud.density_grid
+    warm = TrapCloud(cloud.grid, n_c + n_t, N, None, mode="gp", chemical_potential_J=0.0, V_min_J=0.0,
+                     T_K=50e-9, density_condensate=n_c, density_thermal=n_t)
+    thin = co.stretched(warm, 0.5)
+    assert np.allclose(thin.density_condensate + thin.density_thermal, thin.density_grid, rtol=1e-12)
+    for part, frac in (("condensate", 0.7), ("thermal", 0.3)):
+        assert np.max(thin.column_density_grid(part)) == pytest.approx(frac * warm.peak_column_density, rel=1e-9)

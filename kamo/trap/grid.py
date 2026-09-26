@@ -129,17 +129,41 @@ class TrapGrid:
                 f"+-({h[0]:.3g}, {h[1]:.3g}, {h[2]:.3g}) um)")
 
 
-def basin_mask(V, grid: TrapGrid, minimum, V_escape: float) -> np.ndarray:
+def basin_mask(V, grid: TrapGrid, minimum, V_escape: float, epsilon: float = 0.0) -> np.ndarray:
     """The connected component of ``{V < V_escape}`` holding ``minimum``
     (6-connectivity).  Everything else -- above the escape energy, or a downhill
     pocket of the box that gravity pulls below it -- is not part of the trap, and
     a solver that fills it finds the box corner instead.  All True when
-    ``V_escape`` is infinite (a HarmonicTrap)."""
+    ``V_escape`` is infinite (a HarmonicTrap).
+
+    ``epsilon > 0`` cuts at ``V_min + (1 - epsilon) (V_escape - V_min)`` instead
+    (``V_min`` the potential at the node nearest ``minimum``): at exactly the
+    saddle energy the grid nodes straddling the saddle fall marginally below it,
+    the component leaks through and follows gravity to the box corner.  A
+    thermal density integrated over such a basin is unbounded; the ground-state
+    solvers do not notice.  ``epsilon = 1e-3`` bounds it and moves the basin
+    volume by 0.2% (measured 2026-09-13 on the 3 um / 1 kHz tweezer)."""
     from scipy import ndimage
     if not np.isfinite(V_escape):
         return np.ones(np.shape(V), dtype=bool)
-    labels, _ = ndimage.label(np.asarray(V) < V_escape)
+    V = np.asarray(V)
+    if epsilon > 0:
+        V_min = float(V[grid.nearest_index(minimum)])
+        V_escape = V_min + (1.0 - float(epsilon)) * (V_escape - V_min)
+    labels, _ = ndimage.label(V < V_escape)
     lab = labels[grid.nearest_index(minimum)]
     if lab == 0:
         raise ValueError("the trap minimum is not inside {V < V_escape} on this grid")
     return labels == lab
+
+
+def touched_axes(mask) -> np.ndarray:
+    """Per lab axis, True if any True node of ``mask`` sits on either face of that axis."""
+    m = np.asarray(mask, dtype=bool)
+    return np.array([m[0].any() or m[-1].any(), m[:, 0].any() or m[:, -1].any(),
+                     m[:, :, 0].any() or m[:, :, -1].any()])
+
+
+def touches_face(mask) -> bool:
+    """True if any True node of ``mask`` sits on one of the six faces of the box."""
+    return bool(touched_axes(mask).any())
