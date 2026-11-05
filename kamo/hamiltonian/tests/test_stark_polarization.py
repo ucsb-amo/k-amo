@@ -17,7 +17,7 @@ from kamo import GaussianBeam
 from kamo.hamiltonian import AtomicStructure
 from kamo.hamiltonian.builder import _polarization_geometry
 
-# --- operating point (analysis/feedback/figures/atomic_physics.ipynb) --------
+# --- operating point (analysis/dipole_dipole/atomic_physics.ipynb) --------
 B_GAUSS = 520.5939555658828
 WAIST = 3.0e-6
 LAM_TWEEZER = 1064e-9
