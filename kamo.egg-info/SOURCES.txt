@@ -65,6 +65,8 @@ kamo/hamiltonian/perturbative.py
 kamo/hamiltonian/spectroscopy.py
 kamo/hamiltonian/state_labels.py
 kamo/hamiltonian/examples/__init__.py
+kamo/hamiltonian/examples/qubit_states_rb85.ipynb
+kamo/hamiltonian/examples/qubit_states_rb87.ipynb
 kamo/hamiltonian/examples/structure_demo.ipynb
 kamo/hamiltonian/tests/__init__.py
 kamo/hamiltonian/tests/test_integer_spin.py
